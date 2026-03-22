@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "torrus"
+version = "0.1.0"
+description = "Web-based SSH terminal that works behind any reverse proxy"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [{ name = "Anudeep Dhavaleswarapu", email = "anudeepd2@gmail.com" }]
+keywords = ["ssh", "terminal", "web", "xterm", "remote"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Web Environment",
+    "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: System :: Networking",
+]
+dependencies = [
+    "fastapi>=0.110.0",
+    "python-socketio>=5.11.0",
+    "uvicorn[standard]>=0.29.0",
+    "paramiko>=3.4.0",
+    "aiofiles>=23.2.0",
+    "click>=8.1.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/anudeepd/torrus"
+Repository = "https://github.com/anudeepd/torrus"
+Issues = "https://github.com/anudeepd/torrus/issues"
+
+[project.scripts]
+torrus = "torrus.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+torrus = ["static/**/*", "static/*"]

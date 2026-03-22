@@ -1,0 +1,19 @@
+<svg viewBox="0 0 420 120" xmlns="http://www.w3.org/2000/svg">
+  <!-- Icon background -->
+  <rect x="4" y="4" width="112" height="112" rx="22" fill="#ecfdf5"/>
+
+  <!-- Torus rings (donut front-view) -->
+  <circle cx="60" cy="60" r="38" fill="none" stroke="#16a34a" stroke-width="2.5"/>
+  <circle cx="60" cy="60" r="27" fill="none" stroke="#0d9488" stroke-width="2.2"/>
+  <circle cx="60" cy="60" r="16" fill="none" stroke="#10b981" stroke-width="2"/>
+
+  <!-- Prompt chevron ">" inside the torus hole -->
+  <polyline fill="none" stroke="#0d9488" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"
+    points="51,54 60,60 51,66"/>
+
+  <!-- Cursor block -->
+  <rect x="63" y="56" width="6" height="8" rx="1.5" fill="#10b981"/>
+
+  <!-- Wordmark -->
+  <text x="136" y="74" font-family="'Inter', 'Helvetica Neue', sans-serif" font-size="52" font-weight="600" letter-spacing="-1" fill="#064e3b">Torrus</text>
+</svg>
