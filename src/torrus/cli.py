@@ -13,7 +13,7 @@ def main():
 
 
 @main.command()
-@click.option("--host", default="0.0.0.0", show_default=True, help="Bind host")
+@click.option("--host", default="127.0.0.1", show_default=True, help="Bind host")
 @click.option("--port", default=8080, show_default=True, help="Bind port")
 @click.option("--no-browser", is_flag=True, default=False, help="Don't open browser on startup")
 @click.option("--reload", is_flag=True, default=False, hidden=True, help="Dev auto-reload")
