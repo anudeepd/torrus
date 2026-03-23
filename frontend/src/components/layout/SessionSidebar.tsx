@@ -299,7 +299,23 @@ export default function SessionSidebar({ isOpen, onToggle, onLoadSession }: Sess
         </div>
 
         {/* Session list */}
-        <div className="flex-1 overflow-y-auto py-1">
+        <div className="flex-1 overflow-y-auto py-1 relative">
+
+          {/* Watermark */}
+          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+            <svg
+              viewBox="0 0 128 128"
+              xmlns="http://www.w3.org/2000/svg"
+              className="w-28 h-28 opacity-[0.04]"
+            >
+              <circle cx="64" cy="64" r="54" fill="none" stroke="#16a34a" strokeWidth="3.6" />
+              <circle cx="64" cy="64" r="38" fill="none" stroke="#0d9488" strokeWidth="3.2" />
+              <circle cx="64" cy="64" r="22" fill="none" stroke="#10b981" strokeWidth="2.8" />
+              <polyline fill="none" stroke="#0d9488" strokeWidth="3.2" strokeLinecap="round" strokeLinejoin="round"
+                points="52,56 64,64 52,72" />
+              <rect x="70" y="58" width="8" height="12" rx="1.5" fill="#10b981" />
+            </svg>
+          </div>
           {servers.length === 0 ? (
             <p className="px-3 py-4 text-xs text-slate-600 text-center leading-relaxed">
               No saved sessions.<br />
