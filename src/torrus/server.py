@@ -190,6 +190,7 @@ async def on_ssh_input(sid, data):
         data.get("tab_id", ""),
         data.get("data", ""),
     )
+    return {"ok": True}
 
 
 @sio.on("terminal:resize")

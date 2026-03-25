@@ -271,7 +271,7 @@ class SSHManager:
 
         loop = asyncio.get_running_loop()
         try:
-            await loop.run_in_executor(None, session.channel.send, data)
+            await loop.run_in_executor(None, _blocking_send_all, session.channel, data)
             session.last_activity = time.time()
         except Exception as exc:
             logger.warning("send error for %s/%s: %s", session_id, tab_id, exc)
@@ -562,3 +562,15 @@ def _blocking_read(channel: paramiko.Channel) -> bytes:
         if channel.exit_status_ready():
             raise ConnectionError("Remote process exited")
         return b""
+
+
+def _blocking_send_all(channel: paramiko.Channel, data: bytes) -> None:
+    """Called in thread executor. Blocks until the full input buffer is sent."""
+    view = memoryview(data)
+    while view:
+        if channel.closed:
+            raise ConnectionError("Channel closed")
+        sent = channel.send(view)
+        if sent <= 0:
+            raise ConnectionError("Failed to send data to remote host")
+        view = view[sent:]
