@@ -151,109 +151,127 @@ export default function TerminalPane({ tabId, isActive, socket }: TerminalPanePr
 
     const { scrollbackLines, fontSize } = useSettingsStore.getState()
 
-    const term = new Terminal({
-      fontFamily: '"JetBrains Mono", "Cascadia Code", "Fira Code", monospace',
-      fontSize,
-      fontWeight: 'normal',
-      fontWeightBold: 'bold',
-      lineHeight: 1.2,
-      cursorBlink: true,
-      cursorStyle: 'block',
-      scrollback: scrollbackLines,
-      allowTransparency: false,
-      theme: {
-        background:          '#020617',
-        foreground:          '#e2e8f0',
-        cursor:              '#34d399',
-        cursorAccent:        '#020617',
-        selectionBackground: 'rgba(52,211,153,0.25)',
-        black:               '#1e293b',
-        red:                 '#f87171',
-        green:               '#10b981',
-        yellow:              '#facc15',
-        blue:                '#34d399',
-        magenta:             '#c084fc',
-        cyan:                '#0d9488',
-        white:               '#cbd5e1',
-        brightBlack:         '#475569',
-        brightRed:           '#fca5a5',
-        brightGreen:         '#6ee7b7',
-        brightYellow:        '#fde047',
-        brightBlue:          '#6ee7b7',
-        brightMagenta:       '#d8b4fe',
-        brightCyan:          '#2dd4bf',
-        brightWhite:         '#f1f5f9',
-      },
-    })
+    let cancelled = false
+    let ro: ResizeObserver | null = null
+    let textarea: HTMLTextAreaElement | null = null
+    let handlePaste: ((event: ClipboardEvent) => void) | null = null
 
-    const fitAddon = new FitAddon()
-    const webLinksAddon = new WebLinksAddon()
-    term.loadAddon(fitAddon)
-    term.loadAddon(webLinksAddon)
+    const init = async () => {
+      // Wait for JetBrains Mono to be ready so xterm.js measures cells correctly
+      await document.fonts.load(`normal ${fontSize}px "JetBrains Mono"`).catch(() => {})
 
-    // Let the browser/app handle shortcuts instead of xterm
-    term.attachCustomKeyEventHandler((e) => {
-      const mod = e.ctrlKey || e.metaKey
-      const key = e.key.toLowerCase()
+      // Bail out if the component unmounted while we were waiting
+      if (cancelled || !containerRef.current || termRef.current) return
 
-      // App shortcuts — pass to AppLayout's keydown handler
-      if (mod && (key === 'w' || key === 't' || key === ',')) return false
-      if (e.ctrlKey && key === 'tab') return false
+      const term = new Terminal({
+        fontFamily: '"JetBrains Mono", "Cascadia Code", "Fira Code", ui-monospace, monospace',
+        fontSize,
+        fontWeight: 'normal',
+        fontWeightBold: 'bold',
+        lineHeight: 1.2,
+        cursorBlink: true,
+        cursorStyle: 'block',
+        scrollback: scrollbackLines,
+        allowTransparency: false,
+        theme: {
+          background:          '#020617',
+          foreground:          '#e2e8f0',
+          cursor:              '#34d399',
+          cursorAccent:        '#020617',
+          selectionBackground: 'rgba(52,211,153,0.25)',
+          black:               '#1e293b',
+          red:                 '#f87171',
+          green:               '#10b981',
+          yellow:              '#facc15',
+          blue:                '#34d399',
+          magenta:             '#c084fc',
+          cyan:                '#0d9488',
+          white:               '#cbd5e1',
+          brightBlack:         '#475569',
+          brightRed:           '#fca5a5',
+          brightGreen:         '#6ee7b7',
+          brightYellow:        '#fde047',
+          brightBlue:          '#6ee7b7',
+          brightMagenta:       '#d8b4fe',
+          brightCyan:          '#2dd4bf',
+          brightWhite:         '#f1f5f9',
+        },
+      })
 
-      // Ctrl+F: let the browser open its native find dialog
-      if (mod && key === 'f') return false
+      const fitAddon = new FitAddon()
+      const webLinksAddon = new WebLinksAddon()
+      term.loadAddon(fitAddon)
+      term.loadAddon(webLinksAddon)
 
-      // Ctrl+C: copy when text is selected, otherwise let xterm send SIGINT
-      if (mod && key === 'c' && term.hasSelection()) return false
+      // Let the browser/app handle shortcuts instead of xterm
+      term.attachCustomKeyEventHandler((e) => {
+        const mod = e.ctrlKey || e.metaKey
+        const key = e.key.toLowerCase()
 
-      // Ctrl+V: let the browser fire a paste event (xterm handles it natively)
-      if (mod && key === 'v') return false
+        // App shortcuts — pass to AppLayout's keydown handler
+        if (mod && (key === 'w' || key === 't' || key === ',')) return false
+        if (e.ctrlKey && key === 'tab') return false
 
-      return true
-    })
+        // Ctrl+F: let the browser open its native find dialog
+        if (mod && key === 'f') return false
 
-    term.open(containerRef.current)
-    fitAddon.fit()
+        // Ctrl+C: copy when text is selected, otherwise let xterm send SIGINT
+        if (mod && key === 'c' && term.hasSelection()) return false
 
-    termRef.current = term
-    fitRef.current = fitAddon
+        // Ctrl+V: let the browser fire a paste event (xterm handles it natively)
+        if (mod && key === 'v') return false
 
-    // Keystrokes → SSH input
-    term.onData((data) => {
-      emitInput(data)
-    })
+        return true
+      })
 
-    const textarea = term.textarea
-    const handlePaste = (event: ClipboardEvent) => {
-      const text = event.clipboardData?.getData('text/plain')
-      if (text == null) return
+      term.open(containerRef.current)
+      fitAddon.fit()
 
-      event.preventDefault()
-      event.stopPropagation()
+      termRef.current = term
+      fitRef.current = fitAddon
 
-      const bracketedPasteMode =
-        term.modes.bracketedPasteMode && term.options.ignoreBracketedPasteMode !== true
-      const prepared = bracketTextForPaste(prepareTextForTerminal(text), bracketedPasteMode)
-      emitInput(prepared)
-    }
-    textarea?.addEventListener('paste', handlePaste, true)
+      // Keystrokes → SSH input
+      term.onData((data) => {
+        emitInput(data)
+      })
 
-    // Resize observer
-    const ro = new ResizeObserver(() => {
-      const currentTab = useTerminalStore.getState().tabs.find(t => t.id === tabId)
-      if (currentTab?.status === 'connected') {
-        fitAddon.fit()
-        emitResize(term)
+      textarea = term.textarea ?? null
+      handlePaste = (event: ClipboardEvent) => {
+        const text = event.clipboardData?.getData('text/plain')
+        if (text == null) return
+
+        event.preventDefault()
+        event.stopPropagation()
+
+        const bracketedPasteMode =
+          term.modes.bracketedPasteMode && term.options.ignoreBracketedPasteMode !== true
+        const prepared = bracketTextForPaste(prepareTextForTerminal(text), bracketedPasteMode)
+        emitInput(prepared)
       }
-    })
-    if (containerRef.current) ro.observe(containerRef.current)
+      textarea?.addEventListener('paste', handlePaste, true)
+
+      // Resize observer
+      ro = new ResizeObserver(() => {
+        const currentTab = useTerminalStore.getState().tabs.find(t => t.id === tabId)
+        if (currentTab?.status === 'connected') {
+          fitAddon.fit()
+          emitResize(term)
+        }
+      })
+      ro.observe(containerRef.current)
+    }
+
+    init()
 
     return () => {
-      ro.disconnect()
-      textarea?.removeEventListener('paste', handlePaste, true)
-      term.dispose()
-      termRef.current = null
-      fitRef.current = null
+      cancelled = true
+      ro?.disconnect()
+      if (textarea && handlePaste) textarea.removeEventListener('paste', handlePaste, true)
+      if (termRef.current) {
+        termRef.current.dispose()
+        termRef.current = null
+        fitRef.current = null
+      }
     }
   }, [tabId, emitInput, emitResize])
 

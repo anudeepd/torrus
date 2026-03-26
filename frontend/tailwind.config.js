@@ -20,7 +20,7 @@ export default {
         },
       },
       fontFamily: {
-        mono: ['"JetBrains Mono"', '"Fira Code"', 'ui-monospace', 'monospace'],
+        mono: ['"JetBrains Mono"', '"Cascadia Code"', '"Fira Code"', 'ui-monospace', 'monospace'],
       },
     },
   },
