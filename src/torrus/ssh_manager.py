@@ -42,6 +42,8 @@ class SSHSession:
     cols: int = 220
     rows: int = 50
     read_task: Optional[asyncio.Task] = None
+    write_task: Optional[asyncio.Task] = None
+    input_queue: asyncio.Queue[bytes] = field(default_factory=asyncio.Queue)
     output_buffer: bytearray = field(default_factory=bytearray)
     # False for cloned sessions — they share the transport and must not close it
     owns_client: bool = True
@@ -206,6 +208,7 @@ class SSHManager:
         await self.sio.enter_room(sid, room)
 
         session.read_task = asyncio.create_task(self._read_loop(session))
+        session.write_task = asyncio.create_task(self._write_loop(session))
 
         mode = "tmux" if tmux_name else "shell"
         logger.info("Connected to %s (%s)", target, mode)
@@ -269,12 +272,8 @@ class SSHManager:
         if isinstance(data, str):
             data = data.encode("utf-8", errors="replace")
 
-        loop = asyncio.get_running_loop()
-        try:
-            await loop.run_in_executor(None, _blocking_send_all, session.channel, data)
-            session.last_activity = time.time()
-        except Exception as exc:
-            logger.warning("send error for %s/%s: %s", session_id, tab_id, exc)
+        session.last_activity = time.time()
+        await session.input_queue.put(data)
 
     async def handle_resize(self, session_id: str, tab_id: str, cols: int, rows: int) -> None:
         key = (session_id, tab_id)
@@ -366,6 +365,7 @@ class SSHManager:
 
         await self.sio.enter_room(sid, room)
         session.read_task = asyncio.create_task(self._read_loop(session))
+        session.write_task = asyncio.create_task(self._write_loop(session))
 
         logger.info("Cloned session %s@%s (tab=%s → %s)", source_username, source_host, source_tab_id, new_tab_id)
 
@@ -419,6 +419,28 @@ class SSHManager:
         async with self._lock:
             self._sessions.pop((session.session_id, session.tab_id), None)
 
+    async def _write_loop(self, session: SSHSession) -> None:
+        """Serialize all input writes to the SSH channel per session."""
+        loop = asyncio.get_running_loop()
+
+        while not session.channel.closed:
+            try:
+                data = await asyncio.wait_for(session.input_queue.get(), timeout=1.0)
+            except asyncio.TimeoutError:
+                continue
+            except asyncio.CancelledError:
+                break
+
+            if session.channel.closed:
+                break
+
+            try:
+                await loop.run_in_executor(None, _blocking_send_all, session.channel, data)
+                session.last_activity = time.time()
+            except Exception as exc:
+                logger.warning("write error for %s/%s: %s", session.session_id, session.tab_id, exc)
+                break
+
     @staticmethod
     async def _check_tmux(client: paramiko.SSHClient) -> bool:
         """Silently check if tmux exists on the remote host using a separate channel."""
@@ -444,6 +466,8 @@ class SSHManager:
             return
         if session.read_task and not session.read_task.done():
             session.read_task.cancel()
+        if session.write_task and not session.write_task.done():
+            session.write_task.cancel()
         try:
             session.channel.close()
         except Exception:

@@ -15,45 +15,12 @@ interface TerminalPaneProps {
   socket: Socket
 }
 
-const INPUT_CHUNK_MAX_UNITS = 16 * 1024
-const INPUT_DRAIN_YIELD_EVERY = 32
-
 function prepareTextForTerminal(text: string): string {
   return text.replace(/\r?\n/g, '\r')
 }
 
 function bracketTextForPaste(text: string, bracketedPasteMode: boolean): string {
   return bracketedPasteMode ? `\x1b[200~${text}\x1b[201~` : text
-}
-
-function splitInputChunks(data: string, maxUnits: number): string[] {
-  if (data.length <= maxUnits) return [data]
-
-  const chunks: string[] = []
-  let start = 0
-
-  while (start < data.length) {
-    let end = Math.min(start + maxUnits, data.length)
-
-    // Avoid splitting a surrogate pair across transport chunks.
-    if (
-      end < data.length &&
-      end > start &&
-      /[\uD800-\uDBFF]/.test(data[end - 1]) &&
-      /[\uDC00-\uDFFF]/.test(data[end])
-    ) {
-      end -= 1
-    }
-
-    if (end === start) {
-      end = Math.min(start + 1, data.length)
-    }
-
-    chunks.push(data.slice(start, end))
-    start = end
-  }
-
-  return chunks
 }
 
 export default function TerminalPane({ tabId, isActive, socket }: TerminalPaneProps) {
@@ -69,62 +36,6 @@ export default function TerminalPane({ tabId, isActive, socket }: TerminalPanePr
   // Suppress xterm onData during session restore to prevent terminal query
   // responses (OSC 11, DSR, DA) from being echoed back to the remote shell
   const suppressInputRef = useRef(true)
-  const inputQueueRef = useRef<string[]>([])
-  const drainingInputRef = useRef(false)
-
-  const clearInputQueue = useCallback(() => {
-    inputQueueRef.current = []
-    drainingInputRef.current = false
-  }, [])
-
-  const drainInputQueue = useCallback(async () => {
-    if (drainingInputRef.current) return
-    drainingInputRef.current = true
-
-    let sentSinceYield = 0
-
-    try {
-      while (inputQueueRef.current.length > 0) {
-        if (suppressInputRef.current) {
-          inputQueueRef.current = []
-          return
-        }
-
-        const currentTab = useTerminalStore.getState().tabs.find(t => t.id === tabId)
-        if (currentTab?.status !== 'connected') {
-          inputQueueRef.current = []
-          return
-        }
-
-        const chunk = inputQueueRef.current[0]
-        const acknowledged = await new Promise<boolean>((resolve) => {
-          socket.emit(
-            'ssh:input',
-            { session_id: sessionId, tab_id: tabId, data: chunk },
-            (response?: { ok?: boolean }) => resolve(response?.ok !== false)
-          )
-        })
-
-        if (!acknowledged) {
-          inputQueueRef.current = []
-          return
-        }
-
-        inputQueueRef.current.shift()
-        sentSinceYield += 1
-
-        if (sentSinceYield >= INPUT_DRAIN_YIELD_EVERY) {
-          sentSinceYield = 0
-          await new Promise<void>(resolve => window.setTimeout(resolve, 0))
-        }
-      }
-    } finally {
-      drainingInputRef.current = false
-      if (inputQueueRef.current.length > 0 && !suppressInputRef.current) {
-        void drainInputQueue()
-      }
-    }
-  }, [socket, sessionId, tabId])
 
   const emitInput = useCallback((data: string) => {
     if (suppressInputRef.current) return
@@ -132,9 +43,10 @@ export default function TerminalPane({ tabId, isActive, socket }: TerminalPanePr
     const currentTab = useTerminalStore.getState().tabs.find(t => t.id === tabId)
     if (currentTab?.status !== 'connected') return
 
-    inputQueueRef.current.push(...splitInputChunks(data, INPUT_CHUNK_MAX_UNITS))
-    void drainInputQueue()
-  }, [tabId, drainInputQueue])
+    // Send directly (no queue, no ACK). The backend serializes all input per session
+    // via a dedicated write loop, guaranteeing ordering and eliminating overshoot.
+    socket.emit('ssh:input', { session_id: sessionId, tab_id: tabId, data })
+  }, [tabId, socket, sessionId])
 
   const emitResize = useCallback((term: Terminal) => {
     socket.emit('terminal:resize', {
@@ -318,7 +230,6 @@ export default function TerminalPane({ tabId, isActive, socket }: TerminalPanePr
           suppressInputRef.current = false
         })
       } else {
-        clearInputQueue()
         suppressInputRef.current = false
         setTabStatus(tabId, 'disconnected')
       }
@@ -339,14 +250,12 @@ export default function TerminalPane({ tabId, isActive, socket }: TerminalPanePr
     const onError = ({ tab_id, message }: { tab_id: string; message: string }) => {
       if (tab_id !== tabId) return
       errorRef.current = message
-      clearInputQueue()
       suppressInputRef.current = true
       setTabStatus(tabId, 'dead')
     }
 
     const onClosed = ({ tab_id, reason }: { tab_id: string; reason: string }) => {
       if (tab_id !== tabId) return
-      clearInputQueue()
       suppressInputRef.current = true
       setTabStatus(tabId, 'dead')
       termRef.current?.write(`\r\n\x1b[38;5;244m[torrus: ${reason}]\x1b[0m\r\n`)
@@ -363,7 +272,7 @@ export default function TerminalPane({ tabId, isActive, socket }: TerminalPanePr
       socket.off('ssh:error', onError)
       socket.off('ssh:closed', onClosed)
     }
-  }, [socket, tabId, setTabStatus, emitResize, clearInputQueue])
+  }, [socket, tabId, setTabStatus, emitResize])
 
   // Focus terminal when tab becomes active
   useEffect(() => {
@@ -378,7 +287,6 @@ export default function TerminalPane({ tabId, isActive, socket }: TerminalPanePr
 
   const handleConnect = useCallback((values: ConnectFormValues) => {
     errorRef.current = ''
-    clearInputQueue()
     setTabStatus(tabId, 'connecting')
     setTabConnection(tabId, values.host, values.port, values.username)
     const term = termRef.current
@@ -392,7 +300,7 @@ export default function TerminalPane({ tabId, isActive, socket }: TerminalPanePr
       cols: term ? term.cols : 220,
       rows: term ? term.rows : 50,
     })
-  }, [socket, sessionId, tabId, setTabStatus, setTabConnection, clearInputQueue])
+  }, [socket, sessionId, tabId, setTabStatus, setTabConnection])
 
   const showForm = !tab || tab.status === 'disconnected' || tab.status === 'dead'
 
