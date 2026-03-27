@@ -2,24 +2,24 @@
 @tailwind components;
 @tailwind utilities;
 
-/* JetBrains Mono — served from Python static */
+/* JetBrains Mono — inlined as base64 data URIs to survive corporate wheel filters */
 @font-face {
   font-family: 'JetBrains Mono';
-  src: url('/fonts/JetBrainsMono-Regular.woff2') format('woff2');
+  src: url('./fonts/JetBrainsMono-Regular.woff2') format('woff2');
   font-weight: 400;
   font-style: normal;
   font-display: block;
 }
 @font-face {
   font-family: 'JetBrains Mono';
-  src: url('/fonts/JetBrainsMono-Bold.woff2') format('woff2');
+  src: url('./fonts/JetBrainsMono-Bold.woff2') format('woff2');
   font-weight: 700;
   font-style: normal;
   font-display: block;
 }
 @font-face {
   font-family: 'JetBrains Mono';
-  src: url('/fonts/JetBrainsMono-Italic.woff2') format('woff2');
+  src: url('./fonts/JetBrainsMono-Italic.woff2') format('woff2');
   font-weight: 400;
   font-style: italic;
   font-display: block;

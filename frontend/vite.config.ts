@@ -22,6 +22,7 @@ export default defineConfig({
   build: {
     outDir: '../src/torrus/static',
     emptyOutDir: true,
+    assetsInlineLimit: 200_000,
     rollupOptions: {
       output: {
         manualChunks: {

@@ -92,11 +92,6 @@ if _static:
     if assets_dir.exists():
         fastapi_app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
 
-    # Serve /fonts/ from Python static dir (JetBrains Mono)
-    fonts_dir = _static / "fonts"
-    if fonts_dir.exists():
-        fastapi_app.mount("/fonts", StaticFiles(directory=str(fonts_dir)), name="fonts")
-
 
 @fastapi_app.get("/{full_path:path}", include_in_schema=False)
 async def spa_fallback(full_path: str):
