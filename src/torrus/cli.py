@@ -1,4 +1,5 @@
 import logging
+import os
 import threading
 import webbrowser
 
@@ -17,8 +18,15 @@ def main():
 @click.option("--port", default=8080, show_default=True, help="Bind port")
 @click.option("--no-browser", is_flag=True, default=False, help="Don't open browser on startup")
 @click.option("--reload", is_flag=True, default=False, hidden=True, help="Dev auto-reload")
-def serve(host, port, no_browser, reload):
+@click.option("--ldap-config", "ldap_config", default=None,
+              type=click.Path(exists=True, dir_okay=False, resolve_path=True),
+              help="Path to ldapgate YAML config to enable LDAP authentication.")
+def serve(host, port, no_browser, reload, ldap_config):
     """Start the torrus SSH web terminal."""
+    if ldap_config:
+        os.environ["TORRUS_LDAP_CONFIG"] = ldap_config
+        click.echo(f"LDAP authentication enabled ({ldap_config})")
+
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)-8s %(name)s %(message)s",

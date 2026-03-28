@@ -8,7 +8,7 @@ import SettingsDialog from '@/components/settings/SettingsDialog'
 import type { SavedServer } from '@/types'
 
 export default function AppLayout() {
-  const { tabs, activeTabId, addTab, closeTab, setActiveTab, sessionId } = useTerminalStore()
+  const { tabs, activeTabId, addTab, closeTab, closeAllTabs, setActiveTab, sessionId } = useTerminalStore()
   const socket = getSocket()
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -84,6 +84,16 @@ export default function AppLayout() {
     })
   }, [addTab, socket, sessionId])
 
+  const handleCloseAllTabs = useCallback(() => {
+    const currentTabs = useTerminalStore.getState().tabs
+    const hasActive = currentTabs.some(t => t.status === 'connected')
+    if (hasActive && !confirm('Close all tabs? All SSH sessions will be disconnected.')) return
+    for (const tab of currentTabs) {
+      socket.emit('ssh:disconnect', { session_id: sessionId, tab_id: tab.id })
+    }
+    closeAllTabs()
+  }, [socket, sessionId, closeAllTabs])
+
   const handleDuplicateTab = useCallback((sourceTabId: string) => {
     const sourceTab = useTerminalStore.getState().tabs.find(t => t.id === sourceTabId)
     if (!sourceTab || !sourceTab.host) return
@@ -158,6 +168,7 @@ export default function AppLayout() {
           onCloseTab={handleCloseTab}
           onCloneTab={handleCloneTab}
           onDuplicateTab={handleDuplicateTab}
+          onCloseAllTabs={handleCloseAllTabs}
           onOpenSettings={() => setSettingsOpen(true)}
         />
 

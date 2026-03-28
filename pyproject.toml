@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "torrus"
-version = "0.1.6"
+version = "0.1.7"
 description = "Web-based SSH terminal that works behind any reverse proxy"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -31,6 +31,9 @@ dependencies = [
     "click>=8.1.0",
 ]
 
+[project.optional-dependencies]
+ldap = ["ldapgate"]
+
 [project.urls]
 Homepage = "https://github.com/anudeepd/torrus"
 Repository = "https://github.com/anudeepd/torrus"
@@ -43,4 +46,4 @@ torrus = "torrus.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-torrus = ["static/**/*", "static/*"]
+torrus = ["static/**/*", "static/*", "templates/*"]

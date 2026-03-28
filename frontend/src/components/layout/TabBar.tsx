@@ -1,8 +1,9 @@
 import { useState, useRef, useEffect, useCallback, type FormEvent } from 'react'
-import { Plus, X, Pencil, Bookmark, Copy, GitFork, Settings } from 'lucide-react'
+import { Plus, X, Pencil, Bookmark, Copy, GitFork, Settings, LogOut, PanelLeftClose } from 'lucide-react'
 import clsx from 'clsx'
 import { useTerminalStore } from '@/store/terminalStore'
 import { useSavedServerStore } from '@/store/savedServerStore'
+import { useServerConfigStore } from '@/store/serverConfigStore'
 import Logo from '@/components/ui/Logo'
 import type { Tab } from '@/types'
 
@@ -11,6 +12,7 @@ interface TabBarProps {
   onCloseTab: (id: string) => void
   onCloneTab: (id: string) => void
   onDuplicateTab: (id: string) => void
+  onCloseAllTabs: () => void
   onOpenSettings: () => void
 }
 
@@ -117,9 +119,10 @@ function SaveSessionDialog({ state, onSave, onClose }: {
   )
 }
 
-export default function TabBar({ onAddTab, onCloseTab, onCloneTab, onDuplicateTab, onOpenSettings }: TabBarProps) {
+export default function TabBar({ onAddTab, onCloseTab, onCloneTab, onDuplicateTab, onCloseAllTabs, onOpenSettings }: TabBarProps) {
   const { tabs, activeTabId, setActiveTab, renameTab } = useTerminalStore()
   const addServer = useSavedServerStore(s => s.addServer)
+  const ldapEnabled = useServerConfigStore(s => s.ldapEnabled)
   const [editingTabId, setEditingTabId] = useState<string | null>(null)
   const [editValue, setEditValue] = useState('')
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
@@ -243,8 +246,18 @@ export default function TabBar({ onAddTab, onCloseTab, onCloneTab, onDuplicateTa
         </button>
       ))}
 
-      {/* Spacer + Settings */}
+      {/* Spacer + Close All + Settings + Logout */}
       <div className="flex-1" />
+      {tabs.length > 1 && (
+        <button
+          onClick={onCloseAllTabs}
+          title="Close all tabs"
+          className="flex-shrink-0 flex items-center gap-1 px-3 text-xs text-slate-500 hover:text-red-400 hover:bg-surface-800 transition-colors border-l border-surface-800 h-full"
+        >
+          <PanelLeftClose className="w-3.5 h-3.5" />
+          Close All
+        </button>
+      )}
       <button
         onClick={onOpenSettings}
         title="Settings (Ctrl+,)"
@@ -252,6 +265,15 @@ export default function TabBar({ onAddTab, onCloseTab, onCloneTab, onDuplicateTa
       >
         <Settings className="w-3.5 h-3.5" />
       </button>
+      {ldapEnabled && (
+        <button
+          onClick={() => { window.location.href = '/_auth/logout' }}
+          title="Logout"
+          className="flex-shrink-0 w-9 flex items-center justify-center text-red-500 hover:text-red-400 hover:bg-surface-800 transition-colors border-l border-surface-800"
+        >
+          <LogOut className="w-3.5 h-3.5" />
+        </button>
+      )}
 
       {/* Context menu */}
       {contextMenu && (() => {

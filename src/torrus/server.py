@@ -93,6 +93,25 @@ if _static:
         fastapi_app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
 
 
+_ldap_config_path = os.getenv("TORRUS_LDAP_CONFIG")
+if _ldap_config_path:
+    try:
+        from ldapgate.config import load_config
+        from ldapgate.middleware import add_ldap_auth
+    except ImportError as e:
+        raise RuntimeError(
+            "ldapgate is not installed but TORRUS_LDAP_CONFIG is set. "
+            "Install it with: pip install 'torrus[ldap]' or pip install -e /path/to/ldapgate"
+        ) from e
+    _login_template = Path(__file__).parent / "templates" / "login.html"
+    add_ldap_auth(fastapi_app, load_config(_ldap_config_path), template_path=str(_login_template))
+
+
+@fastapi_app.get("/api/config", include_in_schema=False)
+async def api_config():
+    return {"ldap_enabled": bool(os.getenv("TORRUS_LDAP_CONFIG"))}
+
+
 @fastapi_app.get("/{full_path:path}", include_in_schema=False)
 async def spa_fallback(full_path: str):
     if full_path.startswith("socket.io"):

@@ -23,6 +23,7 @@ interface TerminalState {
 
   addTab: () => string
   closeTab: (id: string) => void
+  closeAllTabs: () => void
   setActiveTab: (id: string) => void
   setTabStatus: (id: string, status: TabStatus) => void
   setTabConnection: (id: string, host: string, port: number, username: string) => void
@@ -78,6 +79,8 @@ export const useTerminalStore = create<TerminalState>()(
           return { tabs, activeTabId }
         })
       },
+
+      closeAllTabs: () => set({ tabs: [], activeTabId: null }),
 
       setActiveTab: (id) => set({ activeTabId: id }),
 
