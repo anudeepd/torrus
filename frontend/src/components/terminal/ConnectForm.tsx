@@ -56,7 +56,7 @@ export default function ConnectForm({
                 spellCheck={false}
               />
             </div>
-            <div className="w-20">
+            <div className="w-24">
               <Input
                 label="Port"
                 type="number"
