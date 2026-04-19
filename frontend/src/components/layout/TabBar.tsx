@@ -1,9 +1,10 @@
-import { useState, useRef, useEffect, useCallback, type FormEvent } from 'react'
-import { Plus, X, Pencil, Bookmark, Copy, GitFork, Settings, LogOut, PanelLeftClose } from 'lucide-react'
+import { useState, useRef, useEffect, useCallback, useMemo, type FormEvent } from 'react'
+import { Plus, X, Pencil, Bookmark, Copy, GitFork, Settings, LogOut, PanelLeftClose, Radio, Columns2 } from 'lucide-react'
 import clsx from 'clsx'
 import { useTerminalStore } from '@/store/terminalStore'
 import { useSavedServerStore } from '@/store/savedServerStore'
 import { useServerConfigStore } from '@/store/serverConfigStore'
+import { useBroadcastStore } from '@/store/broadcastStore'
 import Logo from '@/components/ui/Logo'
 import type { Tab } from '@/types'
 
@@ -14,6 +15,10 @@ interface TabBarProps {
   onDuplicateTab: (id: string) => void
   onCloseAllTabs: () => void
   onOpenSettings: () => void
+  onOpenSplitPicker: () => void
+  onOpenBroadcastPicker: () => void
+  onExitSplit: () => void
+  inSplitMode: boolean
 }
 
 function StatusDot({ status }: { status: Tab['status'] }) {
@@ -119,10 +124,12 @@ function SaveSessionDialog({ state, onSave, onClose }: {
   )
 }
 
-export default function TabBar({ onAddTab, onCloseTab, onCloneTab, onDuplicateTab, onCloseAllTabs, onOpenSettings }: TabBarProps) {
+export default function TabBar({ onAddTab, onCloseTab, onCloneTab, onDuplicateTab, onCloseAllTabs, onOpenSettings, onOpenSplitPicker, onOpenBroadcastPicker, onExitSplit, inSplitMode }: TabBarProps) {
   const { tabs, activeTabId, setActiveTab, renameTab } = useTerminalStore()
   const addServer = useSavedServerStore(s => s.addServer)
   const ldapEnabled = useServerConfigStore(s => s.ldapEnabled)
+  const { enabled: broadcastEnabled } = useBroadcastStore()
+  const connectedCount = useMemo(() => tabs.filter(t => t.status === 'connected').length, [tabs])
   const [editingTabId, setEditingTabId] = useState<string | null>(null)
   const [editValue, setEditValue] = useState('')
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
@@ -211,6 +218,11 @@ export default function TabBar({ onAddTab, onCloseTab, onCloneTab, onDuplicateTa
         >
           <StatusDot status={tab.status} />
 
+          {/* Broadcast active indicator */}
+          {broadcastEnabled && tab.status === 'connected' && (
+            <Radio className="flex-shrink-0 w-2.5 h-2.5 text-amber-400" />
+          )}
+
           {editingTabId === tab.id ? (
             <input
               ref={editInputRef}
@@ -246,8 +258,43 @@ export default function TabBar({ onAddTab, onCloseTab, onCloneTab, onDuplicateTa
         </button>
       ))}
 
-      {/* Spacer + Close All + Settings + Logout */}
+      {/* Spacer + Broadcast toggle + Close All + Settings + Logout */}
       <div className="flex-1" />
+      {inSplitMode && (
+        <button
+          onClick={onExitSplit}
+          title="Exit split mode"
+          className="flex-shrink-0 flex items-center gap-1.5 px-3 text-xs text-brand-400 bg-brand-500/10 hover:bg-brand-500/20 transition-colors border-l border-surface-800 h-full"
+        >
+          <X className="w-3.5 h-3.5" />
+          Exit split
+        </button>
+      )}
+      {tabs.length >= 2 && (
+        <button
+          onClick={onOpenSplitPicker}
+          title="Split layout"
+          className="flex-shrink-0 flex items-center gap-1.5 px-3 text-xs text-slate-500 hover:text-slate-300 hover:bg-surface-800 transition-colors border-l border-surface-800 h-full"
+        >
+          <Columns2 className="w-3.5 h-3.5" />
+          Split
+        </button>
+      )}
+      {connectedCount >= 2 && (
+        <button
+          onClick={onOpenBroadcastPicker}
+          title={broadcastEnabled ? 'Broadcast active — click to manage' : 'Broadcast input to multiple terminals'}
+          className={clsx(
+            'flex-shrink-0 flex items-center gap-1.5 px-3 text-xs border-l border-surface-800 h-full transition-colors',
+            broadcastEnabled
+              ? 'text-amber-400 bg-amber-400/10 hover:bg-amber-400/20'
+              : 'text-slate-500 hover:text-slate-300 hover:bg-surface-800'
+          )}
+        >
+          <Radio className="w-3.5 h-3.5" />
+          Broadcast
+        </button>
+      )}
       {tabs.length > 1 && (
         <button
           onClick={onCloseAllTabs}

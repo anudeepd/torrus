@@ -8,10 +8,12 @@ import type { ConnectFormValues } from '@/types'
 import ConnectForm from './ConnectForm'
 import { useTerminalStore } from '@/store/terminalStore'
 import { useSettingsStore } from '@/store/settingsStore'
+import { useBroadcastStore } from '@/store/broadcastStore'
 
 interface TerminalPaneProps {
   tabId: string
   isActive: boolean
+  focused?: boolean  // if provided, controls term.focus(); falls back to isActive
   socket: Socket
 }
 
@@ -23,7 +25,7 @@ function bracketTextForPaste(text: string, bracketedPasteMode: boolean): string 
   return bracketedPasteMode ? `\x1b[200~${text}\x1b[201~` : text
 }
 
-export default function TerminalPane({ tabId, isActive, socket }: TerminalPaneProps) {
+export default function TerminalPane({ tabId, isActive, focused, socket }: TerminalPaneProps) {
   const { sessionId, tabs, setTabStatus, setTabConnection } = useTerminalStore()
   const tab = tabs.find(t => t.id === tabId)
 
@@ -36,6 +38,27 @@ export default function TerminalPane({ tabId, isActive, socket }: TerminalPanePr
   // Suppress xterm onData during session restore to prevent terminal query
   // responses (OSC 11, DSR, DA) from being echoed back to the remote shell
   const suppressInputRef = useRef(true)
+  // Tracks actual xterm.js keyboard focus — only the focused terminal broadcasts.
+  // Prevents other panes' DA/DSR escape responses from leaking into all terminals.
+  const hasFocusRef = useRef(false)
+  // Cache connected tab IDs for broadcast to avoid per-keystroke iteration
+  const broadcastTargetIdsRef = useRef<Set<string>>(new Set())
+  // Focus handlers for cleanup
+  const handleFocus = useCallback(() => { hasFocusRef.current = true }, [])
+  const handleBlur = useCallback(() => { hasFocusRef.current = false }, [])
+
+  // Update cache when broadcast is enabled/disabled or when tabs change
+  useEffect(() => {
+    const allTabs = useTerminalStore.getState().tabs
+    const { enabled, excludedTabIds } = useBroadcastStore.getState()
+    if (!enabled) {
+      broadcastTargetIdsRef.current = new Set()
+      return
+    }
+    broadcastTargetIdsRef.current = new Set(
+      allTabs.filter(t => t.status === 'connected' && !excludedTabIds.includes(t.id)).map(t => t.id)
+    )
+  }, [])
 
   const emitInput = useCallback((data: string) => {
     if (suppressInputRef.current) return
@@ -43,9 +66,15 @@ export default function TerminalPane({ tabId, isActive, socket }: TerminalPanePr
     const currentTab = useTerminalStore.getState().tabs.find(t => t.id === tabId)
     if (currentTab?.status !== 'connected') return
 
-    // Send directly (no queue, no ACK). The backend serializes all input per session
-    // via a dedicated write loop, guaranteeing ordering and eliminating overshoot.
-    socket.emit('ssh:input', { session_id: sessionId, tab_id: tabId, data })
+    const { enabled } = useBroadcastStore.getState()
+
+    if (enabled && hasFocusRef.current && broadcastTargetIdsRef.current.size > 0) {
+      for (const targetTabId of broadcastTargetIdsRef.current) {
+        socket.emit('ssh:input', { session_id: sessionId, tab_id: targetTabId, data })
+      }
+    } else {
+      socket.emit('ssh:input', { session_id: sessionId, tab_id: tabId, data })
+    }
   }, [tabId, socket, sessionId])
 
   const emitResize = useCallback((term: Terminal) => {
@@ -148,6 +177,10 @@ export default function TerminalPane({ tabId, isActive, socket }: TerminalPanePr
       })
 
       textarea = term.textarea ?? null
+      if (textarea) {
+        textarea.addEventListener('focus', handleFocus)
+        textarea.addEventListener('blur', handleBlur)
+      }
       handlePaste = (event: ClipboardEvent) => {
         const text = event.clipboardData?.getData('text/plain')
         if (text == null) return
@@ -178,14 +211,19 @@ export default function TerminalPane({ tabId, isActive, socket }: TerminalPanePr
     return () => {
       cancelled = true
       ro?.disconnect()
-      if (textarea && handlePaste) textarea.removeEventListener('paste', handlePaste, true)
+      if (textarea) {
+        textarea.removeEventListener('focus', handleFocus)
+        textarea.removeEventListener('blur', handleBlur)
+        if (handlePaste) textarea.removeEventListener('paste', handlePaste, true)
+      }
       if (termRef.current) {
         termRef.current.dispose()
         termRef.current = null
         fitRef.current = null
       }
+      hasFocusRef.current = false
     }
-  }, [tabId, emitInput, emitResize])
+  }, [tabId, emitInput, emitResize, handleFocus, handleBlur])
 
   // Apply settings changes to live terminal
   useEffect(() => {
@@ -200,6 +238,14 @@ export default function TerminalPane({ tabId, isActive, socket }: TerminalPanePr
       emitResize(term)
     }
   }, [settings.scrollbackLines, settings.fontSize, tab?.status, emitResize])
+
+  // Suppress input while Socket.IO is disconnected (prevents xterm escape
+  // sequences from reaching the shell during reconnect windows)
+  useEffect(() => {
+    const onDisconnect = () => { suppressInputRef.current = true }
+    socket.on('disconnect', onDisconnect)
+    return () => { socket.off('disconnect', onDisconnect) }
+  }, [socket])
 
   // SSH output → terminal
   useEffect(() => {
@@ -280,10 +326,11 @@ export default function TerminalPane({ tabId, isActive, socket }: TerminalPanePr
       requestAnimationFrame(() => {
         fitRef.current?.fit()
         if (termRef.current) emitResize(termRef.current)
-        termRef.current?.focus()
+        // In split mode, focused prop controls which pane gets keyboard focus
+        if (focused ?? true) termRef.current?.focus()
       })
     }
-  }, [isActive, tab?.status, emitResize])
+  }, [isActive, focused, tab?.status, emitResize])
 
   const handleConnect = useCallback((values: ConnectFormValues) => {
     errorRef.current = ''
