@@ -35,5 +35,14 @@ torrus.log
 
 # Local only
 .claude/
+.ocr/
+.codex/
+.opencode/
 .agents/
 skills-lock.json
+CLAUDE.md
+AGENTS.md
+PLAN-*.md
+TESTING.md
+TODO.md
+/package-lock.json

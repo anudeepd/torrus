@@ -7,6 +7,7 @@ import { useServerConfigStore } from '@/store/serverConfigStore'
 import { useBroadcastStore } from '@/store/broadcastStore'
 import Logo from '@/components/ui/Logo'
 import type { Tab } from '@/types'
+import { modKey } from '@/utils/platform'
 
 interface TabBarProps {
   onAddTab: () => void
@@ -194,7 +195,7 @@ export default function TabBar({ onAddTab, onCloseTab, onCloneTab, onDuplicateTa
       {/* New tab button */}
       <button
         onClick={onAddTab}
-        title="New tab (Ctrl+T)"
+        title={`New tab (${modKey}+T)`}
         className="flex-shrink-0 w-9 flex items-center justify-center text-slate-500 hover:text-slate-300 hover:bg-surface-800 transition-colors border-r border-surface-800"
       >
         <Plus className="w-4 h-4" />
@@ -307,7 +308,7 @@ export default function TabBar({ onAddTab, onCloseTab, onCloneTab, onDuplicateTa
       )}
       <button
         onClick={onOpenSettings}
-        title="Settings (Ctrl+,)"
+        title={`Settings (${modKey}+,)`}
         className="flex-shrink-0 w-9 flex items-center justify-center text-slate-500 hover:text-slate-300 hover:bg-surface-800 transition-colors border-l border-surface-800"
       >
         <Settings className="w-3.5 h-3.5" />
