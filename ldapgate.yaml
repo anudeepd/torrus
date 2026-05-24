@@ -1,0 +1,11 @@
+ldap:
+    url: ldap://localhost:1389
+    bind_dn: cn=admin,dc=example,dc=com
+    bind_password: adminpassword
+    base_dn: dc=example,dc=com
+    user_filter: "(uid={username})"
+proxy:
+    backend_url: http://localhost:8080
+    secret_key: test-secret-key
+    app_name: Lagun
+    secure_cookies: false

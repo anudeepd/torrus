@@ -150,9 +150,10 @@ export default function AppLayout() {
       if (socket.connected) socket.emit('session:register', { session_id: sessionId, tab_id: tabId })
     }
     applyLayout(root)
+      if (!activeTabId || !tabIds.includes(activeTabId)) setActiveTab(tabIds[0])
     setSplitOwnedByBroadcast(false)
     setSplitPickerOpen(false)
-  }, [applyLayout, socket, sessionId])
+  }, [applyLayout, socket, sessionId, setActiveTab, activeTabId])
 
   // Broadcast: apply selected terminals + auto-layout
   const handleApplyBroadcast = useCallback((includedTabIds: string[], layout: PaneNode | null) => {
@@ -171,10 +172,11 @@ export default function AppLayout() {
       // Only take ownership of split if no split was already active
       const hadSplit = useLayoutStore.getState().root !== null
       applyLayout(layout)
+    if (!activeTabId || !tabIds.includes(activeTabId)) setActiveTab(tabIds[0])
       if (!hadSplit) setSplitOwnedByBroadcast(true)
     }
     setBroadcastPickerOpen(false)
-  }, [applyLayout, socket, sessionId])
+  }, [applyLayout, socket, sessionId, setActiveTab, activeTabId])
 
   const handleDisableBroadcast = useCallback(() => {
     disableBroadcast()
