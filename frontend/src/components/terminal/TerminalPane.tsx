@@ -25,6 +25,15 @@ function bracketTextForPaste(text: string, bracketedPasteMode: boolean): string 
   return bracketedPasteMode ? `\x1b[200~${text}\x1b[201~` : text
 }
 
+interface CachedTerminal {
+  term: Terminal
+  fitAddon: FitAddon
+  container: HTMLDivElement
+}
+
+// Module-level cache: terminal buffer must survive remounts when exiting split mode.
+const terminalCache = new Map<string, CachedTerminal>()
+
 export default function TerminalPane({ tabId, isActive, focused, socket }: TerminalPaneProps) {
   const { sessionId, tabs, setTabStatus, setTabConnection } = useTerminalStore()
   const tab = tabs.find(t => t.id === tabId)
@@ -86,7 +95,7 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
     })
   }, [socket, sessionId, tabId])
 
-  // Create xterm.js terminal once
+  // Create or reuse xterm.js terminal
   useEffect(() => {
     if (!containerRef.current || termRef.current) return
 
@@ -96,123 +105,158 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
     let ro: ResizeObserver | null = null
     let textarea: HTMLTextAreaElement | null = null
     let handlePaste: ((event: ClipboardEvent) => void) | null = null
+    let onDataDisposable: { dispose: () => void } | null = null
 
     const init = async () => {
-      // Wait for JetBrains Mono to be ready so xterm.js measures cells correctly
       await document.fonts.load(`normal ${fontSize}px "JetBrains Mono"`).catch(() => {})
-
-      // Bail out if the component unmounted while we were waiting
       if (cancelled || !containerRef.current || termRef.current) return
 
-      const term = new Terminal({
-        fontFamily: '"JetBrains Mono", "Cascadia Code", "Fira Code", ui-monospace, monospace',
-        fontSize,
-        fontWeight: 'normal',
-        fontWeightBold: 'bold',
-        lineHeight: 1.2,
-        cursorBlink: true,
-        cursorStyle: 'block',
-        scrollback: scrollbackLines,
-        macOptionClickForcesSelection: true,
-        rightClickSelectsWord: true,
-        allowTransparency: false,
-        theme: {
-          background:          '#020617',
-          foreground:          '#e2e8f0',
-          cursor:              '#34d399',
-          cursorAccent:        '#020617',
-          selectionBackground: 'rgba(52,211,153,0.25)',
-          black:               '#1e293b',
-          red:                 '#f87171',
-          green:               '#10b981',
-          yellow:              '#facc15',
-          blue:                '#34d399',
-          magenta:             '#c084fc',
-          cyan:                '#0d9488',
-          white:               '#cbd5e1',
-          brightBlack:         '#475569',
-          brightRed:           '#fca5a5',
-          brightGreen:         '#6ee7b7',
-          brightYellow:        '#fde047',
-          brightBlue:          '#6ee7b7',
-          brightMagenta:       '#d8b4fe',
-          brightCyan:          '#2dd4bf',
-          brightWhite:         '#f1f5f9',
-        },
-      })
+      const cached = terminalCache.get(tabId)
+      if (cached) {
+        // Reuse existing terminal (e.g. remounting after exiting split mode)
+        containerRef.current.appendChild(cached.container)
+        termRef.current = cached.term
+        fitRef.current = cached.fitAddon
 
-      const fitAddon = new FitAddon()
-      const webLinksAddon = new WebLinksAddon()
-      term.loadAddon(fitAddon)
-      term.loadAddon(webLinksAddon)
+        textarea = cached.term.textarea ?? null
+        if (textarea) {
+          textarea.addEventListener('focus', handleFocus)
+          textarea.addEventListener('blur', handleBlur)
+        }
 
-      // Let the browser/app handle shortcuts instead of xterm
-      term.attachCustomKeyEventHandler((e) => {
-        const mod = e.ctrlKey || e.metaKey
-        const key = e.key.toLowerCase()
+        handlePaste = (event: ClipboardEvent) => {
+          const text = event.clipboardData?.getData('text/plain')
+          if (text == null) return
+          event.preventDefault()
+          event.stopPropagation()
+          const bracketedPasteMode =
+            cached.term.modes.bracketedPasteMode && cached.term.options.ignoreBracketedPasteMode !== true
+          const prepared = bracketTextForPaste(prepareTextForTerminal(text), bracketedPasteMode)
+          emitInput(prepared)
+        }
+        textarea?.addEventListener('paste', handlePaste, true)
 
-        // App shortcuts — pass to AppLayout's keydown handler
-        if (mod && (key === 'w' || key === 't' || key === ',')) return false
-        if (e.ctrlKey && key === 'tab') return false
+        onDataDisposable = cached.term.onData((data) => {
+          emitInput(data)
+        })
 
-        // Ctrl+F: let the browser open its native find dialog
-        if (mod && key === 'f') return false
+        ro = new ResizeObserver(() => {
+          const currentTab = useTerminalStore.getState().tabs.find(t => t.id === tabId)
+          if (currentTab?.status === 'connected') {
+            cached.fitAddon.fit()
+            emitResize(cached.term)
+          }
+        })
+        ro.observe(containerRef.current)
 
-        // Ctrl+C: copy when text is selected, otherwise let xterm send SIGINT
-        if (mod && key === 'c' && term.hasSelection()) return false
+        cached.fitAddon.fit()
+        emitResize(cached.term)
 
-        // Ctrl+V: let the browser fire a paste event (xterm handles it natively)
-        if (mod && key === 'v') return false
-
-        return true
-      })
-
-      term.open(containerRef.current)
-      fitAddon.fit()
-
-      termRef.current = term
-      fitRef.current = fitAddon
-
-      // If the tab is already connected (e.g. remounting after exiting split
-      // mode), stop suppressing input so the terminal remains interactive.
-      const currentTab = useTerminalStore.getState().tabs.find(t => t.id === tabId)
-      if (currentTab?.status === 'connected') {
-        suppressInputRef.current = false
-      }
-
-      // Keystrokes → SSH input
-      term.onData((data) => {
-        emitInput(data)
-      })
-
-      textarea = term.textarea ?? null
-      if (textarea) {
-        textarea.addEventListener('focus', handleFocus)
-        textarea.addEventListener('blur', handleBlur)
-      }
-      handlePaste = (event: ClipboardEvent) => {
-        const text = event.clipboardData?.getData('text/plain')
-        if (text == null) return
-
-        event.preventDefault()
-        event.stopPropagation()
-
-        const bracketedPasteMode =
-          term.modes.bracketedPasteMode && term.options.ignoreBracketedPasteMode !== true
-        const prepared = bracketTextForPaste(prepareTextForTerminal(text), bracketedPasteMode)
-        emitInput(prepared)
-      }
-      textarea?.addEventListener('paste', handlePaste, true)
-
-      // Resize observer
-      ro = new ResizeObserver(() => {
         const currentTab = useTerminalStore.getState().tabs.find(t => t.id === tabId)
         if (currentTab?.status === 'connected') {
-          fitAddon.fit()
-          emitResize(term)
+          suppressInputRef.current = false
         }
-      })
-      ro.observe(containerRef.current)
+      } else {
+        const termContainer = document.createElement('div')
+        termContainer.className = 'absolute inset-0'
+        containerRef.current.appendChild(termContainer)
+
+        const term = new Terminal({
+          fontFamily: '"JetBrains Mono", "Cascadia Code", "Fira Code", ui-monospace, monospace',
+          fontSize,
+          fontWeight: 'normal',
+          fontWeightBold: 'bold',
+          lineHeight: 1.2,
+          cursorBlink: true,
+          cursorStyle: 'block',
+          scrollback: scrollbackLines,
+          macOptionClickForcesSelection: true,
+          rightClickSelectsWord: true,
+          allowTransparency: false,
+          theme: {
+            background:          '#020617',
+            foreground:          '#e2e8f0',
+            cursor:              '#34d399',
+            cursorAccent:        '#020617',
+            selectionBackground: 'rgba(52,211,153,0.25)',
+            black:               '#1e293b',
+            red:                 '#f87171',
+            green:               '#10b981',
+            yellow:              '#facc15',
+            blue:                '#34d399',
+            magenta:             '#c084fc',
+            cyan:                '#0d9488',
+            white:               '#cbd5e1',
+            brightBlack:         '#475569',
+            brightRed:           '#fca5a5',
+            brightGreen:         '#6ee7b7',
+            brightYellow:        '#fde047',
+            brightBlue:          '#6ee7b7',
+            brightMagenta:       '#d8b4fe',
+            brightCyan:          '#2dd4bf',
+            brightWhite:         '#f1f5f9',
+          },
+        })
+
+        const fitAddon = new FitAddon()
+        const webLinksAddon = new WebLinksAddon()
+        term.loadAddon(fitAddon)
+        term.loadAddon(webLinksAddon)
+
+        term.attachCustomKeyEventHandler((e) => {
+          const mod = e.ctrlKey || e.metaKey
+          const key = e.key.toLowerCase()
+          if (mod && (key === 'w' || key === 't' || key === ',')) return false
+          if (e.ctrlKey && key === 'tab') return false
+          if (mod && key === 'f') return false
+          if (mod && key === 'c' && term.hasSelection()) return false
+          if (mod && key === 'v') return false
+          return true
+        })
+
+        term.open(termContainer)
+        fitAddon.fit()
+
+        termRef.current = term
+        fitRef.current = fitAddon
+        terminalCache.set(tabId, { term, fitAddon, container: termContainer })
+
+        const currentTab = useTerminalStore.getState().tabs.find(t => t.id === tabId)
+        if (currentTab?.status === 'connected') {
+          suppressInputRef.current = false
+        }
+
+        onDataDisposable = term.onData((data) => {
+          emitInput(data)
+        })
+
+        textarea = term.textarea ?? null
+        if (textarea) {
+          textarea.addEventListener('focus', handleFocus)
+          textarea.addEventListener('blur', handleBlur)
+        }
+
+        handlePaste = (event: ClipboardEvent) => {
+          const text = event.clipboardData?.getData('text/plain')
+          if (text == null) return
+          event.preventDefault()
+          event.stopPropagation()
+          const bracketedPasteMode =
+            term.modes.bracketedPasteMode && term.options.ignoreBracketedPasteMode !== true
+          const prepared = bracketTextForPaste(prepareTextForTerminal(text), bracketedPasteMode)
+          emitInput(prepared)
+        }
+        textarea?.addEventListener('paste', handlePaste, true)
+
+        ro = new ResizeObserver(() => {
+          const currentTab = useTerminalStore.getState().tabs.find(t => t.id === tabId)
+          if (currentTab?.status === 'connected') {
+            fitAddon.fit()
+            emitResize(term)
+          }
+        })
+        ro.observe(containerRef.current)
+      }
     }
 
     init()
@@ -225,11 +269,27 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
         textarea.removeEventListener('blur', handleBlur)
         if (handlePaste) textarea.removeEventListener('paste', handlePaste, true)
       }
-      if (termRef.current) {
-        termRef.current.dispose()
-        termRef.current = null
-        fitRef.current = null
+      onDataDisposable?.dispose()
+
+      const cached = terminalCache.get(tabId)
+      if (cached && cached.container.parentNode) {
+        cached.container.parentNode.removeChild(cached.container)
       }
+
+      // If the tab was actually closed, dispose the cached terminal
+      setTimeout(() => {
+        const tabExists = useTerminalStore.getState().tabs.some(t => t.id === tabId)
+        if (!tabExists) {
+          const cached = terminalCache.get(tabId)
+          if (cached) {
+            cached.term.dispose()
+            terminalCache.delete(tabId)
+          }
+        }
+      }, 0)
+
+      termRef.current = null
+      fitRef.current = null
       hasFocusRef.current = false
     }
   }, [tabId, emitInput, emitResize, handleFocus, handleBlur])

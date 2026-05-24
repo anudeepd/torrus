@@ -103,6 +103,20 @@ export default function AppLayout() {
     })
   }, [addTab, socket, sessionId])
 
+  const handleSetActiveTab = useCallback((tabId: string) => {
+    if (layoutRoot) {
+      const inLayout = getLayoutTabIds(layoutRoot).includes(tabId)
+      if (!inLayout) {
+        exitSplitMode()
+        if (splitOwnedByBroadcast) {
+          disableBroadcast()
+          setSplitOwnedByBroadcast(false)
+        }
+      }
+    }
+    setActiveTab(tabId)
+  }, [layoutRoot, exitSplitMode, splitOwnedByBroadcast, disableBroadcast, setActiveTab])
+
   const handleCloseAllTabs = useCallback(() => {
     const currentTabs = useTerminalStore.getState().tabs
     const hasActive = currentTabs.some(t => t.status === 'connected')
@@ -198,13 +212,13 @@ export default function AppLayout() {
           const next = e.shiftKey
             ? (idx - 1 + tabs.length) % tabs.length
             : (idx + 1) % tabs.length
-          setActiveTab(tabs[next].id)
+          handleSetActiveTab(tabs[next].id)
         }
       }
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [handleAddTab, handleCloseTab, activeTabId, tabs, setActiveTab])
+  }, [handleAddTab, handleCloseTab, activeTabId, tabs, handleSetActiveTab])
 
   const connectedTabs = useMemo(() => tabs.filter(t => t.status === 'connected'), [tabs])
   const broadcastIncluded = useMemo(
@@ -231,6 +245,7 @@ export default function AppLayout() {
           onOpenSplitPicker={() => setSplitPickerOpen(true)}
           onOpenBroadcastPicker={() => setBroadcastPickerOpen(true)}
           onExitSplit={() => { exitSplitMode(); setSplitOwnedByBroadcast(false) }}
+          onSetActiveTab={handleSetActiveTab}
           inSplitMode={!!layoutRoot}
         />
 

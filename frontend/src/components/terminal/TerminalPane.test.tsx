@@ -104,4 +104,39 @@ describe('TerminalPane', () => {
       expect.anything()
     )
   })
+
+  it('reuses the same terminal instance on remount (split-exit buffer preservation)', async () => {
+    const tabId = 'tab-3'
+    seedStores(tabId, 'connected')
+
+    const socket = createMockSocket()
+
+    function Wrapper({ show }: { show: boolean }) {
+      return show ? (
+        <TerminalPane
+          tabId={tabId}
+          isActive={true}
+          focused={true}
+          socket={socket as unknown as import('socket.io-client').Socket}
+        />
+      ) : null
+    }
+
+    const { rerender } = render(<Wrapper show={true} />)
+
+    await waitFor(() => {
+      expect(mockTerminalInstances.length).toBe(1)
+    })
+
+    const firstTerm = mockTerminalInstances[0]
+
+    rerender(<Wrapper show={false} />)
+    rerender(<Wrapper show={true} />)
+
+    await waitFor(() => {
+      expect(mockTerminalInstances.length).toBe(1)
+    })
+
+    expect(mockTerminalInstances[0]).toBe(firstTerm)
+  })
 })

@@ -19,6 +19,7 @@ interface TabBarProps {
   onOpenSplitPicker: () => void
   onOpenBroadcastPicker: () => void
   onExitSplit: () => void
+  onSetActiveTab: (id: string) => void
   inSplitMode: boolean
 }
 
@@ -125,8 +126,8 @@ function SaveSessionDialog({ state, onSave, onClose }: {
   )
 }
 
-export default function TabBar({ onAddTab, onCloseTab, onCloneTab, onDuplicateTab, onCloseAllTabs, onOpenSettings, onOpenSplitPicker, onOpenBroadcastPicker, onExitSplit, inSplitMode }: TabBarProps) {
-  const { tabs, activeTabId, setActiveTab, renameTab } = useTerminalStore()
+export default function TabBar({ onAddTab, onCloseTab, onCloneTab, onDuplicateTab, onCloseAllTabs, onOpenSettings, onOpenSplitPicker, onOpenBroadcastPicker, onExitSplit, onSetActiveTab, inSplitMode }: TabBarProps) {
+  const { tabs, activeTabId, renameTab } = useTerminalStore()
   const addServer = useSavedServerStore(s => s.addServer)
   const ldapEnabled = useServerConfigStore(s => s.ldapEnabled)
   const { enabled: broadcastEnabled } = useBroadcastStore()
@@ -205,7 +206,7 @@ export default function TabBar({ onAddTab, onCloseTab, onCloneTab, onDuplicateTa
       {tabs.map(tab => (
         <button
           key={tab.id}
-          onClick={() => setActiveTab(tab.id)}
+          onClick={() => onSetActiveTab(tab.id)}
           onContextMenu={(e) => {
             e.preventDefault()
             setContextMenu({ tabId: tab.id, x: e.clientX, y: e.clientY })
