@@ -106,12 +106,10 @@ export default function AppLayout() {
   const handleSetActiveTab = useCallback((tabId: string) => {
     if (layoutRoot) {
       const inLayout = getLayoutTabIds(layoutRoot).includes(tabId)
-      if (!inLayout) {
+      if (!inLayout && splitOwnedByBroadcast) {
         exitSplitMode()
-        if (splitOwnedByBroadcast) {
-          disableBroadcast()
-          setSplitOwnedByBroadcast(false)
-        }
+        disableBroadcast()
+        setSplitOwnedByBroadcast(false)
       }
     }
     setActiveTab(tabId)
@@ -225,6 +223,10 @@ export default function AppLayout() {
     () => new Set(connectedTabs.filter(t => !excludedTabIds.includes(t.id)).map(t => t.id)),
     [connectedTabs, excludedTabIds]
   )
+  const activeTabInLayout = useMemo(
+    () => layoutRoot ? getLayoutTabIds(layoutRoot).includes(activeTabId || '') : false,
+    [layoutRoot, activeTabId]
+  )
 
   return (
     <div className="flex h-full bg-surface-950">
@@ -250,7 +252,7 @@ export default function AppLayout() {
         />
 
         <div className="flex-1 relative overflow-hidden min-h-0">
-          {layoutRoot ? (
+          {layoutRoot && activeTabInLayout ? (
             <div className="absolute inset-0">
               <SplitPane
                 node={layoutRoot}
