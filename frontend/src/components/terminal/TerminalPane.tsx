@@ -171,6 +171,13 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
       termRef.current = term
       fitRef.current = fitAddon
 
+      // If the tab is already connected (e.g. remounting after exiting split
+      // mode), stop suppressing input so the terminal remains interactive.
+      const currentTab = useTerminalStore.getState().tabs.find(t => t.id === tabId)
+      if (currentTab?.status === 'connected') {
+        suppressInputRef.current = false
+      }
+
       // Keystrokes → SSH input
       term.onData((data) => {
         emitInput(data)

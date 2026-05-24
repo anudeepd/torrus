@@ -1,0 +1,32 @@
+import { vi } from 'vitest'
+import '@testing-library/jest-dom/vitest'
+
+// Mock localStorage and sessionStorage for zustand persist middleware
+const mockStorage: Record<string, string> = {}
+const storageMock = {
+  getItem: vi.fn((key: string) => mockStorage[key] ?? null),
+  setItem: vi.fn((key: string, value: string) => { mockStorage[key] = value }),
+  removeItem: vi.fn((key: string) => { delete mockStorage[key] }),
+  clear: vi.fn(() => { Object.keys(mockStorage).forEach(k => delete mockStorage[k]) }),
+  key: vi.fn((index: number) => Object.keys(mockStorage)[index] ?? null),
+  length: 0,
+}
+
+Object.defineProperty(window, 'localStorage', { value: storageMock, writable: true })
+Object.defineProperty(window, 'sessionStorage', { value: storageMock, writable: true })
+
+// Mock ResizeObserver for xterm.js
+class MockResizeObserver {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
+Object.defineProperty(window, 'ResizeObserver', { value: MockResizeObserver, writable: true })
+
+// Mock document.fonts.load for xterm.js initialization
+Object.defineProperty(document, 'fonts', {
+  value: {
+    load: vi.fn().mockResolvedValue(undefined),
+  },
+  writable: true,
+})
