@@ -113,6 +113,8 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
         cursorBlink: true,
         cursorStyle: 'block',
         scrollback: scrollbackLines,
+        macOptionClickForcesSelection: true,
+        rightClickSelectsWord: true,
         allowTransparency: false,
         theme: {
           background:          '#020617',

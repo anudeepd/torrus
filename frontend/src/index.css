@@ -67,3 +67,7 @@
 .xterm-viewport {
   overflow-y: scroll !important;
 }
+
+.xterm-selection {
+  overflow: hidden;
+}
