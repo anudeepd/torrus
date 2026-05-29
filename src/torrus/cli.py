@@ -21,7 +21,11 @@ def main():
 @click.option("--ldap-config", "ldap_config", default=None,
               type=click.Path(exists=True, dir_okay=False, resolve_path=True),
               help="Path to ldapgate YAML config to enable LDAP authentication.")
-def serve(host, port, no_browser, reload, ldap_config):
+@click.option("--ssl-keyfile", default=None, type=click.Path(exists=True, dir_okay=False),
+              help="SSL key file for HTTPS")
+@click.option("--ssl-certfile", default=None, type=click.Path(exists=True, dir_okay=False),
+              help="SSL certificate file for HTTPS")
+def serve(host, port, no_browser, reload, ldap_config, ssl_keyfile, ssl_certfile):
     """Start the torrus SSH web terminal."""
     if ldap_config:
         os.environ["TORRUS_LDAP_CONFIG"] = ldap_config
@@ -33,10 +37,11 @@ def serve(host, port, no_browser, reload, ldap_config):
         datefmt="%H:%M:%S",
     )
 
+    use_ssl = ssl_keyfile and ssl_certfile
     if not no_browser:
         browse_host = "127.0.0.1" if host == "0.0.0.0" else host
-        url = f"http://{browse_host}:{port}"
-        # Open after a short delay so uvicorn has time to bind
+        scheme = "https" if use_ssl else "http"
+        url = f"{scheme}://{browse_host}:{port}"
         threading.Timer(1.5, webbrowser.open, args=[url]).start()
 
     uvicorn.run(
@@ -45,4 +50,6 @@ def serve(host, port, no_browser, reload, ldap_config):
         port=port,
         reload=reload,
         log_level="info",
+        ssl_keyfile=ssl_keyfile,
+        ssl_certfile=ssl_certfile,
     )

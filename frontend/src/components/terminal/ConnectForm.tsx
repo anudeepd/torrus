@@ -26,9 +26,14 @@ export default function ConnectForm({
     setLocalError('')
     if (!host.trim()) { setLocalError('Host is required.'); return }
     if (!username.trim()) { setLocalError('Username is required.'); return }
+    const parsedPort = parseInt(port, 10)
+    if (!Number.isFinite(parsedPort) || parsedPort < 1 || parsedPort > 65535) {
+      setLocalError('Port must be 1-65535.')
+      return
+    }
     onConnect({
       host: host.trim(),
-      port: parseInt(port, 10) || 22,
+      port: parsedPort,
       username: username.trim(),
       password,
     })
@@ -54,6 +59,7 @@ export default function ConnectForm({
                 onChange={e => setHost(e.target.value)}
                 autoComplete="off"
                 spellCheck={false}
+                data-testid="host-input"
               />
             </div>
             <div className="w-24">
@@ -64,6 +70,7 @@ export default function ConnectForm({
                 max={65535}
                 value={port}
                 onChange={e => setPort(e.target.value)}
+                data-testid="port-input"
               />
             </div>
           </div>
@@ -75,6 +82,7 @@ export default function ConnectForm({
             onChange={e => setUsername(e.target.value)}
             autoComplete="username"
             spellCheck={false}
+            data-testid="username-input"
           />
 
           <Input
@@ -84,6 +92,7 @@ export default function ConnectForm({
             value={password}
             onChange={e => setPassword(e.target.value)}
             autoComplete="current-password"
+            data-testid="password-input"
           />
 
           {displayError && (

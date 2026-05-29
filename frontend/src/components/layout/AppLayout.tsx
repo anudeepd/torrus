@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { getSocket } from '@/hooks/useSocket'
 import { useTerminalStore } from '@/store/terminalStore'
 import { useLayoutStore, getLayoutTabIds } from '@/store/layoutStore'
@@ -59,12 +59,11 @@ export default function AppLayout() {
 
   const handleAddTab = useCallback(() => {
     const tabId = addTab()
-    if (socket.connected) {
-      socket.emit('session:register', { session_id: sessionId, tab_id: tabId })
-    }
+    socket.emit('session:register', { session_id: sessionId, tab_id: tabId })
   }, [addTab, socket, sessionId])
 
   const handleClosePane = useCallback((tabId: string) => {
+    socket.emit('ssh:disconnect', { session_id: sessionId, tab_id: tabId })
     const { root } = useLayoutStore.getState()
     if (!root) return
     const remaining = getLayoutTabIds(root).filter(id => id !== tabId)
@@ -74,25 +73,23 @@ export default function AppLayout() {
     } else {
       closePane(tabId)
     }
-  }, [closePane, exitSplitMode, setActiveTab])
+  }, [socket, sessionId, closePane, exitSplitMode, setActiveTab])
 
   const handleCloseTab = useCallback((id: string) => {
     socket.emit('ssh:disconnect', { session_id: sessionId, tab_id: id })
     const { root } = useLayoutStore.getState()
     if (root && getLayoutTabIds(root).includes(id)) handleClosePane(id)
     closeTab(id)
-    if (tabs.length === 1) {
-      setTimeout(() => {
-        if (useTerminalStore.getState().tabs.length === 0) addTab()
-      }, 0)
-    }
-  }, [socket, sessionId, closeTab, tabs.length, addTab, handleClosePane])
+    setTimeout(() => {
+      if (useTerminalStore.getState().tabs.length === 0) addTab()
+    }, 0)
+  }, [socket, sessionId, closeTab, addTab, handleClosePane])
 
   const handleCloneTab = useCallback((sourceTabId: string) => {
     const sourceTab = useTerminalStore.getState().tabs.find(t => t.id === sourceTabId)
     if (!sourceTab || sourceTab.status !== 'connected' || !sourceTab.host || !sourceTab.username) return
     const newTabId = addTab()
-    if (socket.connected) socket.emit('session:register', { session_id: sessionId, tab_id: newTabId })
+    socket.emit('session:register', { session_id: sessionId, tab_id: newTabId })
     const store = useTerminalStore.getState()
     store.setTabConnection(newTabId, sourceTab.host, sourceTab.port ?? 22, sourceTab.username)
     const baseName = sourceTab.label ?? `${sourceTab.username}@${sourceTab.host}`
@@ -129,7 +126,7 @@ export default function AppLayout() {
     const sourceTab = useTerminalStore.getState().tabs.find(t => t.id === sourceTabId)
     if (!sourceTab || !sourceTab.host || !sourceTab.username) return
     const newTabId = addTab()
-    if (socket.connected) socket.emit('session:register', { session_id: sessionId, tab_id: newTabId })
+    socket.emit('session:register', { session_id: sessionId, tab_id: newTabId })
     const store = useTerminalStore.getState()
     store.setTabConnection(newTabId, sourceTab.host, sourceTab.port ?? 22, sourceTab.username)
     if (sourceTab.label) store.renameTab(newTabId, sourceTab.label)
@@ -137,7 +134,7 @@ export default function AppLayout() {
 
   const handleLoadSession = useCallback((server: SavedServer) => {
     const tabId = addTab()
-    if (socket.connected) socket.emit('session:register', { session_id: sessionId, tab_id: tabId })
+    socket.emit('session:register', { session_id: sessionId, tab_id: tabId })
     const store = useTerminalStore.getState()
     store.setTabConnection(tabId, server.host, server.port, server.username)
     store.renameTab(tabId, server.name)
@@ -147,10 +144,10 @@ export default function AppLayout() {
   const handleApplyLayout = useCallback((root: PaneNode) => {
     const tabIds = getLayoutTabIds(root)
     for (const tabId of tabIds) {
-      if (socket.connected) socket.emit('session:register', { session_id: sessionId, tab_id: tabId })
+      socket.emit('session:register', { session_id: sessionId, tab_id: tabId })
     }
     applyLayout(root)
-      if (!activeTabId || !tabIds.includes(activeTabId)) setActiveTab(tabIds[0])
+    if (!activeTabId || !tabIds.includes(activeTabId)) setActiveTab(tabIds[0])
     setSplitOwnedByBroadcast(false)
     setSplitPickerOpen(false)
   }, [applyLayout, socket, sessionId, setActiveTab, activeTabId])
@@ -167,12 +164,12 @@ export default function AppLayout() {
     if (layout) {
       const tabIds = getLayoutTabIds(layout)
       for (const tabId of tabIds) {
-        if (socket.connected) socket.emit('session:register', { session_id: sessionId, tab_id: tabId })
+        socket.emit('session:register', { session_id: sessionId, tab_id: tabId })
       }
       // Only take ownership of split if no split was already active
       const hadSplit = useLayoutStore.getState().root !== null
       applyLayout(layout)
-    if (!activeTabId || !tabIds.includes(activeTabId)) setActiveTab(tabIds[0])
+      if (!activeTabId || !tabIds.includes(activeTabId)) setActiveTab(tabIds[0])
       if (!hadSplit) setSplitOwnedByBroadcast(true)
     }
     setBroadcastPickerOpen(false)
@@ -187,18 +184,27 @@ export default function AppLayout() {
     setBroadcastPickerOpen(false)
   }, [disableBroadcast, exitSplitMode, splitOwnedByBroadcast])
 
-  // Keyboard shortcuts
+  // Keyboard shortcuts — use refs to avoid recreating listener on every render
+  const handleAddTabRef = useRef(handleAddTab)
+  const handleCloseTabRef = useRef(handleCloseTab)
+  const handleSetActiveTabRef = useRef(handleSetActiveTab)
+  handleAddTabRef.current = handleAddTab
+  handleCloseTabRef.current = handleCloseTab
+  handleSetActiveTabRef.current = handleSetActiveTab
+
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === 't') { e.preventDefault(); handleAddTab() }
+      if ((e.ctrlKey || e.metaKey) && e.key === 't') { e.preventDefault(); handleAddTabRef.current() }
       if ((e.ctrlKey || e.metaKey) && e.key === 'w') {
         e.preventDefault()
-        if (activeTabId) {
-          const tab = tabs.find(t => t.id === activeTabId)
+        const store = useTerminalStore.getState()
+        const currentActiveTabId = store.activeTabId
+        if (currentActiveTabId) {
+          const tab = store.tabs.find(t => t.id === currentActiveTabId)
           if (tab?.status === 'connected') {
             if (!confirm('Close this tab? The SSH session will be disconnected.')) return
           }
-          handleCloseTab(activeTabId)
+          handleCloseTabRef.current(currentActiveTabId)
         }
       }
       if ((e.ctrlKey || e.metaKey) && e.key === ',') {
@@ -207,18 +213,21 @@ export default function AppLayout() {
       }
       if (e.ctrlKey && e.key === 'Tab') {
         e.preventDefault()
-        const idx = tabs.findIndex(t => t.id === activeTabId)
-        if (tabs.length > 1) {
+        const store = useTerminalStore.getState()
+        const currentTabs = store.tabs
+        const currentActiveTabId = store.activeTabId
+        const idx = currentTabs.findIndex(t => t.id === currentActiveTabId)
+        if (currentTabs.length > 1) {
           const next = e.shiftKey
-            ? (idx - 1 + tabs.length) % tabs.length
-            : (idx + 1) % tabs.length
-          handleSetActiveTab(tabs[next].id)
+            ? (idx - 1 + currentTabs.length) % currentTabs.length
+            : (idx + 1) % currentTabs.length
+          handleSetActiveTabRef.current(currentTabs[next].id)
         }
       }
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [handleAddTab, handleCloseTab, activeTabId, tabs, handleSetActiveTab])
+  }, [])
 
   const connectedTabs = useMemo(() => tabs.filter(t => t.status === 'connected'), [tabs])
   const broadcastIncluded = useMemo(

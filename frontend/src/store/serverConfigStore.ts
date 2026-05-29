@@ -8,13 +8,16 @@ interface ServerConfigState {
 export const useServerConfigStore = create<ServerConfigState>((set) => ({
   ldapEnabled: false,
   load: async () => {
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 5000)
     try {
-      const res = await fetch('/api/config')
+      const res = await fetch('/api/config', { signal: controller.signal })
+      clearTimeout(timeout)
       if (!res.ok) return
       const config = await res.json()
       set({ ldapEnabled: Boolean(config.ldap_enabled) })
     } catch {
-      // silently ignore — ldap stays false
+      clearTimeout(timeout)
     }
   },
 }))

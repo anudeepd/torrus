@@ -3,11 +3,11 @@ import { persist } from 'zustand/middleware'
 import type { Tab, TabStatus } from '@/types'
 
 let _tabCounter = 0
+const _pageNonce = Date.now().toString(36) + Math.random().toString(36).slice(2, 6)
 
 function newTabId(): string {
   _tabCounter++
-  // sessionStorage persists across F5 reloads but not new browser tabs
-  const key = `torrus_tab_num_${_tabCounter}`
+  const key = `torrus_tab_num_${_pageNonce}_${_tabCounter}`
   let id = sessionStorage.getItem(key)
   if (!id) {
     id = `t${_tabCounter}_${Date.now()}`
@@ -31,11 +31,7 @@ interface TerminalState {
   getActiveTab: () => Tab | null
 }
 
-function uuid() {
-  return crypto.randomUUID?.() ??
-    '10000000-1000-4000-8000-100000000000'.replace(/[018]/g, c =>
-      (+c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> +c / 4).toString(16))
-}
+import { uuid } from '@/utils/uuid'
 
 function getOrCreateSessionId(): string {
   const KEY = 'torrus_session_id'
@@ -105,6 +101,19 @@ export const useTerminalStore = create<TerminalState>()(
     {
       name: 'torrus-tabs',
       version: 2,
+      migrate: (persistedState: unknown, version: number) => {
+        if (version < 2) {
+          const s = persistedState as Record<string, unknown>
+          return {
+            ...s,
+            tabs: (Array.isArray(s.tabs) ? s.tabs : []).map((t: Record<string, unknown>) => ({
+              ...t,
+              sessionKey: t.sessionKey ?? `${s.sessionId ?? ''}:${t.id ?? ''}`,
+            })),
+          }
+        }
+        return persistedState
+      },
       partialize: (s) => ({
         sessionId: s.sessionId,
         tabs: s.tabs,

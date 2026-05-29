@@ -47,7 +47,7 @@ export default function SettingsDialog({ onClose }: SettingsDialogProps) {
             <p className="text-xs text-slate-500">Number of lines kept in terminal history</p>
             <select
               value={scrollbackLines}
-              onChange={e => update({ scrollbackLines: parseInt(e.target.value) })}
+              onChange={e => update({ scrollbackLines: parseInt(e.target.value, 10) })}
               className="mt-1 w-full bg-surface-950 border border-surface-700 rounded-md px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-brand-500 transition-colors"
             >
               {SCROLLBACK_OPTIONS.map(n => (
@@ -62,7 +62,7 @@ export default function SettingsDialog({ onClose }: SettingsDialogProps) {
             <p className="text-xs text-slate-500">Terminal font size in pixels</p>
             <select
               value={fontSize}
-              onChange={e => update({ fontSize: parseInt(e.target.value) })}
+              onChange={e => update({ fontSize: parseInt(e.target.value, 10) })}
               className="mt-1 w-full bg-surface-950 border border-surface-700 rounded-md px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-brand-500 transition-colors"
             >
               {FONT_SIZE_OPTIONS.map(n => (

@@ -1,7 +1,8 @@
-import { useEffect, useRef, useCallback } from 'react'
+import { useEffect, useRef, useCallback, useMemo } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
+import type { ILinkProvider } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
 import type { Socket } from 'socket.io-client'
 import type { ConnectFormValues } from '@/types'
@@ -33,12 +34,24 @@ interface CachedTerminal {
 
 // Module-level cache: terminal buffer must survive remounts when exiting split mode.
 const terminalCache = new Map<string, CachedTerminal>()
+// Pending dispose timeouts — cleared on remount to prevent disposing reused terminals
+const pendingDisposeTimeouts = new Map<string, ReturnType<typeof setTimeout>>()
+
+function clearPendingDispose(tabId: string) {
+  const t = pendingDisposeTimeouts.get(tabId)
+  if (t) {
+    clearTimeout(t)
+    pendingDisposeTimeouts.delete(tabId)
+  }
+}
 
 export default function TerminalPane({ tabId, isActive, focused, socket }: TerminalPaneProps) {
   const { sessionId, tabs, setTabStatus, setTabConnection } = useTerminalStore()
   const tab = tabs.find(t => t.id === tabId)
 
   const settings = useSettingsStore()
+  const broadcastEnabled = useBroadcastStore(s => s.enabled)
+  const broadcastExcluded = useBroadcastStore(s => s.excludedTabIds)
 
   const containerRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
@@ -56,18 +69,17 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
   const handleFocus = useCallback(() => { hasFocusRef.current = true }, [])
   const handleBlur = useCallback(() => { hasFocusRef.current = false }, [])
 
-  // Update cache when broadcast is enabled/disabled or when tabs change
-  useEffect(() => {
-    const allTabs = useTerminalStore.getState().tabs
-    const { enabled, excludedTabIds } = useBroadcastStore.getState()
-    if (!enabled) {
-      broadcastTargetIdsRef.current = new Set()
-      return
-    }
-    broadcastTargetIdsRef.current = new Set(
-      allTabs.filter(t => t.status === 'connected' && !excludedTabIds.includes(t.id)).map(t => t.id)
+  // Compute broadcast targets efficiently — only when connected tabs actually change
+  const broadcastTargets = useMemo(() => {
+    if (!broadcastEnabled) return new Set<string>()
+    return new Set(
+      tabs.filter(t => t.status === 'connected' && !broadcastExcluded.includes(t.id)).map(t => t.id)
     )
-  }, [])
+  }, [tabs, broadcastEnabled, broadcastExcluded])
+
+  useEffect(() => {
+    broadcastTargetIdsRef.current = broadcastTargets
+  }, [broadcastTargets])
 
   const emitInput = useCallback((data: string) => {
     if (suppressInputRef.current) return
@@ -81,9 +93,8 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
       for (const targetTabId of broadcastTargetIdsRef.current) {
         socket.emit('ssh:input', { session_id: sessionId, tab_id: targetTabId, data })
       }
-    } else {
-      socket.emit('ssh:input', { session_id: sessionId, tab_id: tabId, data })
     }
+    socket.emit('ssh:input', { session_id: sessionId, tab_id: tabId, data })
   }, [tabId, socket, sessionId])
 
   const emitResize = useCallback((term: Terminal) => {
@@ -108,9 +119,14 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
     let onDataDisposable: { dispose: () => void } | null = null
 
     const init = async () => {
-      await document.fonts.load(`normal ${fontSize}px "JetBrains Mono"`).catch(() => {})
+      try {
+        await document.fonts.load(`normal ${fontSize}px "JetBrains Mono"`)
+      } catch {
+        console.warn("Failed to preload JetBrains Mono font; terminal may use fallback")
+      }
       if (cancelled || !containerRef.current || termRef.current) return
 
+      clearPendingDispose(tabId)
       const cached = terminalCache.get(tabId)
       if (cached) {
         // Reuse existing terminal (e.g. remounting after exiting split mode)
@@ -199,7 +215,15 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
         })
 
         const fitAddon = new FitAddon()
-        const webLinksAddon = new WebLinksAddon()
+        const webLinksAddon = new WebLinksAddon({
+          urlHandler: (event: MouseEvent, uri: string) => {
+            if (uri.startsWith('javascript:') || uri.startsWith('data:') || uri.startsWith('vbscript:')) {
+              event.preventDefault()
+              return
+            }
+            window.open(uri, '_blank', 'noopener,noreferrer')
+          },
+        })
         term.loadAddon(fitAddon)
         term.loadAddon(webLinksAddon)
 
@@ -216,6 +240,7 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
 
         term.open(termContainer)
         fitAddon.fit()
+        emitResize(term)
 
         termRef.current = term
         fitRef.current = fitAddon
@@ -230,7 +255,10 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
           emitInput(data)
         })
 
-        textarea = term.textarea ?? null
+        textarea = (term as unknown as { textarea?: HTMLTextAreaElement }).textarea ?? null
+        if (!textarea && termContainer) {
+          textarea = termContainer.querySelector('textarea') ?? null
+        }
         if (textarea) {
           textarea.addEventListener('focus', handleFocus)
           textarea.addEventListener('blur', handleBlur)
@@ -277,7 +305,8 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
       }
 
       // If the tab was actually closed, dispose the cached terminal
-      setTimeout(() => {
+      clearPendingDispose(tabId)
+      const disposeTimeout = setTimeout(() => {
         const tabExists = useTerminalStore.getState().tabs.some(t => t.id === tabId)
         if (!tabExists) {
           const cached = terminalCache.get(tabId)
@@ -286,11 +315,14 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
             terminalCache.delete(tabId)
           }
         }
+        pendingDisposeTimeouts.delete(tabId)
       }, 0)
+      pendingDisposeTimeouts.set(tabId, disposeTimeout)
 
       termRef.current = null
       fitRef.current = null
       hasFocusRef.current = false
+      suppressInputRef.current = false
     }
   }, [tabId, emitInput, emitResize, handleFocus, handleBlur])
 
@@ -318,14 +350,16 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
 
   // SSH output → terminal
   useEffect(() => {
-    const onOutput = ({ tab_id, data }: { tab_id: string; data: ArrayBuffer | Uint8Array | string }) => {
+    const onOutput = ({ tab_id, data }: { tab_id: string; data: unknown }) => {
       if (tab_id !== tabId || !termRef.current) return
-      if (data instanceof ArrayBuffer) {
+      if (ArrayBuffer.isView(data)) {
+        termRef.current.write(new Uint8Array(data.buffer, data.byteOffset, data.byteLength))
+      } else if (data instanceof ArrayBuffer) {
         termRef.current.write(new Uint8Array(data))
-      } else if (data instanceof Uint8Array) {
+      } else if (typeof data === 'string') {
         termRef.current.write(data)
       } else {
-        termRef.current.write(data)
+        console.warn('Received unexpected data type from ssh:output:', typeof data)
       }
     }
     socket.on('ssh:output', onOutput)
@@ -334,13 +368,17 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
 
   // Session restore / ssh:connected / ssh:error / ssh:closed
   useEffect(() => {
+    let mounted = true
     const onRestored = ({ tab_id, status }: { tab_id: string; status: string }) => {
       if (tab_id !== tabId) return
       if (status === 'active') {
         setTabStatus(tabId, 'connected')
         requestAnimationFrame(() => {
-          fitRef.current?.fit()
-          if (termRef.current) emitResize(termRef.current)
+          if (!mounted) return
+          if (containerRef.current && containerRef.current.offsetParent !== null) {
+            fitRef.current?.fit()
+            if (termRef.current) emitResize(termRef.current)
+          }
           termRef.current?.focus()
           suppressInputRef.current = false
         })
@@ -356,8 +394,11 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
       suppressInputRef.current = false
       setTabStatus(tabId, 'connected')
       requestAnimationFrame(() => {
-        fitRef.current?.fit()
-        if (termRef.current) emitResize(termRef.current)
+        if (!mounted) return
+        if (containerRef.current && containerRef.current.offsetParent !== null) {
+          fitRef.current?.fit()
+          if (termRef.current) emitResize(termRef.current)
+        }
         termRef.current?.focus()
       })
     }
@@ -382,6 +423,7 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
     socket.on('ssh:closed', onClosed)
 
     return () => {
+      mounted = false
       socket.off('session:restored', onRestored)
       socket.off('ssh:connected', onConnected)
       socket.off('ssh:error', onError)
@@ -393,9 +435,10 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
   useEffect(() => {
     if (isActive && tab?.status === 'connected') {
       requestAnimationFrame(() => {
-        fitRef.current?.fit()
-        if (termRef.current) emitResize(termRef.current)
-        // In split mode, focused prop controls which pane gets keyboard focus
+        if (containerRef.current && containerRef.current.offsetParent !== null) {
+          fitRef.current?.fit()
+          if (termRef.current) emitResize(termRef.current)
+        }
         if (focused ?? true) termRef.current?.focus()
       })
     }

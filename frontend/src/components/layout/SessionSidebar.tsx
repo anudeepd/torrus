@@ -3,6 +3,7 @@ import { Download, Upload, Trash2, LogIn, PanelLeftClose, PanelLeftOpen, Pencil 
 import clsx from 'clsx'
 import { useSavedServerStore } from '@/store/savedServerStore'
 import { useTerminalStore } from '@/store/terminalStore'
+import { uuid } from '@/utils/uuid'
 import type { SavedServer } from '@/types'
 
 interface SessionSidebarProps {
@@ -17,13 +18,8 @@ interface ContextMenuState {
   y: number
 }
 
-function uuid() {
-  return crypto.randomUUID?.() ??
-    '10000000-1000-4000-8000-100000000000'.replace(/[018]/g, c =>
-      (+c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> +c / 4).toString(16))
-}
-
-function validateImportedServers(data: unknown): SavedServer[] | null {
+function validateImportedServers(input: unknown): SavedServer[] | null {
+  let data = input
   if (!Array.isArray(data)) {
     if (typeof data === 'object' && data !== null && Array.isArray((data as Record<string, unknown>).servers)) {
       data = (data as Record<string, unknown>).servers
@@ -40,6 +36,8 @@ function validateImportedServers(data: unknown): SavedServer[] | null {
       typeof (item as Record<string, unknown>).port !== 'number' ||
       typeof (item as Record<string, unknown>).username !== 'string'
     ) return null
+    const port = (item as Record<string, unknown>).port as number
+    if (!Number.isInteger(port) || port < 1 || port > 65535) return null
     const s = item as SavedServer
     result.push({ id: uuid(), name: s.name, host: s.host, port: s.port, username: s.username })
   }
@@ -233,7 +231,7 @@ export default function SessionSidebar({ isOpen, onToggle, onLoadSession }: Sess
     const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
     a.download = `torrus-sessions-${ts}.json`
     a.click()
-    URL.revokeObjectURL(url)
+    setTimeout(() => URL.revokeObjectURL(url), 2000)
   }
 
   const handleImport = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -258,12 +256,21 @@ export default function SessionSidebar({ isOpen, onToggle, onLoadSession }: Sess
         setImportSuccess(false)
       }
     }
+    reader.onerror = () => {
+      setImportError('Failed to read file.')
+      setImportSuccess(false)
+    }
     reader.readAsText(file)
     e.target.value = ''
   }
 
   const isActive = (server: SavedServer) =>
-    tabs.some(t => t.status === 'connected' && t.host === server.host && t.username === server.username)
+    tabs.some(t =>
+      t.status === 'connected' &&
+      t.host === server.host &&
+      t.port === server.port &&
+      t.username === server.username
+    )
 
   const selected = servers.find(s => s.id === selectedId)
 

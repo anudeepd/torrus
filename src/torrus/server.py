@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
+import ipaddress
 import logging
 import os
 import re
+import time
 from contextlib import asynccontextmanager
 from importlib.resources import files
 from pathlib import Path
@@ -21,13 +24,20 @@ logger = logging.getLogger("torrus.server")
 
 _SAFE_ID = re.compile(r'^[a-zA-Z0-9_\-]+$')
 _DEV_MODE = bool(os.getenv("TORRUS_DEV"))
+_MAX_SESSIONS_PER_SID = 20
 
 
 def _safe_int(value, default: int) -> int:
     """Parse an integer from untrusted input, returning default on failure."""
+    if value is None:
+        return default
+    if not isinstance(value, (int, float, str)):
+        logger.warning("_safe_int received non-numeric type %s", type(value).__name__)
+        return default
     try:
         return int(value)
     except (TypeError, ValueError):
+        logger.warning("_safe_int failed to parse %r", value)
         return default
 
 
@@ -40,7 +50,10 @@ def _static_dir() -> Path | None:
     try:
         p = Path(str(files("torrus").joinpath("static")))
         return p if p.exists() else None
+    except (TypeError, FileNotFoundError, ImportError):
+        return None
     except Exception:
+        logger.warning("_static_dir failed", exc_info=True)
         return None
 
 
@@ -62,7 +75,14 @@ sio = socketio.AsyncServer(
     engineio_logger=False,
 )
 
-fastapi_app = FastAPI(title="torrus", docs_url=None, redoc_url=None)
+@asynccontextmanager
+async def lifespan(app):
+    ssh_manager.start_background_tasks()
+    yield
+    await ssh_manager.stop_background_tasks()
+
+
+fastapi_app = FastAPI(title="torrus", docs_url=None, redoc_url=None, lifespan=lifespan)
 
 # CORS for Vite dev server
 if _DEV_MODE:
@@ -73,6 +93,15 @@ if _DEV_MODE:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+# LDAP state (populated later if config is present)
+_ldap_enabled = False
+_authenticated_sids: set[str] = set()
+_auth_lock = asyncio.Lock()
+
+_RATE_LIMIT_WINDOW_SEC = 60
+_RATE_LIMIT_MAX = 10
+_connection_attempts: dict[str, list[float]] = {}
 
 # Combined ASGI app — uvicorn runs this
 app = socketio.ASGIApp(sio, other_asgi_app=fastapi_app)
@@ -105,6 +134,7 @@ if _ldap_config_path:
         ) from e
     _login_template = Path(__file__).parent / "templates" / "login.html"
     add_ldap_auth(fastapi_app, load_config(_ldap_config_path), template_path=str(_login_template))
+    _ldap_enabled = True
 
 
 @fastapi_app.get("/api/config", include_in_schema=False)
@@ -114,7 +144,7 @@ async def api_config():
 
 @fastapi_app.get("/{full_path:path}", include_in_schema=False)
 async def spa_fallback(full_path: str):
-    if full_path.startswith("socket.io"):
+    if full_path.lower().startswith("socket.io"):
         return JSONResponse(status_code=404, content={"detail": "Not found"})
     if _static:
         index = _static / "index.html"
@@ -133,12 +163,28 @@ async def spa_fallback(full_path: str):
 @sio.on("connect")
 async def on_connect(sid, environ):
     remote = environ.get("REMOTE_ADDR", "unknown")
+    forwarded = environ.get("HTTP_X_FORWARDED_FOR", "")
+    if forwarded:
+        remote = forwarded.split(",")[0].strip()
     logger.info("Client connected: %s (from %s)", sid, remote)
+    if _ldap_enabled:
+        cookies = environ.get("HTTP_COOKIE", environ.get("http_cookie", ""))
+        try:
+            from ldapgate.session import validate_session_cookie
+            if validate_session_cookie(cookies):
+                async with _auth_lock:
+                    _authenticated_sids.add(sid)
+        except ImportError:
+            logger.warning("ldapgate session validation not available")
+        except Exception:
+            logger.warning("LDAP session validation failed", exc_info=True)
 
 
 @sio.on("disconnect")
 async def on_disconnect(sid):
     ssh_manager.unmap_sid(sid)
+    async with _auth_lock:
+        _authenticated_sids.discard(sid)
     logger.info("Client disconnected: %s", sid)
 
 
@@ -146,11 +192,28 @@ async def on_disconnect(sid):
 # Session registration / recovery
 # ---------------------------------------------------------------------------
 
+async def _require_auth(sid: str, tab_id: str) -> bool:
+    """Return False and emit an error if LDAP is enabled but the sid is not authenticated."""
+    if _ldap_enabled:
+        async with _auth_lock:
+            authenticated = sid in _authenticated_sids
+        if not authenticated:
+            await sio.emit(
+                "ssh:error",
+                {"tab_id": tab_id, "message": "Authentication required.", "code": "auth_required"},
+                to=sid,
+            )
+            return False
+    return True
+
+
 @sio.on("session:register")
 async def on_session_register(sid, data):
     session_id = data.get("session_id", "")
     tab_id = data.get("tab_id", "")
     if not _valid_id(session_id) or not _valid_id(tab_id):
+        return
+    if not await _require_auth(sid, tab_id):
         return
 
     status = await ssh_manager.restore_session(sid, session_id, tab_id)
@@ -164,6 +227,32 @@ async def on_session_register(sid, data):
 # ---------------------------------------------------------------------------
 # SSH events
 # ---------------------------------------------------------------------------
+
+def _is_private_host(host: str) -> bool:
+    """Return True if host resolves to a private/local IP address."""
+    try:
+        addr = ipaddress.ip_address(host)
+        return addr.is_private or addr.is_loopback or addr.is_link_local
+    except ValueError:
+        pass
+    return False
+
+
+async def _check_rate_limit(sid: str, tab_id: str) -> bool:
+    now = time.time()
+    attempts = _connection_attempts.get(sid, [])
+    attempts = [t for t in attempts if now - t < _RATE_LIMIT_WINDOW_SEC]
+    if len(attempts) >= _RATE_LIMIT_MAX:
+        await sio.emit(
+            "ssh:error",
+            {"tab_id": tab_id, "message": "Too many connection attempts. Please wait.", "code": "rate_limited"},
+            to=sid,
+        )
+        return False
+    attempts.append(now)
+    _connection_attempts[sid] = attempts
+    return True
+
 
 @sio.on("ssh:connect")
 async def on_ssh_connect(sid, data):
@@ -183,6 +272,25 @@ async def on_ssh_connect(sid, data):
             to=sid,
         )
         return
+    if not await _require_auth(sid, tab_id):
+        return
+    if not await _check_rate_limit(sid, tab_id):
+        return
+    if ssh_manager.sid_session_count(sid) >= _MAX_SESSIONS_PER_SID:
+        await sio.emit(
+            "ssh:error",
+            {"tab_id": tab_id, "message": "Too many active sessions.", "code": "session_limit"},
+            to=sid,
+        )
+        return
+    if _is_private_host(host):
+        logger.warning("Blocked connection to private host %s from sid %s", host, sid)
+        await sio.emit(
+            "ssh:error",
+            {"tab_id": tab_id, "message": "Connections to private/local addresses are not allowed.", "code": "private_host_blocked"},
+            to=sid,
+        )
+        return
 
     await ssh_manager.connect(
         sid=sid,
@@ -199,19 +307,30 @@ async def on_ssh_connect(sid, data):
 
 @sio.on("ssh:input")
 async def on_ssh_input(sid, data):
-    await ssh_manager.handle_input(
-        data.get("session_id", ""),
-        data.get("tab_id", ""),
-        data.get("data", ""),
-    )
+    session_id = data.get("session_id", "")
+    tab_id = data.get("tab_id", "")
+    input_data = data.get("data", "")
+    if not _valid_id(session_id) or not _valid_id(tab_id):
+        return {"ok": False, "error": "Invalid session or tab ID."}
+    if not await _require_auth(sid, tab_id):
+        return {"ok": False, "error": "Authentication required."}
+    if isinstance(input_data, str) and len(input_data) > 1_048_576:
+        return {"ok": False, "error": "Input too large."}
+    await ssh_manager.handle_input(session_id, tab_id, input_data)
     return {"ok": True}
 
 
 @sio.on("terminal:resize")
 async def on_terminal_resize(sid, data):
+    session_id = data.get("session_id", "")
+    tab_id = data.get("tab_id", "")
+    if not _valid_id(session_id) or not _valid_id(tab_id):
+        return
+    if not await _require_auth(sid, tab_id):
+        return
     await ssh_manager.handle_resize(
-        data.get("session_id", ""),
-        data.get("tab_id", ""),
+        session_id,
+        tab_id,
         _safe_int(data.get("cols", 80), 80),
         _safe_int(data.get("rows", 24), 24),
     )
@@ -219,10 +338,13 @@ async def on_terminal_resize(sid, data):
 
 @sio.on("ssh:disconnect")
 async def on_ssh_disconnect(sid, data):
-    await ssh_manager.disconnect_session(
-        data.get("session_id", ""),
-        data.get("tab_id", ""),
-    )
+    session_id = data.get("session_id", "")
+    tab_id = data.get("tab_id", "")
+    if not _valid_id(session_id) or not _valid_id(tab_id):
+        return
+    if not await _require_auth(sid, tab_id):
+        return
+    await ssh_manager.disconnect_session(session_id, tab_id)
 
 
 @sio.on("ssh:clone")
@@ -240,6 +362,15 @@ async def on_ssh_clone(sid, data):
             to=sid,
         )
         return
+    if not await _require_auth(sid, new_tab_id):
+        return
+    if ssh_manager.sid_session_count(sid) >= _MAX_SESSIONS_PER_SID:
+        await sio.emit(
+            "ssh:error",
+            {"tab_id": new_tab_id, "message": "Too many active sessions.", "code": "session_limit"},
+            to=sid,
+        )
+        return
 
     await ssh_manager.clone(
         sid=sid,
@@ -251,14 +382,4 @@ async def on_ssh_clone(sid, data):
     )
 
 
-# ---------------------------------------------------------------------------
-# Startup
-# ---------------------------------------------------------------------------
 
-@asynccontextmanager
-async def lifespan(app):
-    ssh_manager.start_background_tasks()
-    yield
-
-
-fastapi_app.router.lifespan_context = lifespan

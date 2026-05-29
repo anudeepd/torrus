@@ -139,6 +139,13 @@ export default function TabBar({ onAddTab, onCloseTab, onCloneTab, onDuplicateTa
   const editInputRef = useRef<HTMLInputElement>(null)
   const contextMenuRef = useRef<HTMLDivElement>(null)
 
+  // Reset save dialog if its tab is closed
+  useEffect(() => {
+    if (saveDialog && !tabs.find(t => t.id === saveDialog.tab.id)) {
+      setSaveDialog(null)
+    }
+  }, [tabs, saveDialog])
+
   // Focus input when entering edit mode
   useEffect(() => {
     if (editingTabId && editInputRef.current) {
@@ -185,6 +192,15 @@ export default function TabBar({ onAddTab, onCloseTab, onCloneTab, onDuplicateTa
     setEditingTabId(null)
   }, [])
 
+  const handleEditBlur = useCallback((e: React.FocusEvent<HTMLInputElement>) => {
+    const related = e.relatedTarget as HTMLElement | null
+    if (related === null || related?.dataset?.tabId) {
+      cancelEdit()
+    } else {
+      confirmEdit()
+    }
+  }, [confirmEdit, cancelEdit])
+
   return (
     <>
     <div className="h-9 flex-shrink-0 flex items-stretch bg-surface-900 border-b border-surface-800 overflow-x-auto overflow-y-hidden">
@@ -206,6 +222,7 @@ export default function TabBar({ onAddTab, onCloseTab, onCloneTab, onDuplicateTa
       {tabs.map(tab => (
         <button
           key={tab.id}
+          data-tab-id={tab.id}
           onClick={() => onSetActiveTab(tab.id)}
           onContextMenu={(e) => {
             e.preventDefault()
@@ -235,7 +252,7 @@ export default function TabBar({ onAddTab, onCloseTab, onCloneTab, onDuplicateTa
                 if (e.key === 'Enter') confirmEdit()
                 if (e.key === 'Escape') cancelEdit()
               }}
-              onBlur={confirmEdit}
+              onBlur={handleEditBlur}
               onClick={e => e.stopPropagation()}
             />
           ) : (
@@ -316,7 +333,10 @@ export default function TabBar({ onAddTab, onCloseTab, onCloneTab, onDuplicateTa
       </button>
       {ldapEnabled && (
         <button
-          onClick={() => { window.location.href = '/_auth/logout' }}
+          onClick={() => {
+            localStorage.removeItem('torrus_session_id')
+            window.location.href = '/_auth/logout'
+          }}
           title="Logout"
           className="flex-shrink-0 w-9 flex items-center justify-center text-red-500 hover:text-red-400 hover:bg-surface-800 transition-colors border-l border-surface-800"
         >

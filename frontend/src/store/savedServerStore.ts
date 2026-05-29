@@ -1,12 +1,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import type { SavedServer } from '@/types'
-
-function uuid() {
-  return crypto.randomUUID?.() ??
-    '10000000-1000-4000-8000-100000000000'.replace(/[018]/g, c =>
-      (+c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> +c / 4).toString(16))
-}
+import { uuid } from '@/utils/uuid'
 
 interface SavedServerState {
   servers: SavedServer[]

@@ -24,6 +24,9 @@ class LeafErrorBoundary extends Component<{ children: ReactNode; fallback: React
   static getDerivedStateFromError(error: Error): ErrorBoundaryState {
     return { hasError: true, error }
   }
+  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
+    console.error("TerminalPane error:", error, errorInfo)
+  }
   render() {
     if (this.state.hasError) {
       return this.props.fallback
@@ -151,7 +154,17 @@ function ResizeHandle({ dir, onDrag }: { dir: 'h' | 'v'; onDrag: (delta: number)
     lastPos.current = pos
   }, [dir, onDrag])
 
-  const onPointerUp = useCallback(() => { dragging.current = false }, [])
+  const onPointerUp = useCallback((e: React.PointerEvent) => {
+    dragging.current = false
+    ;(e.target as HTMLElement).releasePointerCapture(e.pointerId)
+  }, [])
+
+  const onPointerCancel = useCallback((e: React.PointerEvent) => {
+    dragging.current = false
+    try {
+      (e.target as HTMLElement).releasePointerCapture(e.pointerId)
+    } catch {}
+  }, [])
 
   return (
     <div
@@ -162,6 +175,7 @@ function ResizeHandle({ dir, onDrag }: { dir: 'h' | 'v'; onDrag: (delta: number)
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
+      onPointerCancel={onPointerCancel}
     />
   )
 }

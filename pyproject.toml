@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "torrus"
-version = "0.1.15"
+version = "0.1.16"
 description = "Web-based SSH terminal that works behind any reverse proxy"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -33,6 +33,11 @@ dependencies = [
 
 [project.optional-dependencies]
 ldap = ["ldapgate"]
+test = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-mock>=3.12.0",
+]
 
 [project.urls]
 Homepage = "https://github.com/anudeepd/torrus"
@@ -47,3 +52,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 torrus = ["static/**/*", "static/*", "templates/*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
