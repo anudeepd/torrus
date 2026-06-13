@@ -1,11 +1,14 @@
 ldap:
-    url: ldap://localhost:1389
-    bind_dn: cn=admin,dc=example,dc=com
-    bind_password: adminpassword
+    url: ldaps://ldap.example.com:636
+    bind_dn: cn=svc,dc=example,dc=com
+    bind_password: "${LDAP_BIND_PASSWORD}"
     base_dn: dc=example,dc=com
     user_filter: "(uid={username})"
+    allowed_users:
+        - alice
+        - bob
 proxy:
     backend_url: http://localhost:8080
-    secret_key: test-secret-key
-    app_name: Lagun
-    secure_cookies: false
+    secret_key: Z9x#W8v$U7tR6s%Q5p!O4n@M3l^K2j*H1gF0dE
+    app_name: Torrus
+    secure_cookies: true

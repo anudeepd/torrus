@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from http.cookies import SimpleCookie
 import ipaddress
 import logging
 import os
@@ -98,6 +99,8 @@ if _DEV_MODE:
 _ldap_enabled = False
 _authenticated_sids: set[str] = set()
 _auth_lock = asyncio.Lock()
+_ldap_config = None
+_ldap_session_manager = None
 
 _RATE_LIMIT_WINDOW_SEC = 60
 _RATE_LIMIT_MAX = 10
@@ -127,13 +130,21 @@ if _ldap_config_path:
     try:
         from ldapgate.config import load_config
         from ldapgate.middleware import add_ldap_auth
+        from ldapgate.sessions import SessionManager
     except ImportError as e:
         raise RuntimeError(
             "ldapgate is not installed but TORRUS_LDAP_CONFIG is set. "
             "Install it with: pip install 'torrus[ldap]' or pip install -e /path/to/ldapgate"
         ) from e
     _login_template = Path(__file__).parent / "templates" / "login.html"
-    add_ldap_auth(fastapi_app, load_config(_ldap_config_path), template_path=str(_login_template))
+    _ldap_config = load_config(_ldap_config_path)
+    add_ldap_auth(fastapi_app, _ldap_config, template_path=str(_login_template))
+    _ldap_session_manager = SessionManager(
+        _ldap_config.proxy.secret_key.get_secret_value(),
+        _ldap_config.proxy.session_ttl,
+        revocation_path=_ldap_config.proxy.revocation_path,
+        max_sessions_per_user=_ldap_config.proxy.max_sessions_per_user,
+    )
     _ldap_enabled = True
 
 
@@ -160,6 +171,62 @@ async def spa_fallback(full_path: str):
 # Socket.IO lifecycle
 # ---------------------------------------------------------------------------
 
+def _cookie_from_header(cookie_header: str, cookie_name: str) -> str | None:
+    if not cookie_header:
+        return None
+    try:
+        cookie = SimpleCookie()
+        cookie.load(cookie_header)
+    except Exception:
+        return None
+    morsel = cookie.get(cookie_name)
+    return morsel.value if morsel else None
+
+
+def _ldap_cookie_name() -> str:
+    if _ldap_config and _ldap_config.proxy.secure_cookies:
+        return "__Host-ldapgate_session"
+    return "ldapgate_session"
+
+
+def _client_ip_from_environ(environ) -> str:
+    remote = environ.get("REMOTE_ADDR", "unknown")
+    if not _ldap_config:
+        return remote
+    trusted = _ldap_config.proxy.trusted_proxies
+    if not trusted:
+        return remote
+    try:
+        from ldapgate._auth_utils import _is_ip_in_networks
+    except ImportError:
+        return remote
+    if not _is_ip_in_networks(remote, trusted):
+        return remote
+    forwarded = environ.get("HTTP_X_FORWARDED_FOR", "")
+    for entry in reversed([e.strip() for e in forwarded.split(",")]):
+        if entry and not _is_ip_in_networks(entry, trusted):
+            return entry
+    return remote
+
+
+def _user_agent_from_environ(environ) -> str:
+    return environ.get("HTTP_USER_AGENT", "")
+
+
+def _verify_ldap_socket_session(environ) -> bool:
+    if not _ldap_session_manager:
+        return False
+    cookie_header = environ.get("HTTP_COOKIE", environ.get("http_cookie", ""))
+    cookie = _cookie_from_header(cookie_header, _ldap_cookie_name())
+    if not cookie:
+        return False
+    username = _ldap_session_manager.verify_session(
+        cookie,
+        client_ip=_client_ip_from_environ(environ),
+        user_agent=_user_agent_from_environ(environ),
+    )
+    return bool(username)
+
 @sio.on("connect")
 async def on_connect(sid, environ):
     remote = environ.get("REMOTE_ADDR", "unknown")
@@ -168,14 +235,10 @@ async def on_connect(sid, environ):
         remote = forwarded.split(",")[0].strip()
     logger.info("Client connected: %s (from %s)", sid, remote)
     if _ldap_enabled:
-        cookies = environ.get("HTTP_COOKIE", environ.get("http_cookie", ""))
         try:
-            from ldapgate.session import validate_session_cookie
-            if validate_session_cookie(cookies):
+            if _verify_ldap_socket_session(environ):
                 async with _auth_lock:
                     _authenticated_sids.add(sid)
-        except ImportError:
-            logger.warning("ldapgate session validation not available")
         except Exception:
             logger.warning("LDAP session validation failed", exc_info=True)
 
@@ -380,6 +443,4 @@ async def on_ssh_clone(sid, data):
         cols=cols,
         rows=rows,
     )
-
-
 

@@ -1,7 +1,5 @@
 """Tests for torrus.server Socket.IO event handlers."""
 
-import sys
-
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -127,13 +125,14 @@ class TestLdapAuthGating:
 
         server_module._ldap_enabled = True
         server_module._authenticated_sids.clear()
+        server_module._ldap_config = None
+        server_module._ldap_session_manager = MagicMock()
+        server_module._ldap_session_manager.verify_session.return_value = "alice"
 
-        mock_ldapgate = type(sys)("ldapgate")
-        mock_ldapgate_session = type(sys)("ldapgate.session")
-        mock_ldapgate_session.validate_session_cookie = MagicMock(return_value=True)
-        mock_ldapgate.session = mock_ldapgate_session
-        with patch.dict("sys.modules", {"ldapgate": mock_ldapgate, "ldapgate.session": mock_ldapgate_session}):
-            await on_connect("sid-cookie", {"REMOTE_ADDR": "1.2.3.4", "HTTP_COOKIE": "session=abc"})
+        await on_connect(
+            "sid-cookie",
+            {"REMOTE_ADDR": "1.2.3.4", "HTTP_COOKIE": "ldapgate_session=abc"},
+        )
         assert "sid-cookie" in server_module._authenticated_sids
 
     @pytest.mark.asyncio
@@ -144,13 +143,11 @@ class TestLdapAuthGating:
 
         server_module._ldap_enabled = True
         server_module._authenticated_sids.clear()
+        server_module._ldap_config = None
+        server_module._ldap_session_manager = MagicMock()
+        server_module._ldap_session_manager.verify_session.return_value = None
 
-        mock_ldapgate = type(sys)("ldapgate")
-        mock_ldapgate_session = type(sys)("ldapgate.session")
-        mock_ldapgate_session.validate_session_cookie = MagicMock(return_value=False)
-        mock_ldapgate.session = mock_ldapgate_session
-        with patch.dict("sys.modules", {"ldapgate": mock_ldapgate, "ldapgate.session": mock_ldapgate_session}):
-            await on_connect("sid-nocookie", {"REMOTE_ADDR": "1.2.3.4"})
+        await on_connect("sid-nocookie", {"REMOTE_ADDR": "1.2.3.4"})
         assert "sid-nocookie" not in server_module._authenticated_sids
 
 
