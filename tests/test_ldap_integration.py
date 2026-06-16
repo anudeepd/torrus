@@ -24,4 +24,6 @@ def test_login_template_uses_nonce_for_inline_assets():
     ).read_text()
     assert '<style nonce="{{ csrf_nonce }}">' in template
     assert '<script nonce="{{ csrf_nonce }}">' in template
+    assert '<input type="hidden" name="csrf_token" value="{{ csrf_token }}">' in template
+    assert 'style="' not in template
     assert "meta http-equiv=\"Content-Security-Policy\"" not in template
