@@ -2,7 +2,6 @@ import { useEffect, useRef, useCallback, useMemo } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
-import type { ILinkProvider } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
 import type { Socket } from 'socket.io-client'
 import type { ConnectFormValues } from '@/types'
@@ -215,14 +214,12 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
         })
 
         const fitAddon = new FitAddon()
-        const webLinksAddon = new WebLinksAddon({
-          urlHandler: (event: MouseEvent, uri: string) => {
-            if (uri.startsWith('javascript:') || uri.startsWith('data:') || uri.startsWith('vbscript:')) {
-              event.preventDefault()
-              return
-            }
-            window.open(uri, '_blank', 'noopener,noreferrer')
-          },
+        const webLinksAddon = new WebLinksAddon((event: MouseEvent, uri: string) => {
+          if (uri.startsWith('javascript:') || uri.startsWith('data:') || uri.startsWith('vbscript:')) {
+            event.preventDefault()
+            return
+          }
+          window.open(uri, '_blank', 'noopener,noreferrer')
         })
         term.loadAddon(fitAddon)
         term.loadAddon(webLinksAddon)

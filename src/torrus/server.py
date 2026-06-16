@@ -14,7 +14,7 @@ from importlib.resources import files
 from pathlib import Path
 
 import socketio
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -26,6 +26,14 @@ logger = logging.getLogger("torrus.server")
 _SAFE_ID = re.compile(r'^[a-zA-Z0-9_\-]+$')
 _DEV_MODE = bool(os.getenv("TORRUS_DEV"))
 _MAX_SESSIONS_PER_SID = 20
+APP_CSP = (
+    "default-src 'self'; "
+    "connect-src 'self' ws: wss:; "
+    "script-src 'self'; "
+    "style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data:; "
+    "font-src 'self'"
+)
 
 
 def _safe_int(value, default: int) -> int:
@@ -85,6 +93,14 @@ async def lifespan(app):
 
 fastapi_app = FastAPI(title="torrus", docs_url=None, redoc_url=None, lifespan=lifespan)
 
+
+@fastapi_app.middleware("http")
+async def add_app_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    if not request.url.path.startswith("/_auth/"):
+        response.headers.setdefault("Content-Security-Policy", APP_CSP)
+    return response
+
 # CORS for Vite dev server
 if _DEV_MODE:
     fastapi_app.add_middleware(
@@ -125,6 +141,18 @@ if _static:
         fastapi_app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
 
 
+def _ensure_ldapgate_static_paths(config) -> None:
+    """Allow login-page assets to load without exposing the SPA bundle."""
+    proxy_config = getattr(config, "proxy", None)
+    if proxy_config is None:
+        return
+    static_paths = list(getattr(proxy_config, "static_paths", []) or [])
+    for path in ("/favicon.ico",):
+        if path not in static_paths:
+            static_paths.append(path)
+    proxy_config.static_paths = static_paths
+
+
 _ldap_config_path = os.getenv("TORRUS_LDAP_CONFIG")
 if _ldap_config_path:
     try:
@@ -138,6 +166,7 @@ if _ldap_config_path:
         ) from e
     _login_template = Path(__file__).parent / "templates" / "login.html"
     _ldap_config = load_config(_ldap_config_path)
+    _ensure_ldapgate_static_paths(_ldap_config)
     add_ldap_auth(fastapi_app, _ldap_config, template_path=str(_login_template))
     _ldap_session_manager = SessionManager(
         _ldap_config.proxy.secret_key.get_secret_value(),
@@ -443,4 +472,3 @@ async def on_ssh_clone(sid, data):
         cols=cols,
         rows=rows,
     )
-
