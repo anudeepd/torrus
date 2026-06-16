@@ -23,6 +23,15 @@ interface TabBarProps {
   inSplitMode: boolean
 }
 
+function submitLogout() {
+  localStorage.removeItem('torrus_session_id')
+  const form = document.createElement('form')
+  form.method = 'POST'
+  form.action = '/_auth/logout'
+  document.body.appendChild(form)
+  form.submit()
+}
+
 function StatusDot({ status }: { status: Tab['status'] }) {
   return (
     <span
@@ -333,10 +342,7 @@ export default function TabBar({ onAddTab, onCloseTab, onCloneTab, onDuplicateTa
       </button>
       {ldapEnabled && (
         <button
-          onClick={() => {
-            localStorage.removeItem('torrus_session_id')
-            window.location.href = '/_auth/logout'
-          }}
+          onClick={submitLogout}
           title="Logout"
           className="flex-shrink-0 w-9 flex items-center justify-center text-red-500 hover:text-red-400 hover:bg-surface-800 transition-colors border-l border-surface-800"
         >

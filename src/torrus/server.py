@@ -32,7 +32,7 @@ APP_CSP = (
     "script-src 'self'; "
     "style-src 'self' 'unsafe-inline'; "
     "img-src 'self' data:; "
-    "font-src 'self'"
+    "font-src 'self' data:"
 )
 
 
@@ -146,6 +146,8 @@ def _ensure_ldapgate_static_paths(config) -> None:
     proxy_config = getattr(config, "proxy", None)
     if proxy_config is None:
         return
+    if getattr(proxy_config, "session_cookie_name", "ldapgate_session") == "ldapgate_session":
+        proxy_config.session_cookie_name = "torrus_session"
     static_paths = list(getattr(proxy_config, "static_paths", []) or [])
     for path in ("/favicon.ico",):
         if path not in static_paths:
@@ -213,9 +215,12 @@ def _cookie_from_header(cookie_header: str, cookie_name: str) -> str | None:
 
 
 def _ldap_cookie_name() -> str:
-    if _ldap_config and _ldap_config.proxy.secure_cookies:
-        return "__Host-ldapgate_session"
-    return "ldapgate_session"
+    cookie_name = "ldapgate_session"
+    if _ldap_config:
+        cookie_name = getattr(_ldap_config.proxy, "session_cookie_name", cookie_name)
+        if _ldap_config.proxy.secure_cookies:
+            return f"__Host-{cookie_name}"
+    return cookie_name
 
 
 def _client_ip_from_environ(environ) -> str:
