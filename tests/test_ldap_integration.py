@@ -1,4 +1,5 @@
 import types
+from pathlib import Path
 
 from torrus.server import APP_CSP, _ensure_ldapgate_static_paths
 
@@ -15,3 +16,12 @@ def test_ensure_ldapgate_static_paths_preserves_existing_paths():
     _ensure_ldapgate_static_paths(config)
 
     assert proxy.static_paths == ["/custom", "/favicon.ico"]
+
+
+def test_login_template_uses_nonce_for_inline_assets():
+    template = (
+        Path(__file__).resolve().parents[1] / "src" / "torrus" / "templates" / "login.html"
+    ).read_text()
+    assert '<style nonce="{{ csrf_nonce }}">' in template
+    assert '<script nonce="{{ csrf_nonce }}">' in template
+    assert "meta http-equiv=\"Content-Security-Policy\"" not in template
