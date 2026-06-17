@@ -169,13 +169,15 @@ if _ldap_config_path:
     _login_template = Path(__file__).parent / "templates" / "login.html"
     _ldap_config = load_config(_ldap_config_path)
     _ensure_ldapgate_static_paths(_ldap_config)
-    add_ldap_auth(fastapi_app, _ldap_config, template_path=str(_login_template))
-    _ldap_session_manager = SessionManager(
-        _ldap_config.proxy.secret_key.get_secret_value(),
-        _ldap_config.proxy.session_ttl,
-        revocation_path=_ldap_config.proxy.revocation_path,
-        max_sessions_per_user=_ldap_config.proxy.max_sessions_per_user,
-    )
+    _ldap_session_manager = add_ldap_auth(fastapi_app, _ldap_config, template_path=str(_login_template))
+    if _ldap_session_manager is None:
+        logger.warning("ldapgate.add_ldap_auth did not return a SessionManager; using compatibility fallback")
+        _ldap_session_manager = SessionManager(
+            _ldap_config.proxy.secret_key.get_secret_value(),
+            _ldap_config.proxy.session_ttl,
+            revocation_path=_ldap_config.proxy.revocation_path,
+            max_sessions_per_user=_ldap_config.proxy.max_sessions_per_user,
+        )
     _ldap_enabled = True
 
 
@@ -279,7 +281,7 @@ async def on_connect(sid, environ):
 
 @sio.on("disconnect")
 async def on_disconnect(sid):
-    ssh_manager.unmap_sid(sid)
+    await ssh_manager.unmap_sid(sid)
     async with _auth_lock:
         _authenticated_sids.discard(sid)
     logger.info("Client disconnected: %s", sid)

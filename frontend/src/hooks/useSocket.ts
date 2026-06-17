@@ -7,6 +7,7 @@ export function getSocket(): Socket {
     _socket = io({
       // polling first — works through any NGINX reverse proxy without WS config
       transports: ['polling', 'websocket'],
+      withCredentials: true,
       reconnection: true,
       reconnectionDelay: 1000,
       reconnectionDelayMax: 5000,

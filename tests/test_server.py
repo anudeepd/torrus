@@ -136,6 +136,37 @@ class TestLdapAuthGating:
         assert "sid-cookie" in server_module._authenticated_sids
 
     @pytest.mark.asyncio
+    async def test_on_connect_uses_configured_cookie_name(self):
+        from torrus.server import on_connect
+
+        import torrus.server as server_module
+
+        server_module._ldap_enabled = True
+        server_module._authenticated_sids.clear()
+        server_module._ldap_config = MagicMock()
+        server_module._ldap_config.proxy.session_cookie_name = "torrus_session"
+        server_module._ldap_config.proxy.secure_cookies = False
+        server_module._ldap_config.proxy.trusted_proxies = []
+        server_module._ldap_session_manager = MagicMock()
+        server_module._ldap_session_manager.verify_session.return_value = "alice"
+
+        await on_connect(
+            "sid-cookie",
+            {
+                "REMOTE_ADDR": "1.2.3.4",
+                "HTTP_COOKIE": "ldapgate_session=old; torrus_session=abc",
+                "HTTP_USER_AGENT": "test-agent",
+            },
+        )
+
+        server_module._ldap_session_manager.verify_session.assert_called_once_with(
+            "abc",
+            client_ip="1.2.3.4",
+            user_agent="test-agent",
+        )
+        assert "sid-cookie" in server_module._authenticated_sids
+
+    @pytest.mark.asyncio
     async def test_on_connect_skips_auth_without_cookie(self):
         from torrus.server import on_connect
 
@@ -211,3 +242,22 @@ class TestIpLogging:
             mock_info.assert_called_once()
             remote_arg = mock_info.call_args[0][2]
             assert remote_arg == "192.168.1.5"
+
+
+class TestSocketDisconnect:
+    """Socket disconnect cleanup must await async SSH manager cleanup."""
+
+    @pytest.mark.asyncio
+    async def test_on_disconnect_awaits_unmap_sid(self):
+        from torrus import server as server_module
+
+        original_manager = server_module.ssh_manager
+        manager = MagicMock()
+        manager.unmap_sid = AsyncMock()
+        server_module.ssh_manager = manager
+        try:
+            await server_module.on_disconnect("sid-1")
+        finally:
+            server_module.ssh_manager = original_manager
+
+        manager.unmap_sid.assert_awaited_once_with("sid-1")
