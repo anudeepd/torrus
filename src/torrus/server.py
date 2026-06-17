@@ -478,7 +478,10 @@ async def on_ssh_connect(sid, data):
             to=sid,
         )
         return
-    if _is_private_host(host):
+    # LDAP-gated deployments commonly connect to internal hosts or localhost.
+    # In unauthenticated mode keep the old guard, because exposing Torrus
+    # publicly without LDAP should not also expose private-network SSH probes.
+    if _is_private_host(host) and not _ldap_enabled:
         logger.warning("Blocked connection to private host %s from sid %s", host, sid)
         await sio.emit(
             "ssh:error",
