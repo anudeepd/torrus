@@ -164,6 +164,41 @@ class TestLdapAuthGating:
         )
         assert "sid-asgi" in server_module._authenticated_sids
 
+    def test_verify_ldap_socket_session_accepts_alternate_ip_binding(self):
+        from torrus.server import _verify_ldap_socket_session
+
+        import types
+        import torrus.server as server_module
+
+        manager = MagicMock()
+        manager.verify_session.side_effect = (
+            lambda cookie, client_ip="", user_agent="": (
+                "alice"
+                if cookie == "signed-cookie"
+                and client_ip == "127.0.0.1"
+                and user_agent == "test-agent"
+                else None
+            )
+        )
+
+        server_module._ldap_config = types.SimpleNamespace(
+            proxy=types.SimpleNamespace(
+                session_cookie_name="torrus_session",
+                secure_cookies=False,
+                trusted_proxies=[],
+            )
+        )
+        server_module._ldap_session_manager = manager
+
+        assert _verify_ldap_socket_session(
+            {
+                "REMOTE_ADDR": "127.0.0.1",
+                "HTTP_COOKIE": "torrus_session=signed-cookie",
+                "HTTP_USER_AGENT": "test-agent",
+                "asgi.scope": {"client": ("203.0.113.7", 54221), "headers": []},
+            }
+        )
+
     @pytest.mark.asyncio
     async def test_on_connect_uses_configured_cookie_name(self):
         from torrus.server import on_connect

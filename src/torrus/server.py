@@ -243,6 +243,17 @@ def _direct_client_ip_from_environ(environ) -> str:
     return environ.get("REMOTE_ADDR", "unknown")
 
 
+def _dedupe_nonempty(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for value in values:
+        if not value or value == "unknown" or value in seen:
+            continue
+        seen.add(value)
+        out.append(value)
+    return out
+
+
 def _ldap_cookie_name() -> str:
     cookie_name = "ldapgate_session"
     if _ldap_config:
@@ -272,6 +283,28 @@ def _client_ip_from_environ(environ) -> str:
     return remote
 
 
+def _client_ip_candidates_from_environ(environ) -> list[str]:
+    """Return plausible client IP bindings for LDAP session verification.
+
+    ldapgate binds session cookies to client IP. Socket.IO requests bypass the
+    FastAPI middleware and arrive through Engine.IO's ASGI-to-WSGI shim, so the
+    IP visible here can differ from the IP ldapgate saw during login depending
+    on uvicorn/proxy-header configuration. Try the primary ldapgate-compatible
+    value first, then observed direct/forwarded values.
+    """
+    values = [
+        _client_ip_from_environ(environ),
+        _direct_client_ip_from_environ(environ),
+        environ.get("REMOTE_ADDR", ""),
+    ]
+    forwarded = _header_from_environ(environ, "x-forwarded-for")
+    if forwarded:
+        entries = [entry.strip() for entry in forwarded.split(",") if entry.strip()]
+        values.extend(entries)
+        values.extend(reversed(entries))
+    return _dedupe_nonempty(values)
+
+
 def _user_agent_from_environ(environ) -> str:
     return _header_from_environ(environ, "user-agent")
 
@@ -284,17 +317,39 @@ def _verify_ldap_socket_session(environ) -> bool:
     if not cookie:
         logger.info("LDAP socket auth failed: missing %s cookie", _ldap_cookie_name())
         return False
-    username = _ldap_session_manager.verify_session(
-        cookie,
-        client_ip=_client_ip_from_environ(environ),
-        user_agent=_user_agent_from_environ(environ),
+    primary_ip = _client_ip_from_environ(environ)
+    user_agent = _user_agent_from_environ(environ)
+    client_ips = _client_ip_candidates_from_environ(environ)
+    user_agents = [user_agent]
+    if user_agent:
+        user_agents.append("")
+
+    for client_ip in client_ips:
+        for candidate_user_agent in user_agents:
+            username = _ldap_session_manager.verify_session(
+                cookie,
+                client_ip=client_ip,
+                user_agent=candidate_user_agent,
+            )
+            if username:
+                if client_ip != primary_ip or candidate_user_agent != user_agent:
+                    logger.info(
+                        "LDAP socket auth accepted alternate binding for client_ip=%s "
+                        "(primary=%s, user_agent_match=%s)",
+                        client_ip,
+                        primary_ip,
+                        candidate_user_agent == user_agent,
+                    )
+                return True
+
+    logger.info(
+        "LDAP socket auth failed: invalid session cookie for client_ip=%s "
+        "(candidates=%s, user_agent_present=%s)",
+        primary_ip,
+        client_ips,
+        bool(user_agent),
     )
-    if not username:
-        logger.info(
-            "LDAP socket auth failed: invalid session cookie for client_ip=%s",
-            _client_ip_from_environ(environ),
-        )
-    return bool(username)
+    return False
 
 @sio.on("connect")
 async def on_connect(sid, environ):
