@@ -136,6 +136,35 @@ class TestLdapAuthGating:
         assert "sid-cookie" in server_module._authenticated_sids
 
     @pytest.mark.asyncio
+    async def test_on_connect_uses_asgi_scope_client_ip(self):
+        from torrus.server import on_connect
+
+        import torrus.server as server_module
+
+        server_module._ldap_enabled = True
+        server_module._authenticated_sids.clear()
+        server_module._ldap_config = None
+        server_module._ldap_session_manager = MagicMock()
+        server_module._ldap_session_manager.verify_session.return_value = "alice"
+
+        await on_connect(
+            "sid-asgi",
+            {
+                "REMOTE_ADDR": "127.0.0.1",
+                "HTTP_COOKIE": "ldapgate_session=abc",
+                "HTTP_USER_AGENT": "test-agent",
+                "asgi.scope": {"client": ("203.0.113.7", 54221), "headers": []},
+            },
+        )
+
+        server_module._ldap_session_manager.verify_session.assert_called_once_with(
+            "abc",
+            client_ip="203.0.113.7",
+            user_agent="test-agent",
+        )
+        assert "sid-asgi" in server_module._authenticated_sids
+
+    @pytest.mark.asyncio
     async def test_on_connect_uses_configured_cookie_name(self):
         from torrus.server import on_connect
 
@@ -180,6 +209,53 @@ class TestLdapAuthGating:
 
         await on_connect("sid-nocookie", {"REMOTE_ADDR": "1.2.3.4"})
         assert "sid-nocookie" not in server_module._authenticated_sids
+
+    @pytest.mark.asyncio
+    async def test_ssh_connect_lazily_authenticates_from_socket_environ(self):
+        from torrus.server import on_ssh_connect
+
+        import torrus.server as server_module
+
+        server_module._ldap_enabled = True
+        server_module._authenticated_sids.clear()
+        server_module._ldap_config = None
+        server_module._ldap_session_manager = MagicMock()
+        server_module._ldap_session_manager.verify_session.return_value = "alice"
+        original_manager = server_module.ssh_manager
+        manager_mock = MagicMock()
+        manager_mock.sid_session_count.return_value = 0
+        manager_mock.connect = AsyncMock()
+        server_module.ssh_manager = manager_mock
+
+        sio_mock = MagicMock()
+        sio_mock.emit = AsyncMock()
+        sio_mock.get_environ.return_value = {
+            "REMOTE_ADDR": "127.0.0.1",
+            "HTTP_COOKIE": "ldapgate_session=abc",
+            "HTTP_USER_AGENT": "test-agent",
+            "asgi.scope": {"client": ("203.0.113.7", 54221), "headers": []},
+        }
+
+        try:
+            with patch("torrus.server.sio", sio_mock):
+                await on_ssh_connect(
+                    "sid-lazy",
+                    {
+                        "host": "example.com",
+                        "port": 22,
+                        "username": "user",
+                        "password": "pass",
+                        "session_id": "sess1",
+                        "tab_id": "tab1",
+                    },
+                )
+        finally:
+            server_module.ssh_manager = original_manager
+
+        for call in sio_mock.emit.call_args_list:
+            assert call[0][1].get("code") != "auth_required"
+        manager_mock.connect.assert_awaited_once()
+        assert "sid-lazy" in server_module._authenticated_sids
 
 
 class TestSessionRateLimit:

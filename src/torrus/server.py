@@ -216,6 +216,33 @@ def _cookie_from_header(cookie_header: str, cookie_name: str) -> str | None:
     return morsel.value if morsel else None
 
 
+def _header_from_environ(environ, name: str) -> str:
+    """Return a request header from Engine.IO's WSGI environ or ASGI scope."""
+    wsgi_key = f"HTTP_{name.upper().replace('-', '_')}"
+    value = environ.get(wsgi_key)
+    if value:
+        return value
+
+    scope = environ.get("asgi.scope") or {}
+    for raw_name, raw_value in scope.get("headers", []):
+        try:
+            header_name = raw_name.decode("latin1")
+            if header_name.lower() == name.lower():
+                return raw_value.decode("latin1")
+        except Exception:
+            continue
+    return ""
+
+
+def _direct_client_ip_from_environ(environ) -> str:
+    """Return the direct peer IP, accounting for Engine.IO's ASGI shim."""
+    scope = environ.get("asgi.scope") or {}
+    client = scope.get("client")
+    if client and client[0]:
+        return client[0]
+    return environ.get("REMOTE_ADDR", "unknown")
+
+
 def _ldap_cookie_name() -> str:
     cookie_name = "ldapgate_session"
     if _ldap_config:
@@ -226,7 +253,7 @@ def _ldap_cookie_name() -> str:
 
 
 def _client_ip_from_environ(environ) -> str:
-    remote = environ.get("REMOTE_ADDR", "unknown")
+    remote = _direct_client_ip_from_environ(environ)
     if not _ldap_config:
         return remote
     trusted = _ldap_config.proxy.trusted_proxies
@@ -238,7 +265,7 @@ def _client_ip_from_environ(environ) -> str:
         return remote
     if not _is_ip_in_networks(remote, trusted):
         return remote
-    forwarded = environ.get("HTTP_X_FORWARDED_FOR", "")
+    forwarded = _header_from_environ(environ, "x-forwarded-for")
     for entry in reversed([e.strip() for e in forwarded.split(",")]):
         if entry and not _is_ip_in_networks(entry, trusted):
             return entry
@@ -246,27 +273,33 @@ def _client_ip_from_environ(environ) -> str:
 
 
 def _user_agent_from_environ(environ) -> str:
-    return environ.get("HTTP_USER_AGENT", "")
+    return _header_from_environ(environ, "user-agent")
 
 
 def _verify_ldap_socket_session(environ) -> bool:
     if not _ldap_session_manager:
         return False
-    cookie_header = environ.get("HTTP_COOKIE", environ.get("http_cookie", ""))
+    cookie_header = _header_from_environ(environ, "cookie")
     cookie = _cookie_from_header(cookie_header, _ldap_cookie_name())
     if not cookie:
+        logger.info("LDAP socket auth failed: missing %s cookie", _ldap_cookie_name())
         return False
     username = _ldap_session_manager.verify_session(
         cookie,
         client_ip=_client_ip_from_environ(environ),
         user_agent=_user_agent_from_environ(environ),
     )
+    if not username:
+        logger.info(
+            "LDAP socket auth failed: invalid session cookie for client_ip=%s",
+            _client_ip_from_environ(environ),
+        )
     return bool(username)
 
 @sio.on("connect")
 async def on_connect(sid, environ):
-    remote = environ.get("REMOTE_ADDR", "unknown")
-    forwarded = environ.get("HTTP_X_FORWARDED_FOR", "")
+    remote = _direct_client_ip_from_environ(environ)
+    forwarded = _header_from_environ(environ, "x-forwarded-for")
     if forwarded:
         remote = forwarded.split(",")[0].strip()
     logger.info("Client connected: %s (from %s)", sid, remote)
@@ -275,6 +308,7 @@ async def on_connect(sid, environ):
             if _verify_ldap_socket_session(environ):
                 async with _auth_lock:
                     _authenticated_sids.add(sid)
+                logger.info("LDAP socket authenticated: %s", sid)
         except Exception:
             logger.warning("LDAP session validation failed", exc_info=True)
 
@@ -297,6 +331,13 @@ async def _require_auth(sid: str, tab_id: str) -> bool:
         async with _auth_lock:
             authenticated = sid in _authenticated_sids
         if not authenticated:
+            environ = sio.get_environ(sid)
+            if environ and _verify_ldap_socket_session(environ):
+                async with _auth_lock:
+                    _authenticated_sids.add(sid)
+                authenticated = True
+        if not authenticated:
+            logger.info("Blocking unauthenticated socket event for sid=%s tab=%s", sid, tab_id)
             await sio.emit(
                 "ssh:error",
                 {"tab_id": tab_id, "message": "Authentication required.", "code": "auth_required"},
