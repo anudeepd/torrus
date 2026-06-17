@@ -7,11 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 async def _cleanup_manager(manager):
     """Cancel background tasks and destroy all sessions."""
-    for task in manager._tasks:
-        if not task.done():
-            task.cancel()
-    for key in list(manager._sessions.keys()):
-        await manager._destroy_session(key)
+    await manager.stop_background_tasks()
     await asyncio.sleep(0)  # let cancellation propagate
 
 
@@ -197,7 +193,7 @@ class TestSessionLifecycle:
             await _cleanup_manager(manager)
 
 
-class TesTmuxCheck:
+class TestTmuxCheck:
     """The tmux probe should not leak channels."""
 
     @pytest.mark.asyncio
@@ -206,15 +202,18 @@ class TesTmuxCheck:
 
         manager = SSHManager(mock_sio)
         client = MagicMock()
+        stdin = MagicMock()
+        stdin.channel.close = MagicMock()
         stdout = MagicMock()
         stdout.read.return_value = b"/usr/bin/tmux"
         stdout.channel.close = MagicMock()
         stderr = MagicMock()
         stderr.channel.close = MagicMock()
-        client.exec_command.return_value = (None, stdout, stderr)
+        client.exec_command.return_value = (stdin, stdout, stderr)
 
         result = await manager._check_tmux(client)
         assert result is True
+        stdin.channel.close.assert_called_once()
         stdout.channel.close.assert_called_once()
         stderr.channel.close.assert_called_once()
 

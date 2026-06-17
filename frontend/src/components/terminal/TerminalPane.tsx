@@ -90,7 +90,9 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
 
     if (enabled && hasFocusRef.current && broadcastTargetIdsRef.current.size > 0) {
       for (const targetTabId of broadcastTargetIdsRef.current) {
-        socket.emit('ssh:input', { session_id: sessionId, tab_id: targetTabId, data })
+        if (targetTabId !== tabId) {
+          socket.emit('ssh:input', { session_id: sessionId, tab_id: targetTabId, data })
+        }
       }
     }
     socket.emit('ssh:input', { session_id: sessionId, tab_id: tabId, data })

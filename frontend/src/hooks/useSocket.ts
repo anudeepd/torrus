@@ -5,8 +5,9 @@ let _socket: Socket | null = null
 export function getSocket(): Socket {
   if (!_socket) {
     _socket = io({
-      // polling first — works through any NGINX reverse proxy without WS config
-      transports: ['polling', 'websocket'],
+      // Long polling works through reverse proxies that do not forward
+      // WebSocket upgrade requests.
+      transports: ['polling'],
       withCredentials: true,
       reconnection: true,
       reconnectionDelay: 1000,
