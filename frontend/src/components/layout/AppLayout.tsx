@@ -26,6 +26,16 @@ export default function AppLayout() {
   // true when split was initiated by broadcast — exiting broadcast exits split too
   const [splitOwnedByBroadcast, setSplitOwnedByBroadcast] = useState(false)
 
+  const shouldWarnBeforeClosingTab = useCallback((tabId: string) => {
+    const tab = useTerminalStore.getState().tabs.find(t => t.id === tabId)
+    return tab?.status === 'connected' || tab?.status === 'connecting'
+  }, [])
+
+  const confirmCloseTab = useCallback((tabId: string) => {
+    if (!shouldWarnBeforeClosingTab(tabId)) return true
+    return confirm('Close this tab? The SSH session will be disconnected.')
+  }, [shouldWarnBeforeClosingTab])
+
   // Warn before close/reload if any active SSH sessions
   useEffect(() => {
     const handler = (e: BeforeUnloadEvent) => {
@@ -63,6 +73,7 @@ export default function AppLayout() {
   }, [addTab, socket, sessionId])
 
   const handleClosePane = useCallback((tabId: string) => {
+    if (!confirmCloseTab(tabId)) return
     socket.emit('ssh:disconnect', { session_id: sessionId, tab_id: tabId })
     const { root } = useLayoutStore.getState()
     if (!root) return
@@ -73,17 +84,28 @@ export default function AppLayout() {
     } else {
       closePane(tabId)
     }
-  }, [socket, sessionId, closePane, exitSplitMode, setActiveTab])
+  }, [socket, sessionId, closePane, exitSplitMode, setActiveTab, confirmCloseTab])
 
   const handleCloseTab = useCallback((id: string) => {
-    socket.emit('ssh:disconnect', { session_id: sessionId, tab_id: id })
+    if (!confirmCloseTab(id)) return
     const { root } = useLayoutStore.getState()
-    if (root && getLayoutTabIds(root).includes(id)) handleClosePane(id)
+    if (root && getLayoutTabIds(root).includes(id)) {
+      socket.emit('ssh:disconnect', { session_id: sessionId, tab_id: id })
+      const remaining = getLayoutTabIds(root).filter(tabId => tabId !== id)
+      if (remaining.length <= 1) {
+        exitSplitMode()
+        if (remaining[0]) setActiveTab(remaining[0])
+      } else {
+        closePane(id)
+      }
+    } else {
+      socket.emit('ssh:disconnect', { session_id: sessionId, tab_id: id })
+    }
     closeTab(id)
     setTimeout(() => {
       if (useTerminalStore.getState().tabs.length === 0) addTab()
     }, 0)
-  }, [socket, sessionId, closeTab, addTab, handleClosePane])
+  }, [socket, sessionId, closeTab, addTab, confirmCloseTab, closePane, exitSplitMode, setActiveTab])
 
   const handleCloneTab = useCallback((sourceTabId: string) => {
     const sourceTab = useTerminalStore.getState().tabs.find(t => t.id === sourceTabId)
@@ -200,10 +222,6 @@ export default function AppLayout() {
         const store = useTerminalStore.getState()
         const currentActiveTabId = store.activeTabId
         if (currentActiveTabId) {
-          const tab = store.tabs.find(t => t.id === currentActiveTabId)
-          if (tab?.status === 'connected') {
-            if (!confirm('Close this tab? The SSH session will be disconnected.')) return
-          }
           handleCloseTabRef.current(currentActiveTabId)
         }
       }

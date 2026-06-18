@@ -12,6 +12,11 @@ interface SessionSidebarProps {
   onLoadSession: (server: SavedServer) => void
 }
 
+const MIN_SIDEBAR_WIDTH = 160
+const MAX_SIDEBAR_WIDTH = 520
+const DEFAULT_SIDEBAR_WIDTH = 208
+const SIDEBAR_WIDTH_KEY = 'torrus-sidebar-width'
+
 interface ContextMenuState {
   serverId: string
   x: number
@@ -187,6 +192,14 @@ export default function SessionSidebar({ isOpen, onToggle, onLoadSession }: Sess
   const [importSuccess, setImportSuccess] = useState(false)
   const contextMenuRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const resizeStartRef = useRef<{ x: number; width: number } | null>(null)
+
+  const [sidebarWidth, setSidebarWidth] = useState(() => {
+    const saved = localStorage.getItem(SIDEBAR_WIDTH_KEY)
+    const parsed = saved ? Number(saved) : DEFAULT_SIDEBAR_WIDTH
+    if (!Number.isFinite(parsed)) return DEFAULT_SIDEBAR_WIDTH
+    return Math.max(MIN_SIDEBAR_WIDTH, Math.min(MAX_SIDEBAR_WIDTH, parsed))
+  })
 
   // Clear selection if server is removed
   useEffect(() => {
@@ -222,6 +235,27 @@ export default function SessionSidebar({ isOpen, onToggle, onLoadSession }: Sess
     const server = servers.find(s => s.id === selectedId)
     if (server) onLoadSession(server)
   }, [selectedId, servers, onLoadSession])
+
+  const handleResizeMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    resizeStartRef.current = { x: e.clientX, width: sidebarWidth }
+    const onMove = (event: MouseEvent) => {
+      if (!resizeStartRef.current) return
+      const next = Math.max(
+        MIN_SIDEBAR_WIDTH,
+        Math.min(MAX_SIDEBAR_WIDTH, resizeStartRef.current.width + event.clientX - resizeStartRef.current.x)
+      )
+      setSidebarWidth(next)
+      localStorage.setItem(SIDEBAR_WIDTH_KEY, String(next))
+    }
+    const onUp = () => {
+      resizeStartRef.current = null
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+    }
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  }, [sidebarWidth])
 
   const handleExport = () => {
     const blob = new Blob([JSON.stringify(servers, null, 2)], { type: 'application/json' })
@@ -292,148 +326,154 @@ export default function SessionSidebar({ isOpen, onToggle, onLoadSession }: Sess
   // ── Full sidebar ─────────────────────────────────────────────────────────────
   return (
     <>
-      <div className="w-52 flex-shrink-0 flex flex-col bg-surface-900 border-r border-surface-800 select-none">
-        {/* Header */}
-        <div className="px-3 py-2 border-b border-surface-800 flex items-center gap-2">
-          <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider flex-1">Sessions</span>
-          <button
-            onClick={onToggle}
-            title="Hide sessions"
-            className="text-slate-600 hover:text-slate-400 transition-colors p-0.5"
-          >
-            <PanelLeftClose className="w-3.5 h-3.5" />
-          </button>
-        </div>
-
-        {/* Session list */}
-        <div className="flex-1 overflow-y-auto py-1 relative">
-
-          {/* Watermark */}
-          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-            <svg
-              viewBox="0 0 128 128"
-              xmlns="http://www.w3.org/2000/svg"
-              className="w-28 h-28 opacity-[0.04]"
+      <div style={{ width: sidebarWidth }} className="flex-shrink-0 flex min-h-0 max-w-[45vw]">
+        <div className="flex-1 min-w-0 flex flex-col bg-surface-900 border-r border-surface-800 select-none">
+          {/* Header */}
+          <div className="px-3 py-2 border-b border-surface-800 flex items-center gap-2">
+            <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider flex-1">Sessions</span>
+            <button
+              onClick={onToggle}
+              title="Hide sessions"
+              className="text-slate-600 hover:text-slate-400 transition-colors p-0.5"
             >
-              <circle cx="64" cy="64" r="54" fill="none" stroke="#16a34a" strokeWidth="3.6" />
-              <circle cx="64" cy="64" r="38" fill="none" stroke="#0d9488" strokeWidth="3.2" />
-              <circle cx="64" cy="64" r="22" fill="none" stroke="#10b981" strokeWidth="2.8" />
-              <polyline fill="none" stroke="#0d9488" strokeWidth="3.2" strokeLinecap="round" strokeLinejoin="round"
-                points="52,56 64,64 52,72" />
-              <rect x="70" y="58" width="8" height="12" rx="1.5" fill="#10b981" />
-            </svg>
+              <PanelLeftClose className="w-3.5 h-3.5" />
+            </button>
           </div>
-          {servers.length === 0 ? (
-            <p className="px-3 py-4 text-xs text-slate-600 text-center leading-relaxed">
-              No saved sessions.<br />
-              Connect and click the bookmark icon to save one.
-            </p>
-          ) : (
-            servers.map(server => (
-              <div
-                key={server.id}
-                onClick={() => setSelectedId(server.id)}
-                onDoubleClick={() => { setSelectedId(server.id); onLoadSession(server) }}
-                onContextMenu={(e) => {
-                  e.preventDefault()
-                  setSelectedId(server.id)
-                  setContextMenu({ serverId: server.id, x: e.clientX, y: e.clientY })
-                }}
-                className={clsx(
-                  'group flex flex-col px-3 py-2 cursor-pointer transition-colors border-l-2',
-                  selectedId === server.id
-                    ? 'bg-surface-800 border-l-brand-500'
-                    : 'border-l-transparent hover:bg-surface-800/50'
-                )}
+
+          {/* Session list */}
+          <div className="flex-1 overflow-y-auto py-1 relative">
+
+            {/* Watermark */}
+            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+              <svg
+                viewBox="0 0 128 128"
+                xmlns="http://www.w3.org/2000/svg"
+                className="w-28 h-28 opacity-[0.04]"
               >
-                <div className="flex items-center gap-1.5 min-w-0">
-                  <span className={clsx('w-1.5 h-1.5 rounded-full flex-shrink-0', {
-                    'bg-green-400': isActive(server),
-                    'bg-slate-600': !isActive(server),
-                  })} />
-                  <span className="text-xs font-medium text-slate-200 truncate flex-1">
-                    {server.name}
+                <circle cx="64" cy="64" r="54" fill="none" stroke="#16a34a" strokeWidth="3.6" />
+                <circle cx="64" cy="64" r="38" fill="none" stroke="#0d9488" strokeWidth="3.2" />
+                <circle cx="64" cy="64" r="22" fill="none" stroke="#10b981" strokeWidth="2.8" />
+                <polyline fill="none" stroke="#0d9488" strokeWidth="3.2" strokeLinecap="round" strokeLinejoin="round"
+                  points="52,56 64,64 52,72" />
+                <rect x="70" y="58" width="8" height="12" rx="1.5" fill="#10b981" />
+              </svg>
+            </div>
+            {servers.length === 0 ? (
+              <p className="px-3 py-4 text-xs text-slate-600 text-center leading-relaxed">
+                No saved sessions.<br />
+                Connect and click the bookmark icon to save one.
+              </p>
+            ) : (
+              servers.map(server => (
+                <div
+                  key={server.id}
+                  onClick={() => setSelectedId(server.id)}
+                  onDoubleClick={() => { setSelectedId(server.id); onLoadSession(server) }}
+                  onContextMenu={(e) => {
+                    e.preventDefault()
+                    setSelectedId(server.id)
+                    setContextMenu({ serverId: server.id, x: e.clientX, y: e.clientY })
+                  }}
+                  className={clsx(
+                    'group flex flex-col px-3 py-2 cursor-pointer transition-colors border-l-2',
+                    selectedId === server.id
+                      ? 'bg-surface-800 border-l-brand-500'
+                      : 'border-l-transparent hover:bg-surface-800/50'
+                  )}
+                >
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <span className={clsx('w-1.5 h-1.5 rounded-full flex-shrink-0', {
+                      'bg-green-400': isActive(server),
+                      'bg-slate-600': !isActive(server),
+                    })} />
+                    <span className="text-xs font-medium text-slate-200 truncate flex-1">
+                      {server.name}
+                    </span>
+                  </div>
+                  <span className="text-xs text-slate-500 truncate pl-3 mt-0.5">
+                    {server.username}@{server.host}{server.port !== 22 ? `:${server.port}` : ''}
                   </span>
                 </div>
-                <span className="text-xs text-slate-500 truncate pl-3 mt-0.5">
-                  {server.username}@{server.host}{server.port !== 22 ? `:${server.port}` : ''}
-                </span>
-              </div>
-            ))
-          )}
-        </div>
-
-        {/* Action buttons */}
-        <div className="flex flex-col gap-2 px-3 py-3 border-t border-surface-800">
-          <div className="flex gap-1.5">
-            <button
-              onClick={handleOpen}
-              disabled={!selected}
-              className={clsx(
-                'flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 rounded text-xs font-medium transition-colors',
-                selected
-                  ? 'bg-brand-600 hover:bg-brand-500 text-white'
-                  : 'bg-surface-800 text-slate-600 cursor-not-allowed'
-              )}
-            >
-              <LogIn className="w-3 h-3" />
-              Open
-            </button>
-            <button
-              onClick={() => { if (selected) setEditingServer(selected) }}
-              disabled={!selected}
-              className={clsx(
-                'flex items-center justify-center px-2 py-1.5 rounded text-xs transition-colors',
-                selected
-                  ? 'bg-surface-800 hover:bg-surface-700 text-slate-400 hover:text-slate-200'
-                  : 'bg-surface-800 text-slate-700 cursor-not-allowed'
-              )}
-              title="Edit session"
-            >
-              <Pencil className="w-3.5 h-3.5" />
-            </button>
-            <button
-              onClick={handleDelete}
-              disabled={!selected}
-              className={clsx(
-                'flex items-center justify-center px-2 py-1.5 rounded text-xs transition-colors',
-                selected
-                  ? 'bg-surface-800 hover:bg-red-900/40 text-slate-400 hover:text-red-400'
-                  : 'bg-surface-800 text-slate-700 cursor-not-allowed'
-              )}
-              title="Delete session"
-            >
-              <Trash2 className="w-3.5 h-3.5" />
-            </button>
+              ))
+            )}
           </div>
 
-          <div className="flex gap-1.5">
-            <button
-              onClick={handleExport}
-              disabled={servers.length === 0}
-              className={clsx(
-                'flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 rounded text-xs font-medium border transition-colors',
-                servers.length > 0
-                  ? 'border-surface-700 text-slate-400 hover:text-slate-200 hover:border-surface-600 hover:bg-surface-800'
-                  : 'border-surface-800 text-slate-700 cursor-not-allowed'
-              )}
-            >
-              <Download className="w-3 h-3" />
-              Export
-            </button>
-            <button
-              onClick={() => { setImportError(''); fileInputRef.current?.click() }}
-              className="flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 rounded text-xs font-medium border border-surface-700 text-slate-400 hover:text-slate-200 hover:border-surface-600 hover:bg-surface-800 transition-colors"
-            >
-              <Upload className="w-3 h-3" />
-              Import
-            </button>
-            <input ref={fileInputRef} type="file" accept=".json" className="hidden" onChange={handleImport} />
-          </div>
+          {/* Action buttons */}
+          <div className="flex flex-col gap-2 px-3 py-3 border-t border-surface-800">
+            <div className="flex gap-1.5">
+              <button
+                onClick={handleOpen}
+                disabled={!selected}
+                className={clsx(
+                  'flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 rounded text-xs font-medium transition-colors',
+                  selected
+                    ? 'bg-brand-600 hover:bg-brand-500 text-white'
+                    : 'bg-surface-800 text-slate-600 cursor-not-allowed'
+                )}
+              >
+                <LogIn className="w-3 h-3" />
+                Open
+              </button>
+              <button
+                onClick={() => { if (selected) setEditingServer(selected) }}
+                disabled={!selected}
+                className={clsx(
+                  'flex items-center justify-center px-2 py-1.5 rounded text-xs transition-colors',
+                  selected
+                    ? 'bg-surface-800 hover:bg-surface-700 text-slate-400 hover:text-slate-200'
+                    : 'bg-surface-800 text-slate-700 cursor-not-allowed'
+                )}
+                title="Edit session"
+              >
+                <Pencil className="w-3.5 h-3.5" />
+              </button>
+              <button
+                onClick={handleDelete}
+                disabled={!selected}
+                className={clsx(
+                  'flex items-center justify-center px-2 py-1.5 rounded text-xs transition-colors',
+                  selected
+                    ? 'bg-surface-800 hover:bg-red-900/40 text-slate-400 hover:text-red-400'
+                    : 'bg-surface-800 text-slate-700 cursor-not-allowed'
+                )}
+                title="Delete session"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
+            </div>
 
-          {importError && <p className="text-xs text-red-400 text-center leading-tight">{importError}</p>}
-          {importSuccess && <p className="text-xs text-green-400 text-center">Sessions imported.</p>}
+            <div className="flex gap-1.5">
+              <button
+                onClick={handleExport}
+                disabled={servers.length === 0}
+                className={clsx(
+                  'flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 rounded text-xs font-medium border transition-colors',
+                  servers.length > 0
+                    ? 'border-surface-700 text-slate-400 hover:text-slate-200 hover:border-surface-600 hover:bg-surface-800'
+                    : 'border-surface-800 text-slate-700 cursor-not-allowed'
+                )}
+              >
+                <Download className="w-3 h-3" />
+                Export
+              </button>
+              <button
+                onClick={() => { setImportError(''); fileInputRef.current?.click() }}
+                className="flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 rounded text-xs font-medium border border-surface-700 text-slate-400 hover:text-slate-200 hover:border-surface-600 hover:bg-surface-800 transition-colors"
+              >
+                <Upload className="w-3 h-3" />
+                Import
+              </button>
+              <input ref={fileInputRef} type="file" accept=".json" className="hidden" onChange={handleImport} />
+            </div>
+
+            {importError && <p className="text-xs text-red-400 text-center leading-tight">{importError}</p>}
+            {importSuccess && <p className="text-xs text-green-400 text-center">Sessions imported.</p>}
+          </div>
         </div>
+        <div
+          onMouseDown={handleResizeMouseDown}
+          className="w-1 flex-shrink-0 bg-surface-800 hover:bg-brand-500 cursor-col-resize transition-colors"
+        />
       </div>
 
       {/* Right-click context menu */}

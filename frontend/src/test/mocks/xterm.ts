@@ -27,6 +27,7 @@ export class MockTerminal {
   write() {}
   hasSelection() { return false }
   attachCustomKeyEventHandler() {}
+  attachCustomWheelEventHandler() {}
 
   onData(handler: (data: string) => void) {
     this._dataHandler = handler

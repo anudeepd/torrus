@@ -25,6 +25,10 @@ function bracketTextForPaste(text: string, bracketedPasteMode: boolean): string 
   return bracketedPasteMode ? `\x1b[200~${text}\x1b[201~` : text
 }
 
+function isVisibleTerminalContainer(el: HTMLElement | null): el is HTMLElement {
+  return !!el && el.offsetParent !== null && el.clientWidth > 0 && el.clientHeight > 0
+}
+
 interface CachedTerminal {
   term: Terminal
   fitAddon: FitAddon
@@ -107,6 +111,12 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
     })
   }, [socket, sessionId, tabId])
 
+  const fitAndEmitResize = useCallback((term: Terminal, fitAddon: FitAddon) => {
+    if (!isVisibleTerminalContainer(containerRef.current)) return
+    fitAddon.fit()
+    if (term.cols > 0 && term.rows > 0) emitResize(term)
+  }, [emitResize])
+
   // Create or reuse xterm.js terminal
   useEffect(() => {
     if (!containerRef.current || termRef.current) return
@@ -159,15 +169,13 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
 
         ro = new ResizeObserver(() => {
           const currentTab = useTerminalStore.getState().tabs.find(t => t.id === tabId)
-          if (currentTab?.status === 'connected') {
-            cached.fitAddon.fit()
-            emitResize(cached.term)
+          if (currentTab?.status === 'connected' && isVisibleTerminalContainer(containerRef.current)) {
+            fitAndEmitResize(cached.term, cached.fitAddon)
           }
         })
         ro.observe(containerRef.current)
 
-        cached.fitAddon.fit()
-        emitResize(cached.term)
+        fitAndEmitResize(cached.term, cached.fitAddon)
 
         const currentTab = useTerminalStore.getState().tabs.find(t => t.id === tabId)
         if (currentTab?.status === 'connected') {
@@ -236,10 +244,13 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
           if (mod && key === 'v') return false
           return true
         })
+        term.attachCustomWheelEventHandler((e) => {
+          e.stopPropagation()
+          return true
+        })
 
         term.open(termContainer)
-        fitAddon.fit()
-        emitResize(term)
+        fitAndEmitResize(term, fitAddon)
 
         termRef.current = term
         fitRef.current = fitAddon
@@ -277,9 +288,8 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
 
         ro = new ResizeObserver(() => {
           const currentTab = useTerminalStore.getState().tabs.find(t => t.id === tabId)
-          if (currentTab?.status === 'connected') {
-            fitAddon.fit()
-            emitResize(term)
+          if (currentTab?.status === 'connected' && isVisibleTerminalContainer(containerRef.current)) {
+            fitAndEmitResize(term, fitAddon)
           }
         })
         ro.observe(containerRef.current)
@@ -323,7 +333,7 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
       hasFocusRef.current = false
       suppressInputRef.current = false
     }
-  }, [tabId, emitInput, emitResize, handleFocus, handleBlur])
+  }, [tabId, emitInput, emitResize, fitAndEmitResize, handleFocus, handleBlur])
 
   // Apply settings changes to live terminal
   useEffect(() => {
@@ -333,11 +343,10 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
     term.options.scrollback = settings.scrollbackLines
     term.options.fontSize = settings.fontSize
 
-    fitRef.current?.fit()
-    if (tab?.status === 'connected') {
-      emitResize(term)
+    if (fitRef.current && isVisibleTerminalContainer(containerRef.current)) {
+      fitAndEmitResize(term, fitRef.current)
     }
-  }, [settings.scrollbackLines, settings.fontSize, tab?.status, emitResize])
+  }, [settings.scrollbackLines, settings.fontSize, fitAndEmitResize])
 
   // Suppress input while Socket.IO is disconnected (prevents xterm escape
   // sequences from reaching the shell during reconnect windows)
@@ -374,9 +383,8 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
         setTabStatus(tabId, 'connected')
         requestAnimationFrame(() => {
           if (!mounted) return
-          if (containerRef.current && containerRef.current.offsetParent !== null) {
-            fitRef.current?.fit()
-            if (termRef.current) emitResize(termRef.current)
+          if (termRef.current && fitRef.current) {
+            fitAndEmitResize(termRef.current, fitRef.current)
           }
           termRef.current?.focus()
           suppressInputRef.current = false
@@ -394,9 +402,8 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
       setTabStatus(tabId, 'connected')
       requestAnimationFrame(() => {
         if (!mounted) return
-        if (containerRef.current && containerRef.current.offsetParent !== null) {
-          fitRef.current?.fit()
-          if (termRef.current) emitResize(termRef.current)
+        if (termRef.current && fitRef.current) {
+          fitAndEmitResize(termRef.current, fitRef.current)
         }
         termRef.current?.focus()
       })
@@ -428,20 +435,19 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
       socket.off('ssh:error', onError)
       socket.off('ssh:closed', onClosed)
     }
-  }, [socket, tabId, setTabStatus, emitResize])
+  }, [socket, tabId, setTabStatus, fitAndEmitResize])
 
   // Focus terminal when tab becomes active
   useEffect(() => {
     if (isActive && tab?.status === 'connected') {
       requestAnimationFrame(() => {
-        if (containerRef.current && containerRef.current.offsetParent !== null) {
-          fitRef.current?.fit()
-          if (termRef.current) emitResize(termRef.current)
+        if (termRef.current && fitRef.current) {
+          fitAndEmitResize(termRef.current, fitRef.current)
         }
         if (focused ?? true) termRef.current?.focus()
       })
     }
-  }, [isActive, focused, tab?.status, emitResize])
+  }, [isActive, focused, tab?.status, fitAndEmitResize])
 
   const handleConnect = useCallback((values: ConnectFormValues) => {
     errorRef.current = ''
