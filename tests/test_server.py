@@ -325,14 +325,16 @@ class TestSessionRateLimit:
 
 
 class TestPrivateHostPolicy:
-    """Private/local SSH targets are allowed only behind LDAP authentication."""
+    """Private/local SSH targets are allowed by default, with an operator opt-out."""
 
     @pytest.mark.asyncio
-    async def test_private_host_blocked_without_ldap(self):
+    async def test_private_host_allowed_without_ldap_by_default(self):
         from torrus.server import on_ssh_connect
 
         import torrus.server as server_module
 
+        server_module._ldap_enabled = False
+        server_module._ALLOW_PRIVATE_HOSTS_WITHOUT_LDAP = True
         sio_mock = MagicMock()
         sio_mock.emit = AsyncMock()
         original_manager = server_module.ssh_manager
@@ -357,6 +359,43 @@ class TestPrivateHostPolicy:
         finally:
             server_module.ssh_manager = original_manager
 
+        for call in sio_mock.emit.call_args_list:
+            assert call[0][1].get("code") != "private_host_blocked"
+        manager_mock.connect.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_private_host_blocked_without_ldap_when_explicitly_disabled(self):
+        from torrus.server import on_ssh_connect
+
+        import torrus.server as server_module
+
+        server_module._ldap_enabled = False
+        server_module._ALLOW_PRIVATE_HOSTS_WITHOUT_LDAP = False
+        sio_mock = MagicMock()
+        sio_mock.emit = AsyncMock()
+        original_manager = server_module.ssh_manager
+        manager_mock = MagicMock()
+        manager_mock.sid_session_count.return_value = 0
+        manager_mock.connect = AsyncMock()
+        server_module.ssh_manager = manager_mock
+
+        try:
+            with patch("torrus.server.sio", sio_mock):
+                await on_ssh_connect(
+                    "sid-public",
+                    {
+                        "host": "127.0.0.1",
+                        "port": 22,
+                        "username": "user",
+                        "password": "pass",
+                        "session_id": "sess1",
+                        "tab_id": "tab1",
+                    },
+                )
+        finally:
+            server_module.ssh_manager = original_manager
+            server_module._ALLOW_PRIVATE_HOSTS_WITHOUT_LDAP = True
+
         sio_mock.emit.assert_awaited_once()
         assert sio_mock.emit.call_args[0][1]["code"] == "private_host_blocked"
         manager_mock.connect.assert_not_awaited()
@@ -368,6 +407,7 @@ class TestPrivateHostPolicy:
         import torrus.server as server_module
 
         server_module._ldap_enabled = True
+        server_module._ALLOW_PRIVATE_HOSTS_WITHOUT_LDAP = True
         server_module._authenticated_sids.add("auth-sid")
         sio_mock = MagicMock()
         sio_mock.emit = AsyncMock()

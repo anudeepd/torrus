@@ -25,6 +25,9 @@ logger = logging.getLogger("torrus.server")
 
 _SAFE_ID = re.compile(r'^[a-zA-Z0-9_\-]+$')
 _DEV_MODE = bool(os.getenv("TORRUS_DEV"))
+_ALLOW_PRIVATE_HOSTS_WITHOUT_LDAP = os.getenv(
+    "TORRUS_ALLOW_PRIVATE_HOSTS_WITHOUT_LDAP", "true"
+).lower() in {"1", "true", "yes", "on"}
 _MAX_SESSIONS_PER_SID = 20
 APP_CSP = (
     "default-src 'self'; "
@@ -479,9 +482,9 @@ async def on_ssh_connect(sid, data):
         )
         return
     # LDAP-gated deployments commonly connect to internal hosts or localhost.
-    # In unauthenticated mode keep the old guard, because exposing Torrus
-    # publicly without LDAP should not also expose private-network SSH probes.
-    if _is_private_host(host) and not _ldap_enabled:
+    # Operators can disable this in unauthenticated mode by setting
+    # TORRUS_ALLOW_PRIVATE_HOSTS_WITHOUT_LDAP=false.
+    if _is_private_host(host) and not _ldap_enabled and not _ALLOW_PRIVATE_HOSTS_WITHOUT_LDAP:
         logger.warning("Blocked connection to private host %s from sid %s", host, sid)
         await sio.emit(
             "ssh:error",
@@ -489,7 +492,6 @@ async def on_ssh_connect(sid, data):
             to=sid,
         )
         return
-
     await ssh_manager.connect(
         sid=sid,
         session_id=session_id,

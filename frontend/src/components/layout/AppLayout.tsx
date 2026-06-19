@@ -11,7 +11,19 @@ import SessionSidebar from './SessionSidebar'
 import TerminalPane from '@/components/terminal/TerminalPane'
 import SettingsDialog from '@/components/settings/SettingsDialog'
 import type { PaneNode } from '@/store/layoutStore'
-import type { SavedServer } from '@/types'
+import type { SavedServer, Tab } from '@/types'
+
+type PendingClose = {
+  kind: 'tab' | 'pane'
+  tabId: string
+} | null
+
+function getTabDisplayName(tab: Tab | undefined): string {
+  if (!tab) return 'this tab'
+  if (tab.label) return tab.label
+  if (tab.host && tab.username) return `${tab.username}@${tab.host}`
+  return 'New Connection'
+}
 
 export default function AppLayout() {
   const { tabs, activeTabId, addTab, closeTab, closeAllTabs, setActiveTab, sessionId } = useTerminalStore()
@@ -25,16 +37,13 @@ export default function AppLayout() {
   const [broadcastPickerOpen, setBroadcastPickerOpen] = useState(false)
   // true when split was initiated by broadcast — exiting broadcast exits split too
   const [splitOwnedByBroadcast, setSplitOwnedByBroadcast] = useState(false)
+  const [pendingClose, setPendingClose] = useState<PendingClose>(null)
 
   const shouldWarnBeforeClosingTab = useCallback((tabId: string) => {
     const tab = useTerminalStore.getState().tabs.find(t => t.id === tabId)
-    return tab?.status === 'connected' || tab?.status === 'connecting'
+    if (!tab) return false
+    return tab.status !== 'disconnected' || !!tab.host || !!tab.username
   }, [])
-
-  const confirmCloseTab = useCallback((tabId: string) => {
-    if (!shouldWarnBeforeClosingTab(tabId)) return true
-    return confirm('Close this tab? The SSH session will be disconnected.')
-  }, [shouldWarnBeforeClosingTab])
 
   // Warn before close/reload if any active SSH sessions
   useEffect(() => {
@@ -72,8 +81,7 @@ export default function AppLayout() {
     socket.emit('session:register', { session_id: sessionId, tab_id: tabId })
   }, [addTab, socket, sessionId])
 
-  const handleClosePane = useCallback((tabId: string) => {
-    if (!confirmCloseTab(tabId)) return
+  const closePaneNow = useCallback((tabId: string) => {
     socket.emit('ssh:disconnect', { session_id: sessionId, tab_id: tabId })
     const { root } = useLayoutStore.getState()
     if (!root) return
@@ -84,10 +92,9 @@ export default function AppLayout() {
     } else {
       closePane(tabId)
     }
-  }, [socket, sessionId, closePane, exitSplitMode, setActiveTab, confirmCloseTab])
+  }, [socket, sessionId, closePane, exitSplitMode, setActiveTab])
 
-  const handleCloseTab = useCallback((id: string) => {
-    if (!confirmCloseTab(id)) return
+  const closeTabNow = useCallback((id: string) => {
     const { root } = useLayoutStore.getState()
     if (root && getLayoutTabIds(root).includes(id)) {
       socket.emit('ssh:disconnect', { session_id: sessionId, tab_id: id })
@@ -105,7 +112,23 @@ export default function AppLayout() {
     setTimeout(() => {
       if (useTerminalStore.getState().tabs.length === 0) addTab()
     }, 0)
-  }, [socket, sessionId, closeTab, addTab, confirmCloseTab, closePane, exitSplitMode, setActiveTab])
+  }, [socket, sessionId, closeTab, addTab, closePane, exitSplitMode, setActiveTab])
+
+  const handleClosePane = useCallback((tabId: string) => {
+    if (shouldWarnBeforeClosingTab(tabId)) {
+      setPendingClose({ kind: 'pane', tabId })
+      return
+    }
+    closePaneNow(tabId)
+  }, [shouldWarnBeforeClosingTab, closePaneNow])
+
+  const handleCloseTab = useCallback((id: string) => {
+    if (shouldWarnBeforeClosingTab(id)) {
+      setPendingClose({ kind: 'tab', tabId: id })
+      return
+    }
+    closeTabNow(id)
+  }, [shouldWarnBeforeClosingTab, closeTabNow])
 
   const handleCloneTab = useCallback((sourceTabId: string) => {
     const sourceTab = useTerminalStore.getState().tabs.find(t => t.id === sourceTabId)
@@ -256,6 +279,21 @@ export default function AppLayout() {
     () => layoutRoot ? getLayoutTabIds(layoutRoot).includes(activeTabId || '') : false,
     [layoutRoot, activeTabId]
   )
+  const pendingCloseTab = useMemo(
+    () => pendingClose ? tabs.find(t => t.id === pendingClose.tabId) : undefined,
+    [pendingClose, tabs]
+  )
+
+  const handleConfirmPendingClose = useCallback(() => {
+    if (!pendingClose) return
+    const { kind, tabId } = pendingClose
+    setPendingClose(null)
+    if (kind === 'pane') {
+      closePaneNow(tabId)
+    } else {
+      closeTabNow(tabId)
+    }
+  }, [pendingClose, closePaneNow, closeTabNow])
 
   return (
     <div className="flex h-full bg-surface-950">
@@ -323,6 +361,39 @@ export default function AppLayout() {
           onDisable={handleDisableBroadcast}
           onClose={() => setBroadcastPickerOpen(false)}
         />
+      )}
+
+      {pendingClose && (
+        <div
+          className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center"
+          onMouseDown={e => { if (e.target === e.currentTarget) setPendingClose(null) }}
+        >
+          <div className="w-80 bg-surface-900 border border-surface-700 rounded-xl shadow-2xl p-5 flex flex-col gap-4">
+            <div>
+              <h2 className="text-sm font-semibold text-slate-200">Close session?</h2>
+              <p className="mt-2 text-xs text-slate-400 leading-relaxed">
+                Closing {getTabDisplayName(pendingCloseTab)} will disconnect its SSH session.
+              </p>
+            </div>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setPendingClose(null)}
+                className="flex-1 px-3 py-2 rounded-md text-sm text-slate-400 bg-surface-800 hover:bg-surface-700 hover:text-slate-200 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmPendingClose}
+                autoFocus
+                className="flex-1 px-3 py-2 rounded-md text-sm font-medium text-white bg-red-600 hover:bg-red-500 transition-colors"
+              >
+                Close tab
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )

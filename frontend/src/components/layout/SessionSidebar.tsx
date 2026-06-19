@@ -12,7 +12,7 @@ interface SessionSidebarProps {
   onLoadSession: (server: SavedServer) => void
 }
 
-const MIN_SIDEBAR_WIDTH = 160
+const MIN_SIDEBAR_WIDTH = 208
 const MAX_SIDEBAR_WIDTH = 520
 const DEFAULT_SIDEBAR_WIDTH = 208
 const SIDEBAR_WIDTH_KEY = 'torrus-sidebar-width'
@@ -326,7 +326,7 @@ export default function SessionSidebar({ isOpen, onToggle, onLoadSession }: Sess
   // ── Full sidebar ─────────────────────────────────────────────────────────────
   return (
     <>
-      <div style={{ width: sidebarWidth }} className="flex-shrink-0 flex min-h-0 max-w-[45vw]">
+      <div style={{ width: sidebarWidth }} className="flex-shrink-0 flex min-h-0">
         <div className="flex-1 min-w-0 flex flex-col bg-surface-900 border-r border-surface-800 select-none">
           {/* Header */}
           <div className="px-3 py-2 border-b border-surface-800 flex items-center gap-2">
@@ -472,8 +472,11 @@ export default function SessionSidebar({ isOpen, onToggle, onLoadSession }: Sess
         </div>
         <div
           onMouseDown={handleResizeMouseDown}
-          className="w-1 flex-shrink-0 bg-surface-800 hover:bg-brand-500 cursor-col-resize transition-colors"
-        />
+          title="Resize sessions sidebar"
+          className="group w-2 flex-shrink-0 cursor-col-resize bg-surface-900 hover:bg-surface-800 transition-colors flex items-stretch justify-center"
+        >
+          <div className="w-px bg-surface-700 group-hover:bg-brand-500 transition-colors" />
+        </div>
       </div>
 
       {/* Right-click context menu */}

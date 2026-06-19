@@ -192,6 +192,43 @@ class TestSessionLifecycle:
         finally:
             await _cleanup_manager(manager)
 
+    @pytest.mark.asyncio
+    async def test_destroy_original_keeps_shared_client_until_clones_close(self, mock_sio, mock_paramiko_client):
+        from torrus.ssh_manager import SSHManager
+
+        manager = SSHManager(mock_sio)
+        manager.start_background_tasks()
+        try:
+            with patch("torrus.ssh_manager.paramiko.SSHClient") as MockClient:
+                MockClient.return_value = mock_paramiko_client
+                await manager.connect(
+                    sid="sid-1",
+                    session_id="sess1",
+                    tab_id="tab1",
+                    host="example.com",
+                    port=22,
+                    username="user",
+                    password="pass",
+                )
+
+            await manager.clone(
+                sid="sid-1",
+                session_id="sess1",
+                source_tab_id="tab1",
+                new_tab_id="tab2",
+            )
+
+            mock_paramiko_client.close = MagicMock()
+
+            await manager._destroy_session(("sess1", "tab1"))
+            assert ("sess1", "tab2") in manager._sessions
+            mock_paramiko_client.close.assert_not_called()
+
+            await manager._destroy_session(("sess1", "tab2"))
+            mock_paramiko_client.close.assert_called_once()
+        finally:
+            await _cleanup_manager(manager)
+
 
 class TestTmuxCheck:
     """The tmux probe should not leak channels."""

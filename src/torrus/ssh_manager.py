@@ -65,7 +65,8 @@ class SSHSession:
     write_task: Optional[asyncio.Task] = None
     input_queue: asyncio.Queue[bytes] = field(default_factory=lambda: asyncio.Queue(maxsize=65536))
     output_buffer: bytearray = field(default_factory=bytearray)
-    # False for cloned sessions — they share the transport and must not close it
+    # Recomputed during teardown: close the client only when no remaining
+    # session still shares its transport.
     owns_client: bool = True
 
 
@@ -514,6 +515,7 @@ class SSHManager:
             session.read_task.cancel()
         if session.write_task and not session.write_task.done():
             session.write_task.cancel()
+        session.owns_client = not any(other.client is session.client for other in self._sessions.values())
         return session
 
     async def _close_session(self, session: SSHSession) -> None:
