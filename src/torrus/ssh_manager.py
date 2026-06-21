@@ -56,6 +56,7 @@ class SSHSession:
     client: paramiko.SSHClient
     channel: paramiko.Channel
     host: str
+    port: int
     username: str
     created_at: float = field(default_factory=time.time)
     last_activity: float = field(default_factory=time.time)
@@ -220,6 +221,7 @@ class SSHManager:
                 client=client,
                 channel=channel,
                 host=host,
+                port=port,
                 username=username,
                 cols=cols,
                 rows=rows,
@@ -308,6 +310,14 @@ class SSHManager:
         session.last_activity = time.time()
         await session.input_queue.put(data)
 
+    async def get_session_target(self, session_id: str, tab_id: str) -> tuple[str, int, str] | None:
+        """Return the active SSH target for audit attribution."""
+        async with self._lock:
+            session = self._sessions.get((session_id, tab_id))
+            if session is None or session.channel.closed:
+                return None
+            return session.host, session.port, session.username
+
     async def handle_resize(self, session_id: str, tab_id: str, cols: int, rows: int) -> None:
         key = (session_id, tab_id)
         async with self._lock:
@@ -385,6 +395,7 @@ class SSHManager:
                 client=source.client,
                 channel=channel,
                 host=source.host,
+                port=source.port,
                 username=source.username,
                 cols=cols,
                 rows=rows,

@@ -19,9 +19,18 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from torrus import audit_store
 from torrus.ssh_manager import SSHManager
 
 logger = logging.getLogger("torrus.server")
+
+if _log_file := os.getenv("TORRUS_LOG_FILE"):
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)-8s %(name)s %(message)s",
+        datefmt="%H:%M:%S",
+        handlers=[logging.StreamHandler(), logging.FileHandler(_log_file, encoding="utf-8")],
+    )
 
 _SAFE_ID = re.compile(r'^[a-zA-Z0-9_\-]+$')
 _DEV_MODE = bool(os.getenv("TORRUS_DEV"))
@@ -91,6 +100,8 @@ sio = socketio.AsyncServer(
 
 @asynccontextmanager
 async def lifespan(app):
+    if _ldap_enabled:
+        audit_store.init_db()
     ssh_manager.start_background_tasks()
     yield
     await ssh_manager.stop_background_tasks()
@@ -121,6 +132,7 @@ if _DEV_MODE:
 # LDAP state (populated later if config is present)
 _ldap_enabled = False
 _authenticated_sids: set[str] = set()
+_authenticated_users: dict[str, str] = {}
 _auth_lock = asyncio.Lock()
 _ldap_config = None
 _ldap_session_manager = None
@@ -318,9 +330,9 @@ def _user_agent_from_environ(environ) -> str:
     return _header_from_environ(environ, "user-agent")
 
 
-def _verify_ldap_socket_session(environ) -> bool:
+def _verify_ldap_socket_session(environ) -> str | None:
     if not _ldap_session_manager:
-        return False
+        return None
     cookie_header = _header_from_environ(environ, "cookie")
     cookie = _cookie_from_header(cookie_header, _ldap_cookie_name())
     if not cookie:
@@ -349,7 +361,7 @@ def _verify_ldap_socket_session(environ) -> bool:
                         primary_ip,
                         candidate_user_agent == user_agent,
                     )
-                return True
+                return username
 
     logger.info(
         "LDAP socket auth failed: invalid session cookie for client_ip=%s "
@@ -358,7 +370,7 @@ def _verify_ldap_socket_session(environ) -> bool:
         client_ips,
         bool(user_agent),
     )
-    return False
+    return None
 
 @sio.on("connect")
 async def on_connect(sid, environ):
@@ -369,9 +381,11 @@ async def on_connect(sid, environ):
     logger.info("Client connected: %s (from %s)", sid, remote)
     if _ldap_enabled:
         try:
-            if _verify_ldap_socket_session(environ):
+            username = _verify_ldap_socket_session(environ)
+            if username:
                 async with _auth_lock:
                     _authenticated_sids.add(sid)
+                    _authenticated_users[sid] = username
                 logger.info("LDAP socket authenticated: %s", sid)
         except Exception:
             logger.warning("LDAP session validation failed", exc_info=True)
@@ -382,6 +396,7 @@ async def on_disconnect(sid):
     await ssh_manager.unmap_sid(sid)
     async with _auth_lock:
         _authenticated_sids.discard(sid)
+        _authenticated_users.pop(sid, None)
     logger.info("Client disconnected: %s", sid)
 
 
@@ -396,9 +411,11 @@ async def _require_auth(sid: str, tab_id: str) -> bool:
             authenticated = sid in _authenticated_sids
         if not authenticated:
             environ = sio.get_environ(sid)
-            if environ and _verify_ldap_socket_session(environ):
+            username = _verify_ldap_socket_session(environ) if environ else None
+            if username:
                 async with _auth_lock:
                     _authenticated_sids.add(sid)
+                    _authenticated_users[sid] = username
                 authenticated = True
         if not authenticated:
             logger.info("Blocking unauthenticated socket event for sid=%s tab=%s", sid, tab_id)
@@ -522,6 +539,27 @@ async def on_ssh_input(sid, data):
         return {"ok": False, "error": "Authentication required."}
     if isinstance(input_data, str) and len(input_data) > 1_048_576:
         return {"ok": False, "error": "Input too large."}
+    # Record the raw Socket.IO chunk, rather than attempting to infer shell
+    # commands. That preserves pasted text, escape sequences, and individual
+    # keystrokes exactly as the SSH layer receives them. This is LDAP-only.
+    if _ldap_enabled and isinstance(input_data, (str, bytes)):
+        async with _auth_lock:
+            ldap_username = _authenticated_users.get(sid)
+        if ldap_username:
+            try:
+                target = await ssh_manager.get_session_target(session_id, tab_id)
+                ssh_host, ssh_port, ssh_username = target or (None, None, None)
+                await audit_store.record_terminal_input(
+                    ldap_username=ldap_username,
+                    session_id=session_id,
+                    tab_id=tab_id,
+                    input_data=input_data,
+                    ssh_host=ssh_host,
+                    ssh_port=ssh_port,
+                    ssh_username=ssh_username,
+                )
+            except Exception:
+                logger.exception("Failed to record terminal input audit event")
     await ssh_manager.handle_input(session_id, tab_id, input_data)
     return {"ok": True}
 

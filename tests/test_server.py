@@ -292,6 +292,27 @@ class TestLdapAuthGating:
         manager_mock.connect.assert_awaited_once()
         assert "sid-lazy" in server_module._authenticated_sids
 
+    @pytest.mark.asyncio
+    async def test_ssh_input_records_raw_input_for_authenticated_ldap_user(self):
+        from torrus.server import on_ssh_input
+
+        import torrus.server as server_module
+
+        server_module._authenticated_sids.add("auth-sid")
+        server_module._authenticated_users["auth-sid"] = "alice"
+        with patch.object(server_module.ssh_manager, "handle_input", AsyncMock()), \
+             patch.object(server_module.ssh_manager, "get_session_target", AsyncMock(return_value=("db.example", 22, "root"))), \
+             patch("torrus.server.audit_store.record_terminal_input", AsyncMock()) as record:
+            result = await on_ssh_input(
+                "auth-sid", {"session_id": "sess1", "tab_id": "tab1", "data": "echo hi\r"}
+            )
+
+        assert result == {"ok": True}
+        record.assert_awaited_once_with(
+            ldap_username="alice", session_id="sess1", tab_id="tab1", input_data="echo hi\r",
+            ssh_host="db.example", ssh_port=22, ssh_username="root",
+        )
+
 
 class TestSessionRateLimit:
     """Per-sid session count limits must be enforced."""

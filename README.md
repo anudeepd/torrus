@@ -53,6 +53,22 @@ When LDAP is enabled, a logout button appears in the top-right corner of the tab
 
 See the [ldapgate README](https://github.com/anudeepd/ldapgate) for config file documentation.
 
+### Terminal input audit
+
+LDAP deployments persist every raw terminal-input chunk, including individual
+keystrokes and pasted text. It intentionally does not record terminal output
+or the password supplied while opening an SSH connection. Audit data is stored
+at `~/.local/share/torrus/audit.db` by default (or `TORRUS_AUDIT_DB` when set).
+
+```bash
+torrus audit show --user alice
+torrus audit purge --older-than 90
+```
+
+`audit show` escapes control characters so viewing an event cannot replay its
+terminal escape sequences. Restrict access to the audit database: raw input may
+include commands, secrets pasted at a prompt, and other sensitive content.
+
 ## Development
 
 Requires [uv](https://github.com/astral-sh/uv).
