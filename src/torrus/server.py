@@ -141,6 +141,11 @@ _RATE_LIMIT_WINDOW_SEC = 60
 _RATE_LIMIT_MAX = 10
 _connection_attempts: dict[str, list[float]] = {}
 
+# Per-session/tab input buffers for command-level audit
+_input_buffers: dict[tuple[str, str], bytearray] = {}
+_input_buffer_lock = asyncio.Lock()
+_MAX_INPUT_BUFFER = 1_048_576
+
 # Combined ASGI app — uvicorn runs this
 app = socketio.ASGIApp(sio, other_asgi_app=fastapi_app)
 
@@ -528,6 +533,40 @@ async def on_ssh_connect(sid, data):
     )
 
 
+def _extract_commands(buffer: bytearray, incoming: bytes) -> list[str]:
+    """Append incoming bytes to *buffer* and extract complete command lines.
+
+    Lines are delimited by ``\\r\\n``, ``\\n``, or ``\\r``.  Each extracted line
+    has ANSI escape sequences stripped before being returned.  Partial lines
+    remain in *buffer* for the next chunk.
+    """
+    if incoming:
+        buffer.extend(incoming)
+
+    commands: list[str] = []
+    while True:
+        idx = -1
+        sep_len = 0
+        for sep in (b'\r\n', b'\n', b'\r'):
+            i = buffer.find(sep)
+            if i != -1 and (idx == -1 or i < idx):
+                idx = i
+                sep_len = len(sep)
+
+        if idx == -1:
+            break
+
+        cmd_bytes = buffer[:idx]
+        del buffer[:idx + sep_len]
+
+        cmd_text = cmd_bytes.decode("utf-8", errors="replace")
+        cleaned = audit_store.strip_escape(cmd_text).strip()
+        if cleaned:
+            commands.append(cleaned)
+
+    return commands
+
+
 @sio.on("ssh:input")
 async def on_ssh_input(sid, data):
     session_id = data.get("session_id", "")
@@ -539,27 +578,40 @@ async def on_ssh_input(sid, data):
         return {"ok": False, "error": "Authentication required."}
     if isinstance(input_data, str) and len(input_data) > 1_048_576:
         return {"ok": False, "error": "Input too large."}
-    # Record the raw Socket.IO chunk, rather than attempting to infer shell
-    # commands. That preserves pasted text, escape sequences, and individual
-    # keystrokes exactly as the SSH layer receives them. This is LDAP-only.
+    # Buffer input and record complete commands (lines delimited by Enter).
     if _ldap_enabled and isinstance(input_data, (str, bytes)):
         async with _auth_lock:
             ldap_username = _authenticated_users.get(sid)
         if ldap_username:
-            try:
-                target = await ssh_manager.get_session_target(session_id, tab_id)
-                ssh_host, ssh_port, ssh_username = target or (None, None, None)
-                await audit_store.record_terminal_input(
-                    ldap_username=ldap_username,
-                    session_id=session_id,
-                    tab_id=tab_id,
-                    input_data=input_data,
-                    ssh_host=ssh_host,
-                    ssh_port=ssh_port,
-                    ssh_username=ssh_username,
-                )
-            except Exception:
-                logger.exception("Failed to record terminal input audit event")
+            target = await ssh_manager.get_session_target(session_id, tab_id)
+            ssh_host, ssh_port, ssh_username = target or (None, None, None)
+
+            raw = input_data.encode("utf-8", errors="replace") if isinstance(input_data, str) else input_data
+
+            async with _input_buffer_lock:
+                key = (session_id, tab_id)
+                if key not in _input_buffers:
+                    _input_buffers[key] = bytearray()
+                buf = _input_buffers[key]
+
+                if len(buf) + len(raw) > _MAX_INPUT_BUFFER:
+                    buf.clear()
+
+                commands = _extract_commands(buf, raw)
+
+            for cmd in commands:
+                try:
+                    await audit_store.record_command_event(
+                        ldap_username=ldap_username,
+                        session_id=session_id,
+                        tab_id=tab_id,
+                        command=cmd,
+                        ssh_host=ssh_host,
+                        ssh_port=ssh_port,
+                        ssh_username=ssh_username,
+                    )
+                except Exception:
+                    logger.exception("Failed to record command audit event")
     await ssh_manager.handle_input(session_id, tab_id, input_data)
     return {"ok": True}
 
@@ -589,6 +641,8 @@ async def on_ssh_disconnect(sid, data):
     if not await _require_auth(sid, tab_id):
         return
     await ssh_manager.disconnect_session(session_id, tab_id)
+    async with _input_buffer_lock:
+        _input_buffers.pop((session_id, tab_id), None)
 
 
 @sio.on("ssh:clone")

@@ -1,11 +1,33 @@
-"""Persistent raw terminal-input audit storage for LDAP deployments."""
+"""Persistent terminal command audit storage for LDAP deployments."""
 
 from __future__ import annotations
 
 import os
+import re
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+
+_ANSI_RE = re.compile(
+    r'\x1B\[[\d;]*[A-Za-z]'          # CSI sequences
+    r'|\x1B\].*?(?:\x1B\\|\x07)'     # OSC sequences (ST or BEL terminated)
+    r'|\x1B[\x40-\x5F]'              # 2-byte escape sequences
+    r'|[\x00-\x07\x0b\x0c\x0e-\x1f]' # control chars except tab(\t), BS(\b), CR(\r), LF(\n), DEL(\x7f)
+)
+
+
+def strip_escape(text: str) -> str:
+    """Remove ANSI escape sequences and control characters from terminal text."""
+    text = _ANSI_RE.sub('', text)
+    result: list[str] = []
+    for ch in text:
+        if ch in ('\b', '\x7f'):
+            if result:
+                result.pop()
+        else:
+            result.append(ch)
+    return ''.join(result)
 
 
 def _db_path() -> Path:
@@ -66,6 +88,24 @@ async def record_terminal_input(*, ldap_username: str, session_id: str, tab_id: 
                                 ssh_port: int | None = None, ssh_username: str | None = None) -> None:
     """Store one Socket.IO input payload exactly as bytes received by the SSH layer."""
     raw = input_data.encode("utf-8", errors="replace") if isinstance(input_data, str) else input_data
+    occurred_at = datetime.now(timezone.utc).isoformat()
+    with _connect() as db:
+        db.execute(
+            "INSERT INTO terminal_input_events "
+            "(occurred_at, ldap_username, session_id, tab_id, ssh_host, ssh_port, ssh_username, input_data) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (occurred_at, ldap_username, session_id, tab_id, ssh_host, ssh_port, ssh_username, raw),
+        )
+
+
+async def record_command_event(*, ldap_username: str, session_id: str, tab_id: str,
+                                command: str, ssh_host: str | None = None,
+                                ssh_port: int | None = None, ssh_username: str | None = None) -> None:
+    """Store one complete command (terminated by Enter) for audit."""
+    cleaned = strip_escape(command).strip()
+    if not cleaned:
+        return
+    raw = cleaned.encode("utf-8", errors="replace")
     occurred_at = datetime.now(timezone.utc).isoformat()
     with _connect() as db:
         db.execute(
