@@ -63,12 +63,14 @@ def reset_server_state():
 
     server_module._authenticated_sids.clear()
     server_module._authenticated_users.clear()
+    server_module._input_buffers.clear()
     server_module._ldap_enabled = False
     server_module._ldap_config = None
     server_module._ldap_session_manager = None
     yield
     server_module._authenticated_sids.clear()
     server_module._authenticated_users.clear()
+    server_module._input_buffers.clear()
     server_module._ldap_enabled = False
     server_module._ldap_config = None
     server_module._ldap_session_manager = None

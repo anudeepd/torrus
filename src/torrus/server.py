@@ -141,8 +141,10 @@ _RATE_LIMIT_WINDOW_SEC = 60
 _RATE_LIMIT_MAX = 10
 _connection_attempts: dict[str, list[float]] = {}
 
-# Per-session/tab input buffers for command-level audit
-_input_buffers: dict[tuple[str, str], bytearray] = {}
+# Per-socket/session/tab input buffers for command-level audit. A reconnect gets
+# a new socket id, so it cannot complete an unfinished command from another
+# authenticated browser session.
+_input_buffers: dict[tuple[str, str, str], bytearray] = {}
 _input_buffer_lock = asyncio.Lock()
 _MAX_INPUT_BUFFER = 1_048_576
 
@@ -402,6 +404,9 @@ async def on_disconnect(sid):
     async with _auth_lock:
         _authenticated_sids.discard(sid)
         _authenticated_users.pop(sid, None)
+    async with _input_buffer_lock:
+        for key in [key for key in _input_buffers if key[0] == sid]:
+            del _input_buffers[key]
     logger.info("Client disconnected: %s", sid)
 
 
@@ -589,7 +594,7 @@ async def on_ssh_input(sid, data):
             raw = input_data.encode("utf-8", errors="replace") if isinstance(input_data, str) else input_data
 
             async with _input_buffer_lock:
-                key = (session_id, tab_id)
+                key = (sid, session_id, tab_id)
                 if key not in _input_buffers:
                     _input_buffers[key] = bytearray()
                 buf = _input_buffers[key]
@@ -642,7 +647,7 @@ async def on_ssh_disconnect(sid, data):
         return
     await ssh_manager.disconnect_session(session_id, tab_id)
     async with _input_buffer_lock:
-        _input_buffers.pop((session_id, tab_id), None)
+        _input_buffers.pop((sid, session_id, tab_id), None)
 
 
 @sio.on("ssh:clone")

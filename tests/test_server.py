@@ -507,3 +507,15 @@ class TestSocketDisconnect:
             server_module.ssh_manager = original_manager
 
         manager.unmap_sid.assert_awaited_once_with("sid-1")
+
+    @pytest.mark.asyncio
+    async def test_on_disconnect_discards_partial_command_buffers(self):
+        from torrus import server as server_module
+
+        server_module._input_buffers[("sid-1", "session-1", "tab-1")] = bytearray(b"git sta")
+        server_module._input_buffers[("sid-2", "session-1", "tab-1")] = bytearray(b"keep")
+        with patch.object(server_module.ssh_manager, "unmap_sid", AsyncMock()):
+            await server_module.on_disconnect("sid-1")
+
+        assert ("sid-1", "session-1", "tab-1") not in server_module._input_buffers
+        assert server_module._input_buffers[("sid-2", "session-1", "tab-1")] == b"keep"
