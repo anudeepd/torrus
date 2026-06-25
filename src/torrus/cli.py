@@ -1,5 +1,4 @@
 import json
-import logging
 import os
 import threading
 import webbrowser
@@ -8,24 +7,13 @@ from pathlib import Path
 import click
 import uvicorn
 
+from torrus.logging_utils import configure_logging
+
 
 @click.group()
 def main():
     """torrus — web-based SSH terminal."""
     pass
-
-
-def _configure_logging(log_file: Path | None) -> None:
-    handlers: list[logging.Handler] = [logging.StreamHandler()]
-    if log_file:
-        log_file.parent.mkdir(parents=True, exist_ok=True)
-        handlers.append(logging.FileHandler(log_file, encoding="utf-8"))
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)-8s %(name)s %(message)s",
-        datefmt="%H:%M:%S",
-        handlers=handlers,
-    )
 
 
 @main.command()
@@ -48,7 +36,7 @@ def serve(host, port, no_browser, reload, ldap_config, ssl_keyfile, ssl_certfile
         os.environ["TORRUS_LDAP_CONFIG"] = ldap_config
         click.echo(f"LDAP authentication enabled ({ldap_config})")
 
-    _configure_logging(log_file)
+    configure_logging(log_file)
     if log_file:
         os.environ["TORRUS_LOG_FILE"] = str(log_file)
 

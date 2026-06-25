@@ -1042,7 +1042,7 @@ wheels = [
 
 [[package]]
 name = "torrus"
-version = "0.1.33"
+version = "0.1.34"
 source = { editable = "." }
 dependencies = [
     { name = "aiofiles" },

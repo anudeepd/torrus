@@ -20,17 +20,15 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from torrus import audit_store
+from torrus.logging_utils import configure_logging, suppress_routine_polling_logs
 from torrus.ssh_manager import SSHManager
 
 logger = logging.getLogger("torrus.server")
 
 if _log_file := os.getenv("TORRUS_LOG_FILE"):
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)-8s %(name)s %(message)s",
-        datefmt="%H:%M:%S",
-        handlers=[logging.StreamHandler(), logging.FileHandler(_log_file, encoding="utf-8")],
-    )
+    configure_logging(Path(_log_file))
+else:
+    suppress_routine_polling_logs()
 
 _SAFE_ID = re.compile(r'^[a-zA-Z0-9_\-]+$')
 _DEV_MODE = bool(os.getenv("TORRUS_DEV"))
