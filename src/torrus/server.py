@@ -201,6 +201,8 @@ if _ldap_config_path:
             _ldap_config.proxy.session_ttl,
             revocation_path=_ldap_config.proxy.revocation_path,
             max_sessions_per_user=_ldap_config.proxy.max_sessions_per_user,
+            bind_client=_ldap_config.proxy.bind_client,
+            idle_timeout=getattr(_ldap_config.proxy, "idle_timeout", 0),
         )
     _ldap_enabled = True
 
@@ -415,17 +417,18 @@ async def on_disconnect(sid):
 async def _require_auth(sid: str, tab_id: str) -> bool:
     """Return False and emit an error if LDAP is enabled but the sid is not authenticated."""
     if _ldap_enabled:
-        async with _auth_lock:
-            authenticated = sid in _authenticated_sids
+        environ = sio.get_environ(sid)
+        username = _verify_ldap_socket_session(environ) if environ else None
+        authenticated = bool(username)
+        if authenticated:
+            async with _auth_lock:
+                _authenticated_sids.add(sid)
+                _authenticated_users[sid] = username
         if not authenticated:
-            environ = sio.get_environ(sid)
-            username = _verify_ldap_socket_session(environ) if environ else None
-            if username:
-                async with _auth_lock:
-                    _authenticated_sids.add(sid)
-                    _authenticated_users[sid] = username
-                authenticated = True
-        if not authenticated:
+            await ssh_manager.unmap_sid(sid)
+            async with _auth_lock:
+                _authenticated_sids.discard(sid)
+                _authenticated_users.pop(sid, None)
             logger.info("Blocking unauthenticated socket event for sid=%s tab=%s", sid, tab_id)
             await sio.emit(
                 "ssh:error",

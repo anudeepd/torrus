@@ -88,17 +88,24 @@ class TestLdapAuthGating:
 
     @pytest.mark.asyncio
     async def test_ssh_connect_allowed_with_authenticated_sid(self):
-        from torrus.server import on_ssh_connect, ssh_manager
+        from torrus.server import on_ssh_connect
 
         sio_mock = MagicMock()
         sio_mock.emit = AsyncMock()
+        sio_mock.get_environ.return_value = {
+            "REMOTE_ADDR": "1.2.3.4",
+            "HTTP_COOKIE": "ldapgate_session=abc",
+        }
 
         import torrus.server as server_module
 
         server_module._authenticated_sids.add("auth-sid")
+        server_module._ldap_session_manager = MagicMock()
+        server_module._ldap_session_manager.verify_session.return_value = "alice"
         server_module.ssh_manager = MagicMock()
         server_module.ssh_manager.sid_session_count.return_value = 0
         server_module.ssh_manager.connect = AsyncMock()
+        server_module.ssh_manager.unmap_sid = AsyncMock()
 
         with patch("torrus.server.sio", sio_mock):
             await on_ssh_connect(
@@ -116,6 +123,69 @@ class TestLdapAuthGating:
             for call in sio_mock.emit.call_args_list:
                 assert call[0][1].get("code") != "auth_required"
             server_module.ssh_manager.connect.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_expired_socket_auth_detaches_without_destroying_ssh_session(self):
+        from torrus.server import on_ssh_input
+
+        import torrus.server as server_module
+
+        sio_mock = MagicMock()
+        sio_mock.emit = AsyncMock()
+        sio_mock.get_environ.return_value = {
+            "REMOTE_ADDR": "1.2.3.4",
+            "HTTP_COOKIE": "ldapgate_session=expired",
+        }
+        ssh_manager = MagicMock()
+        ssh_manager.unmap_sid = AsyncMock()
+        ssh_manager.handle_input = AsyncMock()
+        ssh_manager.disconnect_session = AsyncMock()
+
+        server_module._authenticated_sids.add("auth-sid")
+        server_module._authenticated_users["auth-sid"] = "alice"
+        server_module._ldap_session_manager = MagicMock()
+        server_module._ldap_session_manager.verify_session.return_value = None
+        server_module.ssh_manager = ssh_manager
+
+        with patch("torrus.server.sio", sio_mock):
+            result = await on_ssh_input(
+                "auth-sid",
+                {"session_id": "sess1", "tab_id": "tab1", "data": "ls\r"},
+            )
+
+        assert result == {"ok": False, "error": "Authentication required."}
+        ssh_manager.unmap_sid.assert_awaited_once_with("auth-sid")
+        ssh_manager.handle_input.assert_not_called()
+        ssh_manager.disconnect_session.assert_not_called()
+        assert "auth-sid" not in server_module._authenticated_sids
+
+    @pytest.mark.asyncio
+    async def test_reauthenticated_socket_can_restore_existing_session(self):
+        from torrus.server import on_session_register
+
+        import torrus.server as server_module
+
+        sio_mock = MagicMock()
+        sio_mock.emit = AsyncMock()
+        sio_mock.get_environ.return_value = {
+            "REMOTE_ADDR": "1.2.3.4",
+            "HTTP_COOKIE": "ldapgate_session=fresh",
+        }
+        ssh_manager = MagicMock()
+        ssh_manager.restore_session = AsyncMock(return_value="active")
+        ssh_manager.force_redraw = AsyncMock()
+        ssh_manager.unmap_sid = AsyncMock()
+
+        server_module._ldap_session_manager = MagicMock()
+        server_module._ldap_session_manager.verify_session.return_value = "alice"
+        server_module.ssh_manager = ssh_manager
+
+        with patch("torrus.server.sio", sio_mock):
+            await on_session_register("auth-sid", {"session_id": "sess1", "tab_id": "tab1"})
+
+        ssh_manager.restore_session.assert_awaited_once_with("auth-sid", "sess1", "tab1")
+        ssh_manager.force_redraw.assert_awaited_once_with("sess1", "tab1")
+        assert server_module._authenticated_users["auth-sid"] == "alice"
 
     @pytest.mark.asyncio
     async def test_on_connect_records_auth_sid_when_cookie_present(self):
@@ -300,7 +370,15 @@ class TestLdapAuthGating:
 
         server_module._authenticated_sids.add("auth-sid")
         server_module._authenticated_users["auth-sid"] = "alice"
-        with patch.object(server_module.ssh_manager, "handle_input", AsyncMock()), \
+        server_module._ldap_session_manager = MagicMock()
+        server_module._ldap_session_manager.verify_session.return_value = "alice"
+        sio_mock = MagicMock()
+        sio_mock.get_environ.return_value = {
+            "REMOTE_ADDR": "1.2.3.4",
+            "HTTP_COOKIE": "ldapgate_session=abc",
+        }
+        with patch("torrus.server.sio", sio_mock), \
+             patch.object(server_module.ssh_manager, "handle_input", AsyncMock()), \
              patch.object(server_module.ssh_manager, "get_session_target", AsyncMock(return_value=("db.example", 22, "root"))), \
              patch("torrus.server.audit_store.record_command_event", AsyncMock()) as record:
             result = await on_ssh_input(
@@ -430,8 +508,14 @@ class TestPrivateHostPolicy:
         server_module._ldap_enabled = True
         server_module._ALLOW_PRIVATE_HOSTS_WITHOUT_LDAP = True
         server_module._authenticated_sids.add("auth-sid")
+        server_module._ldap_session_manager = MagicMock()
+        server_module._ldap_session_manager.verify_session.return_value = "alice"
         sio_mock = MagicMock()
         sio_mock.emit = AsyncMock()
+        sio_mock.get_environ.return_value = {
+            "REMOTE_ADDR": "1.2.3.4",
+            "HTTP_COOKIE": "ldapgate_session=abc",
+        }
         original_manager = server_module.ssh_manager
         manager_mock = MagicMock()
         manager_mock.sid_session_count.return_value = 0

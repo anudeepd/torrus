@@ -10,5 +10,7 @@ ldap:
 proxy:
     backend_url: http://localhost:8080
     secret_key: Z9x#W8v$U7tR6s%Q5p!O4n@M3l^K2j*H1gF0dE
+    # Optional browser inactivity timeout in seconds. 0 disables idle expiry.
+    idle_timeout: 0
     app_name: Torrus
     secure_cookies: true
