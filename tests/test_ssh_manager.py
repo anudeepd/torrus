@@ -2,7 +2,7 @@
 
 import asyncio
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 
 async def _cleanup_manager(manager):
@@ -302,7 +302,7 @@ class TestReadLoopCleanup:
 
     @pytest.mark.asyncio
     async def test_read_loop_cancels_write_loop(self, mock_sio, mock_paramiko_client):
-        from torrus.ssh_manager import SSHManager, _blocking_read
+        from torrus.ssh_manager import SSHManager
 
         manager = SSHManager(mock_sio)
         manager.start_background_tasks()

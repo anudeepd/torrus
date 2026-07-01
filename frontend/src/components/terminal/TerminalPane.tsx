@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback, useMemo } from 'react'
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
@@ -60,6 +60,7 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
   const termRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
   const errorRef = useRef<string>('')
+  const [connectionError, setConnectionError] = useState('')
   // Suppress xterm onData during session restore to prevent terminal query
   // responses (OSC 11, DSR, DA) from being echoed back to the remote shell
   const suppressInputRef = useRef(true)
@@ -398,6 +399,7 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
     const onConnected = ({ tab_id }: { tab_id: string }) => {
       if (tab_id !== tabId) return
       errorRef.current = ''
+      setConnectionError('')
       suppressInputRef.current = false
       setTabStatus(tabId, 'connected')
       requestAnimationFrame(() => {
@@ -412,6 +414,7 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
     const onError = ({ tab_id, message }: { tab_id: string; message: string }) => {
       if (tab_id !== tabId) return
       errorRef.current = message
+      setConnectionError(message)
       suppressInputRef.current = true
       setTabStatus(tabId, 'dead')
     }
@@ -483,7 +486,7 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
           initialHost={tab?.host ?? undefined}
           initialPort={tab?.port ?? undefined}
           initialUsername={tab?.username ?? undefined}
-          error={tab?.status === 'dead' ? (errorRef.current || 'Connection closed.') : undefined}
+          error={tab?.status === 'dead' ? (connectionError || 'Connection closed.') : undefined}
           onConnect={handleConnect}
         />
       )}

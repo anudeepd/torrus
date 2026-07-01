@@ -151,6 +151,7 @@ export default function TabBar({ onAddTab, onCloseTab, onCloneTab, onDuplicateTa
   // Reset save dialog if its tab is closed
   useEffect(() => {
     if (saveDialog && !tabs.find(t => t.id === saveDialog.tab.id)) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setSaveDialog(null)
     }
   }, [tabs, saveDialog])

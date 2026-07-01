@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, waitFor } from '@testing-library/react'
+import { act, render, waitFor } from '@testing-library/react'
 import { useTerminalStore } from '@/store/terminalStore'
 import { useSettingsStore } from '@/store/settingsStore'
 import { useBroadcastStore } from '@/store/broadcastStore'
@@ -42,12 +42,17 @@ describe('TerminalPane', () => {
   })
 
   afterEach(() => {
-    useTerminalStore.setState({ sessionId: '', tabs: [], activeTabId: null })
+    act(() => {
+      useTerminalStore.setState({ sessionId: '', tabs: [], activeTabId: null })
+      useBroadcastStore.setState({ enabled: false, excludedTabIds: [] })
+    })
   })
 
   it('remains interactive when remounted with an already-connected tab (split-exit regression)', async () => {
     const tabId = 'tab-1'
-    seedStores(tabId, 'connected')
+    act(() => {
+      seedStores(tabId, 'connected')
+    })
 
     const socket = createMockSocket()
     render(
@@ -66,7 +71,9 @@ describe('TerminalPane', () => {
     const term = mockTerminalInstances[mockTerminalInstances.length - 1]
     expect(term.textarea).toBeInTheDocument()
 
-    term.simulateData('hello')
+    act(() => {
+      term.simulateData('hello')
+    })
 
     expect(socket.emit).toHaveBeenCalledWith(
       'ssh:input',
@@ -80,7 +87,9 @@ describe('TerminalPane', () => {
 
   it('suppresses input when mounted with a disconnected tab', async () => {
     const tabId = 'tab-2'
-    seedStores(tabId, 'disconnected')
+    act(() => {
+      seedStores(tabId, 'disconnected')
+    })
 
     const socket = createMockSocket()
     render(
@@ -97,7 +106,9 @@ describe('TerminalPane', () => {
     })
 
     const term = mockTerminalInstances[mockTerminalInstances.length - 1]
-    term.simulateData('hello')
+    act(() => {
+      term.simulateData('hello')
+    })
 
     expect(socket.emit).not.toHaveBeenCalledWith(
       'ssh:input',
@@ -107,7 +118,9 @@ describe('TerminalPane', () => {
 
   it('reuses the same terminal instance on remount (split-exit buffer preservation)', async () => {
     const tabId = 'tab-3'
-    seedStores(tabId, 'connected')
+    act(() => {
+      seedStores(tabId, 'connected')
+    })
 
     const socket = createMockSocket()
 
@@ -130,8 +143,10 @@ describe('TerminalPane', () => {
 
     const firstTerm = mockTerminalInstances[0]
 
-    rerender(<Wrapper show={false} />)
-    rerender(<Wrapper show={true} />)
+    act(() => {
+      rerender(<Wrapper show={false} />)
+      rerender(<Wrapper show={true} />)
+    })
 
     await waitFor(() => {
       expect(mockTerminalInstances.length).toBe(1)

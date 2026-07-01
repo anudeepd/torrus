@@ -173,7 +173,7 @@ def _ensure_ldapgate_static_paths(config) -> None:
     if getattr(proxy_config, "session_cookie_name", "ldapgate_session") == "ldapgate_session":
         proxy_config.session_cookie_name = "torrus_session"
     static_paths = list(getattr(proxy_config, "static_paths", []) or [])
-    for path in ("/favicon.ico",):
+    for path in ("/favicon.svg", "/favicon.ico"):
         if path not in static_paths:
             static_paths.append(path)
     proxy_config.static_paths = static_paths
@@ -205,6 +205,15 @@ if _ldap_config_path:
             idle_timeout=getattr(_ldap_config.proxy, "idle_timeout", 0),
         )
     _ldap_enabled = True
+
+
+@fastapi_app.get("/favicon.svg", include_in_schema=False)
+async def favicon():
+    if _static:
+        fav = _static / "favicon.svg"
+        if fav.exists():
+            return FileResponse(str(fav), media_type="image/svg+xml")
+    return JSONResponse(status_code=404, content={"detail": "Not found"})
 
 
 @fastapi_app.get("/api/config", include_in_schema=False)

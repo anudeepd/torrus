@@ -163,7 +163,7 @@ function ResizeHandle({ dir, onDrag }: { dir: 'h' | 'v'; onDrag: (delta: number)
     dragging.current = false
     try {
       (e.target as HTMLElement).releasePointerCapture(e.pointerId)
-    } catch {}
+    } catch { /* releasePointerCapture may throw if pointer not captured */ }
   }, [])
 
   return (

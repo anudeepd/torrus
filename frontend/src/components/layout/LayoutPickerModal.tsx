@@ -138,6 +138,7 @@ export default function LayoutPickerModal({ tabs, onApply, onClose }: Props) {
 
   // Resize slot assignments when preset changes
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setSlotTabIds(prev => {
       const next = Array.from({ length: selected.slots }, (_, i) => prev[i] ?? tabs[i]?.id ?? '')
       return next

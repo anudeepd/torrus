@@ -1,8 +1,7 @@
 """Tests for torrus.cli Click commands."""
 
 from click.testing import CliRunner
-import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 
 class TestServeCommand:
@@ -28,8 +27,10 @@ class TestServeCommand:
         from torrus.cli import serve
 
         runner = CliRunner()
-        with patch("torrus.cli.webbrowser.open") as mock_browser, \
-             patch("torrus.cli.uvicorn.run") as mock_uvicorn:
+        with (
+            patch("torrus.cli.webbrowser.open"),
+            patch("torrus.cli.uvicorn.run") as mock_uvicorn,
+        ):
             result = runner.invoke(serve, ["--host", "0.0.0.0", "--port", "9000", "--no-browser"])
 
         assert result.exit_code == 0
@@ -52,8 +53,10 @@ class TestServeCommand:
                 pass
 
         runner = CliRunner()
-        with patch("torrus.cli.threading.Timer", FakeTimer), \
-             patch("torrus.cli.uvicorn.run") as mock_uvicorn:
+        with (
+            patch("torrus.cli.threading.Timer", FakeTimer),
+            patch("torrus.cli.uvicorn.run"),
+        ):
             result = runner.invoke(serve)
 
         assert result.exit_code == 0

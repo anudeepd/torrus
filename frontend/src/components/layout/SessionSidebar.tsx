@@ -204,6 +204,7 @@ export default function SessionSidebar({ isOpen, onToggle, onLoadSession }: Sess
   // Clear selection if server is removed
   useEffect(() => {
     if (selectedId && !servers.find(s => s.id === selectedId)) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setSelectedId(null)
     }
   }, [servers, selectedId])

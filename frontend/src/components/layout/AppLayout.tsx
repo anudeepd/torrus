@@ -10,6 +10,7 @@ import BroadcastPickerModal from './BroadcastPickerModal'
 import SessionSidebar from './SessionSidebar'
 import TerminalPane from '@/components/terminal/TerminalPane'
 import SettingsDialog from '@/components/settings/SettingsDialog'
+import { AUTH_REDIRECT_EVENT, redirectToLdapLogin } from '@/utils/authRedirect'
 import type { PaneNode } from '@/store/layoutStore'
 import type { SavedServer, Tab } from '@/types'
 
@@ -17,6 +18,10 @@ type PendingClose = {
   kind: 'tab' | 'pane'
   tabId: string
 } | null
+
+type SshErrorPayload = {
+  code?: string
+}
 
 function getTabDisplayName(tab: Tab | undefined): string {
   if (!tab) return 'this tab'
@@ -38,6 +43,7 @@ export default function AppLayout() {
   // true when split was initiated by broadcast — exiting broadcast exits split too
   const [splitOwnedByBroadcast, setSplitOwnedByBroadcast] = useState(false)
   const [pendingClose, setPendingClose] = useState<PendingClose>(null)
+  const authRedirectingRef = useRef(false)
 
   const shouldWarnBeforeClosingTab = useCallback((tabId: string) => {
     const tab = useTerminalStore.getState().tabs.find(t => t.id === tabId)
@@ -48,6 +54,7 @@ export default function AppLayout() {
   // Warn before close/reload if any active SSH sessions
   useEffect(() => {
     const handler = (e: BeforeUnloadEvent) => {
+      if (authRedirectingRef.current) return
       const hasActive = useTerminalStore.getState().tabs.some(t => t.status === 'connected')
       if (!hasActive) return
       e.preventDefault()
@@ -57,6 +64,25 @@ export default function AppLayout() {
     window.addEventListener('beforeunload', handler)
     return () => window.removeEventListener('beforeunload', handler)
   }, [])
+
+  useEffect(() => {
+    const onAuthRedirect = () => {
+      authRedirectingRef.current = true
+    }
+    window.addEventListener(AUTH_REDIRECT_EVENT, onAuthRedirect)
+    return () => window.removeEventListener(AUTH_REDIRECT_EVENT, onAuthRedirect)
+  }, [])
+
+  // Socket.IO bypasses FastAPI middleware, so expired LDAP sessions are reported
+  // by socket events. Send the browser through LDAPGate instead of showing the SSH form.
+  useEffect(() => {
+    const onError = (payload: SshErrorPayload | undefined) => {
+      if (payload?.code !== 'auth_required') return
+      redirectToLdapLogin()
+    }
+    socket.on('ssh:error', onError)
+    return () => { socket.off('ssh:error', onError) }
+  }, [socket])
 
   // Register all tabs on socket connect
   useEffect(() => {
@@ -233,9 +259,11 @@ export default function AppLayout() {
   const handleAddTabRef = useRef(handleAddTab)
   const handleCloseTabRef = useRef(handleCloseTab)
   const handleSetActiveTabRef = useRef(handleSetActiveTab)
-  handleAddTabRef.current = handleAddTab
-  handleCloseTabRef.current = handleCloseTab
-  handleSetActiveTabRef.current = handleSetActiveTab
+  useEffect(() => {
+    handleAddTabRef.current = handleAddTab
+    handleCloseTabRef.current = handleCloseTab
+    handleSetActiveTabRef.current = handleSetActiveTab
+  })
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
