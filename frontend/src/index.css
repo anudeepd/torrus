@@ -59,6 +59,16 @@
   }
 }
 
+@layer components {
+  .torrus-tab-strip {
+    scrollbar-color: #334155 #0f172a;
+  }
+
+  .torrus-tab-strip::-webkit-scrollbar-track {
+    background: #0f172a;
+  }
+}
+
 /* xterm.js — make terminal fill its container */
 .xterm {
   height: 100%;

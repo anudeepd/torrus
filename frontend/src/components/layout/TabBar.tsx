@@ -239,7 +239,7 @@ export default function TabBar({ onAddTab, onCloseTab, onCloneTab, onDuplicateTa
 
       {/* Tab buttons */}
       <div className="flex-1 h-full min-w-0 overflow-hidden">
-        <div className="flex h-full flex-nowrap overflow-x-scroll overflow-y-hidden">
+        <div className="torrus-tab-strip flex h-full flex-nowrap overflow-x-scroll overflow-y-hidden">
           {tabs.map(tab => (
             <button
               key={tab.id}
