@@ -8,7 +8,11 @@ export class MockTerminal {
   textarea: HTMLTextAreaElement | null = null
   modes = { bracketedPasteMode: false }
   options: Record<string, unknown> = {}
+  selection = false
+  buffer = { active: { viewportY: 0, baseY: 0 } }
+  scrollToBottom = vi.fn()
   private _dataHandler: ((data: string) => void) | null = null
+  private _keyHandler: ((event: KeyboardEvent) => boolean) | null = null
   constructor() {
     this.textarea = document.createElement('textarea')
     mockTerminalInstances.push(this)
@@ -24,9 +28,11 @@ export class MockTerminal {
   fit() {}
   focus() {}
   dispose() {}
-  write() {}
-  hasSelection() { return false }
-  attachCustomKeyEventHandler() {}
+  write = vi.fn()
+  hasSelection() { return this.selection }
+  attachCustomKeyEventHandler(handler: (event: KeyboardEvent) => boolean) {
+    this._keyHandler = handler
+  }
   attachCustomWheelEventHandler() {}
 
   onData(handler: (data: string) => void) {
@@ -38,6 +44,11 @@ export class MockTerminal {
     if (this._dataHandler) {
       this._dataHandler(data)
     }
+  }
+
+  simulateKey(eventInit: KeyboardEventInit) {
+    const event = new KeyboardEvent('keydown', eventInit)
+    return this._keyHandler?.(event)
   }
 }
 

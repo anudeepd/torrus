@@ -16,10 +16,22 @@ Object.defineProperty(window, 'localStorage', { value: storageMock, writable: tr
 Object.defineProperty(window, 'sessionStorage', { value: storageMock, writable: true })
 
 // Mock ResizeObserver for xterm.js
+export const mockResizeObserverInstances: MockResizeObserver[] = []
+
 class MockResizeObserver {
+  private callback: ResizeObserverCallback
+
+  constructor(callback: ResizeObserverCallback) {
+    this.callback = callback
+    mockResizeObserverInstances.push(this)
+  }
+
   observe() {}
   unobserve() {}
   disconnect() {}
+  trigger() {
+    this.callback([], this)
+  }
 }
 Object.defineProperty(window, 'ResizeObserver', { value: MockResizeObserver, writable: true })
 

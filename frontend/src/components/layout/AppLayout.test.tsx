@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { render, waitFor } from '@testing-library/react'
+import { act, render, waitFor } from '@testing-library/react'
 import { createMockSocket } from '@/test/mocks/socket'
 import { useTerminalStore } from '@/store/terminalStore'
 import { AUTH_REDIRECT_EVENT } from '@/utils/authRedirect'
@@ -15,7 +15,9 @@ async function renderAppLayout() {
   }))
   vi.doMock('@/utils/authRedirect', () => ({
     AUTH_REDIRECT_EVENT,
+    AUTH_LOGOUT_EVENT: 'torrus:auth-logout',
     redirectToLdapLogin,
+    redirectToLdapLoginNow: vi.fn(),
   }))
   vi.doMock('./TabBar', () => ({
     default: () => <div data-testid="tabbar" />,
@@ -89,7 +91,9 @@ describe('AppLayout LDAP auth handling', () => {
 
     await renderAppLayout()
 
-    window.dispatchEvent(new Event(AUTH_REDIRECT_EVENT))
+    act(() => {
+      window.dispatchEvent(new Event(AUTH_REDIRECT_EVENT))
+    })
     const event = new Event('beforeunload', { cancelable: true })
     const allowed = window.dispatchEvent(event)
 

@@ -10,6 +10,8 @@ import BroadcastPickerModal from './BroadcastPickerModal'
 import SessionSidebar from './SessionSidebar'
 import TerminalPane from '@/components/terminal/TerminalPane'
 import SettingsDialog from '@/components/settings/SettingsDialog'
+import Logo from '@/components/ui/Logo'
+import AuthRedirectOverlay from '@/components/ui/AuthRedirectOverlay'
 import { AUTH_REDIRECT_EVENT, redirectToLdapLogin } from '@/utils/authRedirect'
 import type { PaneNode } from '@/store/layoutStore'
 import type { SavedServer, Tab } from '@/types'
@@ -97,7 +99,7 @@ export default function AppLayout() {
     return () => { socket.off('connect', onConnect) }
   }, [socket])
 
-  // Open first tab if none exist
+  // Open first tab on initial load if none were restored.
   useEffect(() => {
     if (tabs.length === 0) addTab()
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
@@ -135,10 +137,7 @@ export default function AppLayout() {
       socket.emit('ssh:disconnect', { session_id: sessionId, tab_id: id })
     }
     closeTab(id)
-    setTimeout(() => {
-      if (useTerminalStore.getState().tabs.length === 0) addTab()
-    }, 0)
-  }, [socket, sessionId, closeTab, addTab, closePane, exitSplitMode, setActiveTab])
+  }, [socket, sessionId, closeTab, closePane, exitSplitMode, setActiveTab])
 
   const handleClosePane = useCallback((tabId: string) => {
     if (shouldWarnBeforeClosingTab(tabId)) {
@@ -325,6 +324,7 @@ export default function AppLayout() {
 
   return (
     <div className="flex h-full bg-surface-950">
+      <AuthRedirectOverlay />
       <SessionSidebar
         isOpen={sidebarOpen}
         onToggle={() => setSidebarOpen(o => !o)}
@@ -347,7 +347,12 @@ export default function AppLayout() {
         />
 
         <div className="flex-1 relative overflow-hidden min-h-0">
-          {layoutRoot && activeTabInLayout ? (
+          {tabs.length === 0 ? (
+            <div className="flex h-full flex-col items-center justify-center gap-4 text-slate-500">
+              <Logo size="lg" showText={false} className="opacity-40" />
+              <p className="text-sm">Open a terminal tab or select a saved session from the sidebar</p>
+            </div>
+          ) : layoutRoot && activeTabInLayout ? (
             <div className="absolute inset-0">
               <SplitPane
                 node={layoutRoot}

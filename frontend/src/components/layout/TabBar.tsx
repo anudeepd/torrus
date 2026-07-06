@@ -8,6 +8,7 @@ import { useBroadcastStore } from '@/store/broadcastStore'
 import Logo from '@/components/ui/Logo'
 import type { Tab } from '@/types'
 import { modKey } from '@/utils/platform'
+import { submitLdapLogout } from '@/utils/authRedirect'
 
 interface TabBarProps {
   onAddTab: () => void
@@ -29,7 +30,7 @@ function submitLogout() {
   form.method = 'POST'
   form.action = '/_auth/logout'
   document.body.appendChild(form)
-  form.submit()
+  submitLdapLogout(form)
 }
 
 function StatusDot({ status }: { status: Tab['status'] }) {
@@ -49,6 +50,14 @@ function getTabDisplayName(tab: Tab): string {
   if (tab.label) return tab.label
   if (tab.host && tab.username) return `${tab.username}@${tab.host}`
   return 'New Connection'
+}
+
+function getTabTitle(tab: Tab): string {
+  const displayName = getTabDisplayName(tab)
+  if (tab.host && tab.username) {
+    return `${displayName} (${tab.username}@${tab.host}${tab.port ? `:${tab.port}` : ''})`
+  }
+  return `${displayName} tab`
 }
 
 interface ContextMenuState {
@@ -213,9 +222,9 @@ export default function TabBar({ onAddTab, onCloseTab, onCloneTab, onDuplicateTa
 
   return (
     <>
-    <div className="h-9 flex-shrink-0 flex items-stretch bg-surface-900 border-b border-surface-800 overflow-x-auto overflow-y-hidden">
+    <div className="h-[42px] flex-shrink-0 flex items-start bg-surface-900 border-b border-surface-800">
       {/* Logo branding */}
-      <div className="flex-shrink-0 flex items-center px-3 border-r border-surface-800">
+      <div className="h-9 flex-shrink-0 flex items-center px-3 border-r border-surface-800">
         <Logo size="sm" showText={true} />
       </div>
 
@@ -223,77 +232,83 @@ export default function TabBar({ onAddTab, onCloseTab, onCloneTab, onDuplicateTa
       <button
         onClick={onAddTab}
         title={`New tab (${modKey}+T)`}
-        className="flex-shrink-0 w-9 flex items-center justify-center text-slate-500 hover:text-slate-300 hover:bg-surface-800 transition-colors border-r border-surface-800"
+        className="h-9 flex-shrink-0 w-9 flex items-center justify-center text-slate-500 hover:text-slate-300 hover:bg-surface-800 transition-colors border-r border-surface-800"
       >
         <Plus className="w-4 h-4" />
       </button>
 
       {/* Tab buttons */}
-      {tabs.map(tab => (
-        <button
-          key={tab.id}
-          data-tab-id={tab.id}
-          onClick={() => onSetActiveTab(tab.id)}
-          onContextMenu={(e) => {
-            e.preventDefault()
-            setContextMenu({ tabId: tab.id, x: e.clientX, y: e.clientY })
-          }}
-          className={clsx(
-            'group flex items-center gap-2 px-3 min-w-32 max-w-48 border-r border-surface-800 transition-colors text-xs font-mono',
-            activeTabId === tab.id
-              ? 'bg-surface-950 text-slate-200 border-b-2 border-b-brand-500'
-              : 'text-slate-500 hover:text-slate-300 hover:bg-surface-800'
-          )}
-        >
-          <StatusDot status={tab.status} />
-
-          {/* Broadcast active indicator */}
-          {broadcastEnabled && tab.status === 'connected' && (
-            <Radio className="flex-shrink-0 w-2.5 h-2.5 text-amber-400" />
-          )}
-
-          {editingTabId === tab.id ? (
-            <input
-              ref={editInputRef}
-              className="flex-1 bg-transparent border-b border-brand-500 outline-none text-xs font-mono text-slate-200 min-w-0"
-              value={editValue}
-              onChange={e => setEditValue(e.target.value)}
-              onKeyDown={e => {
-                if (e.key === 'Enter') confirmEdit()
-                if (e.key === 'Escape') cancelEdit()
+      <div className="flex-1 h-full min-w-0 overflow-hidden">
+        <div className="flex h-full flex-nowrap overflow-x-scroll overflow-y-hidden">
+          {tabs.map(tab => (
+            <button
+              key={tab.id}
+              data-tab-id={tab.id}
+              onClick={() => onSetActiveTab(tab.id)}
+              onContextMenu={(e) => {
+                e.preventDefault()
+                setContextMenu({ tabId: tab.id, x: e.clientX, y: e.clientY })
               }}
-              onBlur={handleEditBlur}
-              onClick={e => e.stopPropagation()}
-            />
-          ) : (
-            <span
-              className="flex-1 truncate text-left"
-              onDoubleClick={(e) => {
-                e.stopPropagation()
-                startEditing(tab)
-              }}
+              title={getTabTitle(tab)}
+              className={clsx(
+                'group h-9 flex flex-shrink-0 items-center gap-2 px-3 min-w-32 max-w-48 border-r border-surface-800 transition-colors text-xs font-mono',
+                activeTabId === tab.id
+                  ? 'bg-surface-950 text-slate-200 border-b-2 border-b-brand-500'
+                  : 'text-slate-500 hover:text-slate-300 hover:bg-surface-800'
+              )}
             >
-              {getTabDisplayName(tab)}
-            </span>
-          )}
+              <StatusDot status={tab.status} />
 
-          <button
-            onClick={(e) => { e.stopPropagation(); onCloseTab(tab.id) }}
-            className="flex-shrink-0 opacity-0 group-hover:opacity-100 hover:text-red-400 transition-opacity p-0.5 rounded"
-            title="Close tab"
-          >
-            <X className="w-3 h-3" />
-          </button>
-        </button>
-      ))}
+              {/* Broadcast active indicator */}
+              {broadcastEnabled && tab.status === 'connected' && (
+                <Radio className="flex-shrink-0 w-2.5 h-2.5 text-amber-400" />
+              )}
+
+              {editingTabId === tab.id ? (
+                <input
+                  ref={editInputRef}
+                  className="flex-1 bg-transparent border-b border-brand-500 outline-none text-xs font-mono text-slate-200 min-w-0"
+                  value={editValue}
+                  onChange={e => setEditValue(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') confirmEdit()
+                    if (e.key === 'Escape') cancelEdit()
+                  }}
+                  onBlur={handleEditBlur}
+                  onClick={e => e.stopPropagation()}
+                />
+              ) : (
+                <span
+                  title={getTabTitle(tab)}
+                  className="flex-1 truncate text-left"
+                  onDoubleClick={(e) => {
+                    e.stopPropagation()
+                    startEditing(tab)
+                  }}
+                >
+                  {getTabDisplayName(tab)}
+                </span>
+              )}
+
+              <button
+                onClick={(e) => { e.stopPropagation(); onCloseTab(tab.id) }}
+                className="flex-shrink-0 opacity-0 group-hover:opacity-100 hover:text-red-400 transition-opacity p-0.5 rounded"
+                title={`Close ${getTabDisplayName(tab)}`}
+              >
+                <X className="w-3 h-3" />
+              </button>
+            </button>
+          ))}
+        </div>
+      </div>
 
       {/* Spacer + Broadcast toggle + Close All + Settings + Logout */}
-      <div className="flex-1" />
+      <div className="h-9 flex-shrink-0 flex items-center">
       {inSplitMode && (
         <button
           onClick={onExitSplit}
           title="Exit split mode"
-          className="flex-shrink-0 flex items-center gap-1.5 px-3 text-xs text-brand-400 bg-brand-500/10 hover:bg-brand-500/20 transition-colors border-l border-surface-800 h-full"
+          className="h-9 flex-shrink-0 flex items-center gap-1.5 px-3 text-xs text-brand-400 bg-brand-500/10 hover:bg-brand-500/20 transition-colors border-l border-surface-800"
         >
           <X className="w-3.5 h-3.5" />
           Exit split
@@ -303,7 +318,7 @@ export default function TabBar({ onAddTab, onCloseTab, onCloneTab, onDuplicateTa
         <button
           onClick={onOpenSplitPicker}
           title="Split layout"
-          className="flex-shrink-0 flex items-center gap-1.5 px-3 text-xs text-slate-500 hover:text-slate-300 hover:bg-surface-800 transition-colors border-l border-surface-800 h-full"
+          className="h-9 flex-shrink-0 flex items-center gap-1.5 px-3 text-xs text-slate-500 hover:text-slate-300 hover:bg-surface-800 transition-colors border-l border-surface-800"
         >
           <Columns2 className="w-3.5 h-3.5" />
           Split
@@ -314,7 +329,7 @@ export default function TabBar({ onAddTab, onCloseTab, onCloneTab, onDuplicateTa
           onClick={onOpenBroadcastPicker}
           title={broadcastEnabled ? 'Broadcast active — click to manage' : 'Broadcast input to multiple terminals'}
           className={clsx(
-            'flex-shrink-0 flex items-center gap-1.5 px-3 text-xs border-l border-surface-800 h-full transition-colors',
+            'h-9 flex-shrink-0 flex items-center gap-1.5 px-3 text-xs border-l border-surface-800 transition-colors',
             broadcastEnabled
               ? 'text-amber-400 bg-amber-400/10 hover:bg-amber-400/20'
               : 'text-slate-500 hover:text-slate-300 hover:bg-surface-800'
@@ -324,11 +339,11 @@ export default function TabBar({ onAddTab, onCloseTab, onCloneTab, onDuplicateTa
           Broadcast
         </button>
       )}
-      {tabs.length > 1 && (
+      {tabs.length > 0 && (
         <button
           onClick={onCloseAllTabs}
           title="Close all tabs"
-          className="flex-shrink-0 flex items-center gap-1 px-3 text-xs text-slate-500 hover:text-red-400 hover:bg-surface-800 transition-colors border-l border-surface-800 h-full"
+          className="h-9 flex-shrink-0 flex items-center gap-1 px-3 text-xs text-slate-500 hover:text-red-400 hover:bg-surface-800 transition-colors border-l border-surface-800"
         >
           <PanelLeftClose className="w-3.5 h-3.5" />
           Close All
@@ -337,7 +352,7 @@ export default function TabBar({ onAddTab, onCloseTab, onCloneTab, onDuplicateTa
       <button
         onClick={onOpenSettings}
         title={`Settings (${modKey}+,)`}
-        className="flex-shrink-0 w-9 flex items-center justify-center text-slate-500 hover:text-slate-300 hover:bg-surface-800 transition-colors border-l border-surface-800"
+        className="h-9 flex-shrink-0 w-9 flex items-center justify-center text-slate-500 hover:text-slate-300 hover:bg-surface-800 transition-colors border-l border-surface-800"
       >
         <Settings className="w-3.5 h-3.5" />
       </button>
@@ -345,11 +360,12 @@ export default function TabBar({ onAddTab, onCloseTab, onCloneTab, onDuplicateTa
         <button
           onClick={submitLogout}
           title="Logout"
-          className="flex-shrink-0 w-9 flex items-center justify-center text-red-500 hover:text-red-400 hover:bg-surface-800 transition-colors border-l border-surface-800"
+          className="h-9 flex-shrink-0 w-9 flex items-center justify-center text-red-500 hover:text-red-400 hover:bg-surface-800 transition-colors border-l border-surface-800"
         >
           <LogOut className="w-3.5 h-3.5" />
         </button>
       )}
+      </div>
 
       {/* Context menu */}
       {contextMenu && (() => {

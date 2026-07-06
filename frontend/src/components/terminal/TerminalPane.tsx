@@ -25,6 +25,10 @@ function bracketTextForPaste(text: string, bracketedPasteMode: boolean): string 
   return bracketedPasteMode ? `\x1b[200~${text}\x1b[201~` : text
 }
 
+function stripScrollbackClearSequences(data: string): string {
+  return data.replace(/\x1b\[[?]?(?:3J)/g, '')
+}
+
 function isVisibleTerminalContainer(el: HTMLElement | null): el is HTMLElement {
   return !!el && el.offsetParent !== null && el.clientWidth > 0 && el.clientHeight > 0
 }
@@ -60,6 +64,9 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
   const termRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
   const errorRef = useRef<string>('')
+  const lastResizeRef = useRef<{ cols: number; rows: number } | null>(null)
+  const resizeFrameRef = useRef<number | null>(null)
+  const protectScrollbackUntilRef = useRef(0)
   const [connectionError, setConnectionError] = useState('')
   // Suppress xterm onData during session restore to prevent terminal query
   // responses (OSC 11, DSR, DA) from being echoed back to the remote shell
@@ -114,9 +121,46 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
 
   const fitAndEmitResize = useCallback((term: Terminal, fitAddon: FitAddon) => {
     if (!isVisibleTerminalContainer(containerRef.current)) return
+    const wasAtBottom = term.buffer.active.viewportY >= term.buffer.active.baseY
     fitAddon.fit()
-    if (term.cols > 0 && term.rows > 0) emitResize(term)
+    if (wasAtBottom) term.scrollToBottom()
+    if (term.cols <= 0 || term.rows <= 0) return
+
+    const previous = lastResizeRef.current
+    if (previous?.cols === term.cols && previous?.rows === term.rows) return
+
+    lastResizeRef.current = { cols: term.cols, rows: term.rows }
+    emitResize(term)
   }, [emitResize])
+
+  const scheduleFitAndEmitResize = useCallback((term: Terminal, fitAddon: FitAddon) => {
+    if (resizeFrameRef.current !== null) return
+    resizeFrameRef.current = requestAnimationFrame(() => {
+      resizeFrameRef.current = null
+      fitAndEmitResize(term, fitAddon)
+    })
+  }, [fitAndEmitResize])
+
+  const installCustomKeyHandler = useCallback((term: Terminal) => {
+    term.attachCustomKeyEventHandler((e) => {
+      const mod = e.ctrlKey || e.metaKey
+      const key = e.key.toLowerCase()
+      if (mod && (key === 'w' || key === 't' || key === ',')) return false
+      if (e.ctrlKey && key === 'tab') return false
+      if (mod && key === 'f') return false
+      if (e.ctrlKey && !e.metaKey && !e.shiftKey && key === 'c') {
+        if (term.hasSelection()) return false
+        emitInput('\x03')
+        return false
+      }
+      if (e.ctrlKey && !e.metaKey && !e.shiftKey && key === 'l') {
+        protectScrollbackUntilRef.current = Date.now() + 1000
+      }
+      if ((e.metaKey || (e.ctrlKey && e.shiftKey)) && key === 'c' && term.hasSelection()) return false
+      if (mod && key === 'v') return false
+      return true
+    })
+  }, [emitInput])
 
   // Create or reuse xterm.js terminal
   useEffect(() => {
@@ -145,6 +189,7 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
         containerRef.current.appendChild(cached.container)
         termRef.current = cached.term
         fitRef.current = cached.fitAddon
+        installCustomKeyHandler(cached.term)
 
         textarea = cached.term.textarea ?? null
         if (textarea) {
@@ -171,7 +216,7 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
         ro = new ResizeObserver(() => {
           const currentTab = useTerminalStore.getState().tabs.find(t => t.id === tabId)
           if (currentTab?.status === 'connected' && isVisibleTerminalContainer(containerRef.current)) {
-            fitAndEmitResize(cached.term, cached.fitAddon)
+            scheduleFitAndEmitResize(cached.term, cached.fitAddon)
           }
         })
         ro.observe(containerRef.current)
@@ -235,16 +280,7 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
         term.loadAddon(fitAddon)
         term.loadAddon(webLinksAddon)
 
-        term.attachCustomKeyEventHandler((e) => {
-          const mod = e.ctrlKey || e.metaKey
-          const key = e.key.toLowerCase()
-          if (mod && (key === 'w' || key === 't' || key === ',')) return false
-          if (e.ctrlKey && key === 'tab') return false
-          if (mod && key === 'f') return false
-          if (mod && key === 'c' && term.hasSelection()) return false
-          if (mod && key === 'v') return false
-          return true
-        })
+        installCustomKeyHandler(term)
         term.attachCustomWheelEventHandler((e) => {
           e.stopPropagation()
           return true
@@ -290,7 +326,7 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
         ro = new ResizeObserver(() => {
           const currentTab = useTerminalStore.getState().tabs.find(t => t.id === tabId)
           if (currentTab?.status === 'connected' && isVisibleTerminalContainer(containerRef.current)) {
-            fitAndEmitResize(term, fitAddon)
+            scheduleFitAndEmitResize(term, fitAddon)
           }
         })
         ro.observe(containerRef.current)
@@ -301,6 +337,10 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
 
     return () => {
       cancelled = true
+      if (resizeFrameRef.current !== null) {
+        cancelAnimationFrame(resizeFrameRef.current)
+        resizeFrameRef.current = null
+      }
       ro?.disconnect()
       if (textarea) {
         textarea.removeEventListener('focus', handleFocus)
@@ -334,7 +374,7 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
       hasFocusRef.current = false
       suppressInputRef.current = false
     }
-  }, [tabId, emitInput, emitResize, fitAndEmitResize, handleFocus, handleBlur])
+  }, [tabId, emitInput, emitResize, fitAndEmitResize, scheduleFitAndEmitResize, installCustomKeyHandler, handleFocus, handleBlur])
 
   // Apply settings changes to live terminal
   useEffect(() => {
@@ -362,11 +402,19 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
     const onOutput = ({ tab_id, data }: { tab_id: string; data: unknown }) => {
       if (tab_id !== tabId || !termRef.current) return
       if (ArrayBuffer.isView(data)) {
-        termRef.current.write(new Uint8Array(data.buffer, data.byteOffset, data.byteLength))
+        const bytes = new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
+        termRef.current.write(protectScrollbackUntilRef.current > Date.now()
+          ? stripScrollbackClearSequences(new TextDecoder().decode(bytes))
+          : bytes
+        )
       } else if (data instanceof ArrayBuffer) {
-        termRef.current.write(new Uint8Array(data))
+        const bytes = new Uint8Array(data)
+        termRef.current.write(protectScrollbackUntilRef.current > Date.now()
+          ? stripScrollbackClearSequences(new TextDecoder().decode(bytes))
+          : bytes
+        )
       } else if (typeof data === 'string') {
-        termRef.current.write(data)
+        termRef.current.write(protectScrollbackUntilRef.current > Date.now() ? stripScrollbackClearSequences(data) : data)
       } else {
         console.warn('Received unexpected data type from ssh:output:', typeof data)
       }
