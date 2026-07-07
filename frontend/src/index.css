@@ -65,7 +65,13 @@
   padding: 4px 6px;
 }
 .xterm-viewport {
+  background-color: #020617;
   overflow-y: scroll !important;
+  scrollbar-color: #334155 #020617;
+}
+
+.xterm-viewport::-webkit-scrollbar-track {
+  background: #020617;
 }
 
 .xterm-selection {

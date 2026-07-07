@@ -17,6 +17,9 @@ interface TerminalPaneProps {
   socket: Socket
 }
 
+const ANSI_ESCAPE = String.fromCharCode(0x1b)
+const SCROLLBACK_CLEAR_SEQUENCE = new RegExp(`${ANSI_ESCAPE}\\[[?]?(?:3J)`, 'g')
+
 function prepareTextForTerminal(text: string): string {
   return text.replace(/\r?\n/g, '\r')
 }
@@ -26,7 +29,7 @@ function bracketTextForPaste(text: string, bracketedPasteMode: boolean): string 
 }
 
 function stripScrollbackClearSequences(data: string): string {
-  return data.replace(/\x1b\[[?]?(?:3J)/g, '')
+  return data.replace(SCROLLBACK_CLEAR_SEQUENCE, '')
 }
 
 function isVisibleTerminalContainer(el: HTMLElement | null): el is HTMLElement {
