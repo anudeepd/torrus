@@ -48,7 +48,7 @@
     height: 6px;
   }
   ::-webkit-scrollbar-track {
-    background: #020617;
+    background: #0f172a;
   }
   ::-webkit-scrollbar-thumb {
     background: #334155;
@@ -67,11 +67,18 @@
 .xterm-viewport {
   background-color: #020617;
   overflow-y: scroll !important;
-  scrollbar-color: #334155 #020617;
+  scrollbar-color: #334155 #0f172a;
 }
 
 .xterm-viewport::-webkit-scrollbar-track {
-  background: #020617;
+  background: #0f172a;
+}
+.xterm-viewport::-webkit-scrollbar-thumb {
+  background: #334155;
+  border-radius: 3px;
+}
+.xterm-viewport::-webkit-scrollbar-thumb:hover {
+  background: #475569;
 }
 
 .xterm-selection {
