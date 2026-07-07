@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, render, waitFor } from '@testing-library/react'
+import { StrictMode } from 'react'
 import { createMockSocket } from '@/test/mocks/socket'
 import { useTerminalStore } from '@/store/terminalStore'
 import { AUTH_REDIRECT_EVENT } from '@/utils/authRedirect'
 
-async function renderAppLayout() {
+async function renderAppLayout({ strict = false }: { strict?: boolean } = {}) {
   vi.resetModules()
 
   const socket = createMockSocket()
@@ -30,7 +31,7 @@ async function renderAppLayout() {
   }))
 
   const { default: AppLayout } = await import('./AppLayout')
-  render(<AppLayout />)
+  render(strict ? <StrictMode><AppLayout /></StrictMode> : <AppLayout />)
 
   await waitFor(() => {
     expect(socket.on).toHaveBeenCalledWith('ssh:error', expect.any(Function))
@@ -72,6 +73,15 @@ describe('AppLayout LDAP auth handling', () => {
     })
 
     expect(redirectToLdapLogin).not.toHaveBeenCalled()
+  })
+
+  it('preserves an empty restored tab list on reload', async () => {
+    useTerminalStore.setState({ sessionId: 'test-session', tabs: [], activeTabId: null })
+
+    await renderAppLayout({ strict: true })
+
+    expect(useTerminalStore.getState().tabs).toEqual([])
+    expect(useTerminalStore.getState().activeTabId).toBeNull()
   })
 
   it('does not show the active-session unload warning during LDAP redirects', async () => {

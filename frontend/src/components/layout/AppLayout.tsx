@@ -99,11 +99,6 @@ export default function AppLayout() {
     return () => { socket.off('connect', onConnect) }
   }, [socket])
 
-  // Open first tab on initial load if none were restored.
-  useEffect(() => {
-    if (tabs.length === 0) addTab()
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
-
   const handleAddTab = useCallback(() => {
     const tabId = addTab()
     socket.emit('session:register', { session_id: sessionId, tab_id: tabId })
