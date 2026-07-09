@@ -67,11 +67,11 @@
 .xterm-viewport {
   background-color: #020617;
   overflow-y: scroll !important;
-  scrollbar-color: #334155 #0f172a;
+  scrollbar-color: #334155 #020617;
 }
 
 .xterm-viewport::-webkit-scrollbar-track {
-  background: #0f172a;
+  background: #020617;
 }
 .xterm-viewport::-webkit-scrollbar-thumb {
   background: #334155;
