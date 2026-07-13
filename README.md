@@ -9,6 +9,7 @@
 ## Features
 
 - **Web-based SSH terminal** with full xterm.js emulation
+- **SFTP file browser** — upload, download, rename, delete files directly from the browser
 - **Multi-tab support** — open multiple SSH sessions side by side, close all at once
 - **Tab management** — right-click to rename, clone, duplicate, or save a tab as a session
 - **Keyboard shortcuts** — `Ctrl+T` new tab, `Ctrl+W` close tab, `Ctrl+Tab` cycle tabs, `Ctrl+,` settings
