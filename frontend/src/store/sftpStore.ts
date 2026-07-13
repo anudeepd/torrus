@@ -20,6 +20,7 @@ export interface TransferItem {
 interface SFTPTabState {
   path: string
   username: string | null
+  isRoot: boolean
   entries: SFTPEntry[]
   selectedPaths: string[]
   loading: boolean
@@ -33,6 +34,7 @@ interface SFTPStore {
   ensureTab: (tabId: string) => void
   setListing: (tabId: string, path: string, entries: SFTPEntry[]) => void
   setUsername: (tabId: string, username: string | null) => void
+  setIsRoot: (tabId: string, isRoot: boolean) => void
   setLoading: (tabId: string, loading: boolean) => void
   setError: (tabId: string, error: string | null) => void
   setDisconnected: (tabId: string, disconnected: boolean) => void
@@ -48,6 +50,7 @@ interface SFTPStore {
 const emptyTab = (): SFTPTabState => ({
   path: '.',
   username: null,
+  isRoot: false,
   entries: [],
   selectedPaths: [],
   loading: false,
@@ -72,6 +75,9 @@ export const useSFTPStore = create<SFTPStore>((set, get) => ({
 
   setUsername: (tabId, username) =>
     set(s => ({ tabs: { ...s.tabs, [tabId]: { ...(s.tabs[tabId] ?? emptyTab()), username } } })),
+
+  setIsRoot: (tabId, isRoot) =>
+    set(s => ({ tabs: { ...s.tabs, [tabId]: { ...(s.tabs[tabId] ?? emptyTab()), isRoot } } })),
 
   setLoading: (tabId, loading) =>
     set(s => ({ tabs: { ...s.tabs, [tabId]: { ...(s.tabs[tabId] ?? emptyTab()), loading } } })),

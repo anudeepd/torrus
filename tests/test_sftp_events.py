@@ -97,6 +97,7 @@ async def test_sftp_open_uses_source_tab_public_api(reset_server_state):
     server_module.sftp_manager.list_directory = AsyncMock(return_value={"ok": True, "path": ".", "entries": []})
     server_module.ssh_manager = MagicMock()
     server_module.ssh_manager.get_session_target = AsyncMock(return_value=None)
+    server_module.ssh_manager.is_root_session = AsyncMock(return_value=False)
 
     with patch("torrus.server.sio", sio_mock):
         await on_sftp_open("sid-1", {"session_id": "sess1", "tab_id": "sftp-tab", "source_tab_id": "terminal-tab"})
@@ -109,7 +110,7 @@ async def test_sftp_open_uses_source_tab_public_api(reset_server_state):
     )
     sio_mock.emit.assert_awaited_once_with(
         "sftp:open:result",
-        {"tab_id": "sftp-tab", "username": None, "ok": True, "path": ".", "entries": []},
+        {"tab_id": "sftp-tab", "username": None, "is_root": False, "ok": True, "path": ".", "entries": []},
         to="sid-1",
     )
 
@@ -126,13 +127,14 @@ async def test_sftp_open_includes_source_ssh_username(reset_server_state):
     server_module.sftp_manager.list_directory = AsyncMock(return_value={"ok": True, "path": ".", "entries": []})
     server_module.ssh_manager = MagicMock()
     server_module.ssh_manager.get_session_target = AsyncMock(return_value=("server.example", 22, "deploy"))
+    server_module.ssh_manager.is_root_session = AsyncMock(return_value=True)
 
     with patch("torrus.server.sio", sio_mock):
         await on_sftp_open("sid-1", {"session_id": "sess1", "tab_id": "sftp-tab", "source_tab_id": "terminal-tab"})
 
     sio_mock.emit.assert_awaited_once_with(
         "sftp:open:result",
-        {"tab_id": "sftp-tab", "username": "deploy", "ok": True, "path": ".", "entries": []},
+        {"tab_id": "sftp-tab", "username": "deploy", "is_root": True, "ok": True, "path": ".", "entries": []},
         to="sid-1",
     )
 
@@ -149,16 +151,64 @@ async def test_sftp_open_continues_when_username_lookup_fails(reset_server_state
     server_module.sftp_manager.list_directory = AsyncMock(return_value={"ok": True, "path": ".", "entries": []})
     server_module.ssh_manager = MagicMock()
     server_module.ssh_manager.get_session_target = AsyncMock(side_effect=RuntimeError("session metadata unavailable"))
+    server_module.ssh_manager.is_root_session = AsyncMock(side_effect=RuntimeError("session metadata unavailable"))
 
     with patch("torrus.server.sio", sio_mock):
         await on_sftp_open("sid-1", {"session_id": "sess1", "tab_id": "sftp-tab", "source_tab_id": "terminal-tab"})
 
     sio_mock.emit.assert_awaited_once_with(
         "sftp:open:result",
-        {"tab_id": "sftp-tab", "username": None, "ok": True, "path": ".", "entries": []},
+        {"tab_id": "sftp-tab", "username": None, "is_root": False, "ok": True, "path": ".", "entries": []},
         to="sid-1",
     )
 
+
+@pytest.mark.asyncio
+async def test_sftp_chmod_emits_success_result(reset_server_state):
+    from torrus.server import on_sftp_chmod
+    import torrus.server as server_module
+
+    sio_mock = MagicMock()
+    sio_mock.emit = AsyncMock()
+    server_module.sftp_manager = MagicMock()
+    server_module.sftp_manager.chmod = AsyncMock(return_value={"ok": True, "path": "/tmp/x", "mode": 0o640})
+
+    with patch("torrus.server.sio", sio_mock):
+        await on_sftp_chmod(
+            "sid-1",
+            {"session_id": "sess1", "tab_id": "tab1", "path": "/tmp/x", "mode": 0o640},
+        )
+
+    server_module.sftp_manager.chmod.assert_awaited_once_with("tab1", "/tmp/x", 0o640)
+    sio_mock.emit.assert_awaited_once_with(
+        "sftp:chmod:result",
+        {"tab_id": "tab1", "ok": True, "path": "/tmp/x", "mode": 0o640},
+        to="sid-1",
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["777", -1, True, False])
+async def test_sftp_chmod_rejects_invalid_mode(reset_server_state, mode):
+    from torrus.server import on_sftp_chmod
+    import torrus.server as server_module
+
+    sio_mock = MagicMock()
+    sio_mock.emit = AsyncMock()
+    server_module.sftp_manager = MagicMock()
+
+    with patch("torrus.server.sio", sio_mock):
+        await on_sftp_chmod(
+            "sid-1",
+            {"session_id": "sess1", "tab_id": "tab1", "path": "/tmp/x", "mode": mode},
+        )
+
+    server_module.sftp_manager.chmod.assert_not_called()
+    sio_mock.emit.assert_awaited_once_with(
+        "sftp:chmod:result",
+        {"tab_id": "tab1", "ok": False, "code": "invalid_request", "message": "Invalid permission mode."},
+        to="sid-1",
+    )
 
 @pytest.mark.asyncio
 async def test_sftp_open_emits_connection_closed_when_channel_unavailable(reset_server_state):

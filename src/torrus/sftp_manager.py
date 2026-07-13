@@ -134,6 +134,9 @@ class SFTPManager:
     async def mkdir(self, tab_id: str, path: str) -> dict[str, Any]:
         return await self._locked(tab_id, lambda session: self._mkdir_sync(session, path))
 
+    async def chmod(self, tab_id: str, path: str, mode: int) -> dict[str, Any]:
+        return await self._locked(tab_id, lambda session: self._chmod_sync(session, path, mode))
+
     async def stream_upload(
         self,
         tab_id: str,
@@ -381,6 +384,14 @@ class SFTPManager:
             return {"ok": True, "old_path": old_resolved, "new_path": new_resolved}
         except Exception as exc:
             raise _map_error(exc, old_resolved) from exc
+
+    def _chmod_sync(self, session: SFTPSession, path: str, mode: int) -> dict[str, Any]:
+        resolved = _resolve_remote_path(session.cwd, path, session.home)
+        try:
+            session.client.chmod(resolved, mode)
+            return {"ok": True, "path": resolved, "mode": mode}
+        except Exception as exc:
+            raise _map_error(exc, resolved) from exc
 
     def _mkdir_sync(self, session: SFTPSession, path: str) -> dict[str, Any]:
         resolved = _resolve_remote_path(session.cwd, path, session.home)

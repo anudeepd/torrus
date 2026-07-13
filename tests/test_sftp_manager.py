@@ -45,6 +45,7 @@ class FakeSFTP:
         self.fs: dict[str, bytes] = {"/home/app/readme.txt": b"hello"}
         self.dirs = {"/home/app"}
         self.cwd = "/home/app"
+        self.modes: dict[str, int] = {}
         self.closed = False
         self.close_count = 0
         self.next_file_close_error: Exception | None = None
@@ -118,6 +119,13 @@ class FakeSFTP:
         if not path.startswith("/"):
             path = f"{self.cwd.rstrip('/')}/{path}"
         self.dirs.add(path)
+
+    def chmod(self, path: str, mode: int) -> None:
+        if not path.startswith("/"):
+            path = f"{self.cwd.rstrip('/')}/{path}"
+        if path not in self.fs and path not in self.dirs:
+            raise FileNotFoundError(errno.ENOENT, "missing", path)
+        self.modes[path] = mode
 
     def close(self) -> None:
         self.closed = True
@@ -193,12 +201,15 @@ async def test_upload_download_rename_delete_and_mkdir():
         assert renamed["new_path"] == "/home/app/renamed.txt"
         made = await manager.mkdir("tab1", "docs")
         assert made["path"] == "/home/app/docs"
+        changed = await manager.chmod("tab1", "docs", 0o750)
+        assert changed == {"ok": True, "path": "/home/app/docs", "mode": 0o750}
         deleted = await manager.delete("tab1", "renamed.txt")
         assert deleted["ok"] is True
     finally:
         await manager.shutdown()
 
     assert "/home/app/renamed.txt" not in sftp.fs
+    assert sftp.modes["/home/app/docs"] == 0o750
 
 
 @pytest.mark.asyncio
@@ -212,6 +223,22 @@ async def test_missing_file_maps_to_file_not_found():
         await manager.open_sftp("sess1", "tab1", ssh_manager)
         with pytest.raises(SFTPError) as exc:
             await manager.download_file("tab1", "missing.txt")
+    finally:
+        await manager.shutdown()
+
+    assert exc.value.code == "FILE_NOT_FOUND"
+
+
+@pytest.mark.asyncio
+async def test_chmod_missing_file_maps_to_file_not_found():
+    from torrus.sftp_manager import SFTPError, SFTPManager
+
+    sftp = FakeSFTP()
+    manager = SFTPManager()
+    try:
+        await manager.open_sftp("sess1", "tab1", FakeSSHManager(sftp))
+        with pytest.raises(SFTPError) as exc:
+            await manager.chmod("tab1", "missing.txt", 0o640)
     finally:
         await manager.shutdown()
 

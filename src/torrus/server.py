@@ -35,6 +35,11 @@ else:
 
 _SAFE_ID = re.compile(r'^[a-zA-Z0-9_\-]+$')
 _DEV_MODE = bool(os.getenv("TORRUS_DEV"))
+_DEV_ORIGINS = [
+    f"http://{host}:{port}"
+    for host in ("localhost", "127.0.0.1")
+    for port in range(5173, 5184)
+] if _DEV_MODE else []
 _ALLOW_PRIVATE_HOSTS_WITHOUT_LDAP = os.getenv(
     "TORRUS_ALLOW_PRIVATE_HOSTS_WITHOUT_LDAP", "true"
 ).lower() in {"1", "true", "yes", "on"}
@@ -88,11 +93,7 @@ def _static_dir() -> Path | None:
 
 sio = socketio.AsyncServer(
     async_mode="asgi",
-    cors_allowed_origins=(
-        ["http://localhost:5173", "http://127.0.0.1:5173"]
-        if _DEV_MODE
-        else []
-    ),
+    cors_allowed_origins=_DEV_ORIGINS,
     max_http_buffer_size=10_000_000,
     ping_timeout=60,
     ping_interval=25,
@@ -126,7 +127,7 @@ async def add_app_security_headers(request: Request, call_next):
 if _DEV_MODE:
     fastapi_app.add_middleware(
         CORSMiddleware,
-        allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+        allow_origins=_DEV_ORIGINS,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -802,7 +803,16 @@ async def on_sftp_open(sid, data):
     except Exception:
         logger.warning("Could not determine SFTP username for %s/%s", session_id, source_tab_id, exc_info=True)
         username = None
-    await sio.emit("sftp:open:result", {"tab_id": tab_id, "username": username, **result}, to=sid)
+    try:
+        is_root = await ssh_manager.is_root_session(session_id, source_tab_id)
+    except Exception:
+        logger.warning("Could not determine SFTP root status for %s/%s", session_id, source_tab_id, exc_info=True)
+        is_root = False
+    await sio.emit(
+        "sftp:open:result",
+        {"tab_id": tab_id, "username": username, "is_root": is_root, **result},
+        to=sid,
+    )
 
 
 @sio.on("sftp:list")
@@ -901,3 +911,30 @@ async def on_sftp_mkdir(sid, data):
         await sio.emit("sftp:mkdir:result", {"tab_id": tab_id, **result}, to=sid)
     except SFTPError as exc:
         await _emit_sftp_error(sid, tab_id, exc)
+
+
+@sio.on("sftp:chmod")
+async def on_sftp_chmod(sid, data):
+    session_id, tab_id = _sftp_request_ids(data)
+    if not _valid_id(session_id) or not _valid_id(tab_id):
+        return
+    if not await _require_auth(sid, tab_id):
+        return
+    mode = data.get("mode")
+    if isinstance(mode, bool) or not isinstance(mode, int) or not 0 <= mode <= 0o7777:
+        await sio.emit(
+            "sftp:chmod:result",
+            {"tab_id": tab_id, "ok": False, "code": "invalid_request", "message": "Invalid permission mode."},
+            to=sid,
+        )
+        return
+    try:
+        result = await sftp_manager.chmod(tab_id, data.get("path", ""), mode)
+    except SFTPError as exc:
+        await sio.emit(
+            "sftp:chmod:result",
+            {"tab_id": tab_id, "ok": False, "code": exc.code, "message": exc.message},
+            to=sid,
+        )
+        return
+    await sio.emit("sftp:chmod:result", {"tab_id": tab_id, **result}, to=sid)

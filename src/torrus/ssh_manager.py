@@ -67,6 +67,8 @@ class SSHSession:
     write_task: Optional[asyncio.Task] = None
     input_queue: asyncio.Queue[bytes] = field(default_factory=lambda: asyncio.Queue(maxsize=65536))
     output_buffer: bytearray = field(default_factory=bytearray)
+    # Probed at connection time; SFTP identity is scoped to the SSH transport.
+    is_root: bool = False
     # Recomputed during teardown: close the client only when no remaining
     # session still shares its transport.
     owns_client: bool = True
@@ -158,7 +160,7 @@ class SSHManager:
             logger.info("Connecting to %s (session=%s, tab=%s)", target, session_id, tab_id)
 
             try:
-                has_tmux = await loop.run_in_executor(
+                has_tmux, is_root = await loop.run_in_executor(
                     self._ssh_executor,
                     lambda: _connect_and_check_tmux(client, host, port, username, password),
                 )
@@ -229,6 +231,7 @@ class SSHManager:
                 host=host,
                 port=port,
                 username=username,
+                is_root=is_root,
                 cols=cols,
                 rows=rows,
             )
@@ -323,6 +326,14 @@ class SSHManager:
             if session is None or session.channel.closed:
                 return None
             return session.host, session.port, session.username
+
+    async def is_root_session(self, session_id: str, tab_id: str) -> bool:
+        """Return whether the active SSH session has an effective UID of zero."""
+        async with self._lock:
+            session = self._sessions.get((session_id, tab_id))
+            if session is None or session.channel.closed:
+                return False
+            return session.is_root
 
     async def has_session(self, session_id: str) -> bool:
         """Return True when any active tab exists for this browser session."""
@@ -426,6 +437,7 @@ class SSHManager:
                 host=source.host,
                 port=source.port,
                 username=source.username,
+                is_root=source.is_root,
                 cols=cols,
                 rows=rows,
                 owns_client=False,  # shared transport — do not close on destroy
@@ -636,7 +648,7 @@ def _connect_and_check_tmux(
     port: int,
     username: str,
     password: str,
-) -> bool:
+) -> tuple[bool, bool]:
     client.connect(
         hostname=host,
         port=port,
@@ -649,9 +661,9 @@ def _connect_and_check_tmux(
         allow_agent=False,
     )
     try:
-        return _check_tmux_blocking(client)
+        return _connection_probes_blocking(client)
     except Exception:
-        return False
+        return False, False
 
 
 def _check_tmux_blocking(client: paramiko.SSHClient) -> bool:
@@ -659,6 +671,21 @@ def _check_tmux_blocking(client: paramiko.SSHClient) -> bool:
     try:
         out = stdout.read().decode().strip()
         return len(out) > 0
+    finally:
+        for stream in (stdin, stdout, stderr):
+            channel = getattr(stream, "channel", None)
+            if channel is not None:
+                channel.close()
+
+
+def _connection_probes_blocking(client: paramiko.SSHClient) -> tuple[bool, bool]:
+    command = "if command -v tmux >/dev/null 2>&1; then echo 1; else echo 0; fi; id -u"
+    stdin, stdout, stderr = client.exec_command(command, timeout=5)
+    try:
+        lines = stdout.read().decode(errors="replace").splitlines()
+        if len(lines) != 2:
+            return False, False
+        return lines[0].strip() == "1", lines[1].strip() == "0"
     finally:
         for stream in (stdin, stdout, stderr):
             channel = getattr(stream, "channel", None)

@@ -38,4 +38,13 @@ describe('sftpStore', () => {
     expect(useSFTPStore.getState().tabs.tab1.selectedPaths).toEqual(['/tmp/a.txt'])
     expect(useSFTPStore.getState().transfers[0].status).toBe('done')
   })
+
+  it('stores connection identity for an SFTP tab', () => {
+    const store = useSFTPStore.getState()
+    store.ensureTab('tab1')
+    store.setUsername('tab1', 'root')
+    store.setIsRoot('tab1', true)
+
+    expect(useSFTPStore.getState().tabs.tab1).toMatchObject({ username: 'root', isRoot: true })
+  })
 })

@@ -16,7 +16,7 @@ function formatBytes(bytes: number): string {
 
 export default function TransferQueue({ transfers }: { transfers: TransferItem[] }) {
   if (transfers.length === 0) {
-    return <div className="px-2 py-1 text-xs text-slate-600">No active transfers</div>
+    return null
   }
   return (
     <div className="max-h-40 overflow-y-auto border-t border-surface-800 bg-surface-950" aria-live="polite">

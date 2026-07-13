@@ -266,6 +266,49 @@ class TestTmuxCheck:
         assert result is False
 
 
+class TestRootCheck:
+    def test_connection_probe_checks_root_before_interactive_session(self):
+        from torrus.ssh_manager import _connect_and_check_tmux
+
+        client = MagicMock()
+        streams = [MagicMock(), MagicMock(), MagicMock()]
+        streams[1].read.return_value = b"1\n0\n"
+        client.exec_command.return_value = tuple(streams)
+
+        result = _connect_and_check_tmux(client, "example.com", 22, "root", "secret")
+
+        assert result == (True, True)
+        client.exec_command.assert_called_once()
+        assert "command -v tmux" in client.exec_command.call_args.args[0]
+        assert "id -u" in client.exec_command.call_args.args[0]
+        for stream in streams:
+            stream.channel.close.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_is_root_session_uses_connection_probe_result(self, mock_sio):
+        from torrus.ssh_manager import SSHManager, SSHSession
+
+        manager = SSHManager(mock_sio)
+        channel = MagicMock(closed=False)
+        client = MagicMock()
+        manager._sessions[("sess1", "tab1")] = SSHSession(
+            session_id="sess1",
+            tab_id="tab1",
+            client=client,
+            channel=channel,
+            host="example.com",
+            port=22,
+            username="root",
+            is_root=True,
+        )
+        try:
+            assert await manager.is_root_session("sess1", "tab1") is True
+        finally:
+            await manager.stop_background_tasks()
+
+        client.exec_command.assert_not_called()
+
+
 class TestForceRedraw:
     """force_redraw must be safe against concurrent destruction."""
 

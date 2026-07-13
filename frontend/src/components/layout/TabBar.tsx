@@ -241,36 +241,25 @@ export default function TabBar({ onAddTab, onCloseTab, onCloneTab, onOpenSftpTab
 
       {/* Tab buttons */}
       <div className="flex-1 h-full min-w-0 overflow-hidden">
-        <div className="torrus-tab-strip flex h-full items-center flex-nowrap overflow-x-scroll overflow-y-hidden">
+        <div className="torrus-tab-strip flex h-full items-center flex-nowrap overflow-x-scroll overflow-y-hidden" role="tablist" aria-label="Sessions">
           {tabs.map(tab => (
-            <button
+            <div
               key={tab.id}
-              data-tab-id={tab.id}
-              onClick={() => onSetActiveTab(tab.id)}
               onContextMenu={(e) => {
                 e.preventDefault()
                 setContextMenu({ tabId: tab.id, x: e.clientX, y: e.clientY })
               }}
-              title={getTabTitle(tab)}
               className={clsx(
-                'group h-[40px] flex flex-shrink-0 items-center gap-1.5 px-3 py-2 min-w-32 max-w-48 border-r border-surface-800 whitespace-nowrap transition-colors text-xs font-mono',
+                'group h-[40px] flex flex-shrink-0 items-center min-w-32 max-w-48 border-r border-surface-800 whitespace-nowrap transition-colors text-xs font-mono',
                 activeTabId === tab.id
                   ? 'bg-surface-950 text-slate-200 border-t-2 border-t-brand-500'
                   : 'text-slate-500 hover:text-slate-300 hover:bg-surface-800'
               )}
             >
-              <StatusDot status={tab.status} />
-              {tab.type === 'sftp' && <Folder className="h-3.5 w-3.5 flex-shrink-0 text-brand-400" />}
-
-              {/* Broadcast active indicator */}
-              {broadcastEnabled && tab.type === 'terminal' && tab.status === 'connected' && (
-                <Radio className="flex-shrink-0 w-3 h-3 text-amber-400" />
-              )}
-
               {editingTabId === tab.id ? (
                 <input
                   ref={editInputRef}
-                  className="min-w-0 flex-1 bg-transparent border-b border-brand-500 outline-none text-xs font-mono text-slate-200"
+                  className="ml-3 min-w-0 flex-1 bg-transparent border-b border-brand-500 outline-none text-xs font-mono text-slate-200"
                   value={editValue}
                   onChange={e => setEditValue(e.target.value)}
                   onKeyDown={e => {
@@ -281,26 +270,37 @@ export default function TabBar({ onAddTab, onCloseTab, onCloneTab, onOpenSftpTab
                   onClick={e => e.stopPropagation()}
                 />
               ) : (
-                <span
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={activeTabId === tab.id}
+                  data-tab-id={tab.id}
                   title={getTabTitle(tab)}
-                  className="min-w-0 flex-1 truncate text-left"
+                  className="flex h-full min-w-0 flex-1 items-center gap-1.5 pl-3 text-left"
+                  onClick={() => onSetActiveTab(tab.id)}
                   onDoubleClick={(e) => {
                     e.stopPropagation()
                     startEditing(tab)
                   }}
                 >
-                  {getTabDisplayName(tab)}
-                </span>
+                  <StatusDot status={tab.status} />
+                  {tab.type === 'sftp' && <Folder className="h-3.5 w-3.5 flex-shrink-0 text-brand-400" />}
+                  {broadcastEnabled && tab.type === 'terminal' && tab.status === 'connected' && (
+                    <Radio className="flex-shrink-0 w-3 h-3 text-amber-400" />
+                  )}
+                  <span className="min-w-0 flex-1 truncate">{getTabDisplayName(tab)}</span>
+                </button>
               )}
 
               <button
+                type="button"
                 onClick={(e) => { e.stopPropagation(); onCloseTab(tab.id) }}
-                className="flex h-4 w-4 flex-shrink-0 items-center justify-center rounded opacity-0 transition-opacity hover:text-red-400 group-hover:opacity-100"
+                className="mr-2 flex h-6 w-6 flex-shrink-0 items-center justify-center rounded opacity-0 transition-opacity hover:text-red-400 focus:opacity-100 group-hover:opacity-100"
                 title={`Close ${getTabDisplayName(tab)}`}
               >
                 <X className="w-3 h-3" />
               </button>
-            </button>
+            </div>
           ))}
         </div>
       </div>

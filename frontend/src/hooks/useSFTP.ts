@@ -14,6 +14,8 @@ interface ListingPayload {
   code?: string
   message?: string
   username?: string | null
+  is_root?: boolean
+  results?: Array<{ ok?: boolean; code?: string; message?: string }>
 }
 
 interface DownloadPayload {
@@ -76,14 +78,18 @@ export function useSFTP(tabId: string, sourceTabId: string | undefined, socket: 
   const ensureTab = useSFTPStore(s => s.ensureTab)
   const setListing = useSFTPStore(s => s.setListing)
   const setUsername = useSFTPStore(s => s.setUsername)
+  const setIsRoot = useSFTPStore(s => s.setIsRoot)
   const setLoading = useSFTPStore(s => s.setLoading)
   const setError = useSFTPStore(s => s.setError)
   const setDisconnected = useSFTPStore(s => s.setDisconnected)
+  const clearSelected = useSFTPStore(s => s.clearSelected)
   const addTransfer = useSFTPStore(s => s.addTransfer)
   const updateTransfer = useSFTPStore(s => s.updateTransfer)
 
   const state = useMemo(() => tab ?? {
     path: '.',
+    username: null,
+    isRoot: false,
     entries: [],
     selectedPaths: [],
     loading: true,
@@ -91,11 +97,16 @@ export function useSFTP(tabId: string, sourceTabId: string | undefined, socket: 
     disconnected: false,
   }, [tab])
 
-  const list = useCallback((path = state.path) => {
+  const list = useCallback((path?: string) => {
+    const targetPath = path ?? useSFTPStore.getState().tabs[tabId]?.path ?? '.'
     ensureTab(tabId)
     setLoading(tabId, true)
-    socket.emit('sftp:list', { session_id: sessionId, tab_id: tabId, path })
-  }, [socket, sessionId, tabId, state.path, ensureTab, setLoading])
+    socket.emit('sftp:list', { session_id: sessionId, tab_id: tabId, path: targetPath })
+  }, [socket, sessionId, tabId, ensureTab, setLoading])
+
+  const refreshCurrentDirectory = useCallback(() => {
+    list(useSFTPStore.getState().tabs[tabId]?.path ?? '.')
+  }, [list, tabId])
 
   const open = useCallback(() => {
     ensureTab(tabId)
@@ -123,6 +134,7 @@ export function useSFTP(tabId: string, sourceTabId: string | undefined, socket: 
         return
       }
       if (payload.username !== undefined) setUsername(tabId, payload.username)
+      if (payload.is_root !== undefined) setIsRoot(tabId, payload.is_root)
       setListing(tabId, payload.path ?? '.', payload.entries ?? [])
       setTabStatus(tabId, 'connected')
     }
@@ -134,9 +146,46 @@ export function useSFTP(tabId: string, sourceTabId: string | undefined, socket: 
         setTabStatus(tabId, 'dead')
       }
     }
-    const onUploaded = (payload: ListingPayload) => {
+    const onMutation = (payload: ListingPayload) => {
       if (payload.tab_id !== tabId) return
-      list(state.path)
+      if (payload.ok === false) {
+        setError(tabId, payload.message ?? 'Operation failed. Check permissions and retry.')
+        if (payload.code === 'CONNECTION_CLOSED') {
+          setDisconnected(tabId, true)
+          setTabStatus(tabId, 'dead')
+        }
+        return
+      }
+      refreshCurrentDirectory()
+    }
+    const onDelete = (payload: ListingPayload) => {
+      if (payload.tab_id !== tabId) return
+      if (payload.ok === false) {
+        const failed = payload.results?.find(result => result.ok === false)
+        const connectionClosed = failed?.code === 'CONNECTION_CLOSED' || payload.code === 'CONNECTION_CLOSED'
+        setError(tabId, failed?.message ?? payload.message ?? 'Delete failed. Check permissions and retry.')
+        clearSelected(tabId)
+        if (connectionClosed) {
+          setDisconnected(tabId, true)
+          setTabStatus(tabId, 'dead')
+        } else if (payload.results?.some(result => result.ok === true)) {
+          refreshCurrentDirectory()
+        }
+        return
+      }
+      refreshCurrentDirectory()
+    }
+    const onChmod = (payload: ListingPayload) => {
+      if (payload.tab_id !== tabId) return
+      if (payload.ok === false) {
+        setError(tabId, payload.message ?? 'Unable to update permissions.')
+        if (payload.code === 'CONNECTION_CLOSED') {
+          setDisconnected(tabId, true)
+          setTabStatus(tabId, 'dead')
+        }
+        return
+      }
+      refreshCurrentDirectory()
     }
     const onDownload = (payload: DownloadPayload) => {
       if (payload.tab_id !== tabId || !payload.data) return
@@ -145,22 +194,24 @@ export function useSFTP(tabId: string, sourceTabId: string | undefined, socket: 
     socket.on('sftp:open:result', onListing)
     socket.on('sftp:list:result', onListing)
     socket.on('sftp:error', onError)
-    socket.on('sftp:upload:result', onUploaded)
-    socket.on('sftp:delete:result', onUploaded)
-    socket.on('sftp:rename:result', onUploaded)
-    socket.on('sftp:mkdir:result', onUploaded)
+    socket.on('sftp:upload:result', onMutation)
+    socket.on('sftp:delete:result', onDelete)
+    socket.on('sftp:rename:result', onMutation)
+    socket.on('sftp:mkdir:result', onMutation)
+    socket.on('sftp:chmod:result', onChmod)
     socket.on('sftp:download:result', onDownload)
     return () => {
       socket.off('sftp:open:result', onListing)
       socket.off('sftp:list:result', onListing)
       socket.off('sftp:error', onError)
-      socket.off('sftp:upload:result', onUploaded)
-      socket.off('sftp:delete:result', onUploaded)
-      socket.off('sftp:rename:result', onUploaded)
-      socket.off('sftp:mkdir:result', onUploaded)
+      socket.off('sftp:upload:result', onMutation)
+      socket.off('sftp:delete:result', onDelete)
+      socket.off('sftp:rename:result', onMutation)
+      socket.off('sftp:mkdir:result', onMutation)
+      socket.off('sftp:chmod:result', onChmod)
       socket.off('sftp:download:result', onDownload)
     }
-  }, [socket, tabId, state.path, list, setTabStatus, setError, setListing, setUsername, setDisconnected])
+  }, [socket, tabId, refreshCurrentDirectory, setTabStatus, setError, setListing, setUsername, setIsRoot, setDisconnected, clearSelected])
 
   const uploadFiles = useCallback(async (files: FileList | File[]) => {
     const currentPath = useSFTPStore.getState().tabs[tabId]?.path ?? '.'
@@ -237,6 +288,12 @@ export function useSFTP(tabId: string, sourceTabId: string | undefined, socket: 
     socket.emit('sftp:mkdir', { session_id: sessionId, tab_id: tabId, path: joinPath(state.path, name) })
   }, [socket, sessionId, tabId, state.path])
 
+  const chmod = useCallback((path: string, mode: number) => {
+    socket.emit('sftp:chmod', { session_id: sessionId, tab_id: tabId, path, mode })
+  }, [socket, sessionId, tabId])
+
+  const clearError = useCallback(() => setError(tabId, null), [setError, tabId])
+
   return {
     ...state,
     transfers,
@@ -247,6 +304,8 @@ export function useSFTP(tabId: string, sourceTabId: string | undefined, socket: 
     remove,
     rename,
     mkdir,
+    chmod,
+    clearError,
     parentPath,
   }
 }
