@@ -23,6 +23,29 @@ async def test_sftp_list_event_emits_listing(reset_server_state):
 
 
 @pytest.mark.asyncio
+async def test_sftp_list_event_returns_structured_error(reset_server_state):
+    from torrus.server import on_sftp_list
+    from torrus.sftp_manager import SFTPError
+    import torrus.server as server_module
+
+    sio_mock = MagicMock()
+    sio_mock.emit = AsyncMock()
+    server_module.sftp_manager = MagicMock()
+    server_module.sftp_manager.list_directory = AsyncMock(
+        side_effect=SFTPError("FILE_NOT_FOUND", "Directory not found: /missing")
+    )
+
+    with patch("torrus.server.sio", sio_mock):
+        await on_sftp_list("sid-1", {"session_id": "sess1", "tab_id": "tab1", "path": "/missing"})
+
+    sio_mock.emit.assert_awaited_once_with(
+        "sftp:list:result",
+        {"tab_id": "tab1", "ok": False, "code": "FILE_NOT_FOUND", "message": "Directory not found: /missing"},
+        to="sid-1",
+    )
+
+
+@pytest.mark.asyncio
 async def test_sftp_upload_event_decodes_base64(reset_server_state):
     from torrus.server import on_sftp_upload
     import torrus.server as server_module
@@ -72,6 +95,8 @@ async def test_sftp_open_uses_source_tab_public_api(reset_server_state):
     server_module.sftp_manager = MagicMock()
     server_module.sftp_manager.open_sftp = AsyncMock(return_value=True)
     server_module.sftp_manager.list_directory = AsyncMock(return_value={"ok": True, "path": ".", "entries": []})
+    server_module.ssh_manager = MagicMock()
+    server_module.ssh_manager.get_session_target = AsyncMock(return_value=None)
 
     with patch("torrus.server.sio", sio_mock):
         await on_sftp_open("sid-1", {"session_id": "sess1", "tab_id": "sftp-tab", "source_tab_id": "terminal-tab"})
@@ -81,6 +106,57 @@ async def test_sftp_open_uses_source_tab_public_api(reset_server_state):
         "sftp-tab",
         server_module.ssh_manager,
         source_tab_id="terminal-tab",
+    )
+    sio_mock.emit.assert_awaited_once_with(
+        "sftp:open:result",
+        {"tab_id": "sftp-tab", "username": None, "ok": True, "path": ".", "entries": []},
+        to="sid-1",
+    )
+
+
+@pytest.mark.asyncio
+async def test_sftp_open_includes_source_ssh_username(reset_server_state):
+    from torrus.server import on_sftp_open
+    import torrus.server as server_module
+
+    sio_mock = MagicMock()
+    sio_mock.emit = AsyncMock()
+    server_module.sftp_manager = MagicMock()
+    server_module.sftp_manager.open_sftp = AsyncMock(return_value=True)
+    server_module.sftp_manager.list_directory = AsyncMock(return_value={"ok": True, "path": ".", "entries": []})
+    server_module.ssh_manager = MagicMock()
+    server_module.ssh_manager.get_session_target = AsyncMock(return_value=("server.example", 22, "deploy"))
+
+    with patch("torrus.server.sio", sio_mock):
+        await on_sftp_open("sid-1", {"session_id": "sess1", "tab_id": "sftp-tab", "source_tab_id": "terminal-tab"})
+
+    sio_mock.emit.assert_awaited_once_with(
+        "sftp:open:result",
+        {"tab_id": "sftp-tab", "username": "deploy", "ok": True, "path": ".", "entries": []},
+        to="sid-1",
+    )
+
+
+@pytest.mark.asyncio
+async def test_sftp_open_continues_when_username_lookup_fails(reset_server_state):
+    from torrus.server import on_sftp_open
+    import torrus.server as server_module
+
+    sio_mock = MagicMock()
+    sio_mock.emit = AsyncMock()
+    server_module.sftp_manager = MagicMock()
+    server_module.sftp_manager.open_sftp = AsyncMock(return_value=True)
+    server_module.sftp_manager.list_directory = AsyncMock(return_value={"ok": True, "path": ".", "entries": []})
+    server_module.ssh_manager = MagicMock()
+    server_module.ssh_manager.get_session_target = AsyncMock(side_effect=RuntimeError("session metadata unavailable"))
+
+    with patch("torrus.server.sio", sio_mock):
+        await on_sftp_open("sid-1", {"session_id": "sess1", "tab_id": "sftp-tab", "source_tab_id": "terminal-tab"})
+
+    sio_mock.emit.assert_awaited_once_with(
+        "sftp:open:result",
+        {"tab_id": "sftp-tab", "username": None, "ok": True, "path": ".", "entries": []},
+        to="sid-1",
     )
 
 

@@ -788,9 +788,21 @@ async def on_sftp_open(sid, data):
         return
     try:
         result = await sftp_manager.list_directory(tab_id, ".")
-        await sio.emit("sftp:open:result", {"tab_id": tab_id, **result}, to=sid)
     except SFTPError as exc:
-        await _emit_sftp_error(sid, tab_id, exc)
+        await sio.emit(
+            "sftp:open:result",
+            {"tab_id": tab_id, "ok": False, "code": exc.code, "message": exc.message},
+            to=sid,
+        )
+        return
+
+    try:
+        target = await ssh_manager.get_session_target(session_id, source_tab_id)
+        username = target[2] if target is not None else None
+    except Exception:
+        logger.warning("Could not determine SFTP username for %s/%s", session_id, source_tab_id, exc_info=True)
+        username = None
+    await sio.emit("sftp:open:result", {"tab_id": tab_id, "username": username, **result}, to=sid)
 
 
 @sio.on("sftp:list")
@@ -804,7 +816,11 @@ async def on_sftp_list(sid, data):
         result = await sftp_manager.list_directory(tab_id, data.get("path", "."))
         await sio.emit("sftp:list:result", {"tab_id": tab_id, **result}, to=sid)
     except SFTPError as exc:
-        await _emit_sftp_error(sid, tab_id, exc)
+        await sio.emit(
+            "sftp:list:result",
+            {"tab_id": tab_id, "ok": False, "code": exc.code, "message": exc.message},
+            to=sid,
+        )
 
 
 @sio.on("sftp:upload")

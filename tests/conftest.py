@@ -61,6 +61,7 @@ def reset_server_state():
     """Reset mutable module-level state in server.py before each test."""
     import torrus.server as server_module
 
+    original_ssh_manager = server_module.ssh_manager
     server_module._authenticated_sids.clear()
     server_module._authenticated_users.clear()
     server_module._input_buffers.clear()
@@ -74,3 +75,4 @@ def reset_server_state():
     server_module._ldap_enabled = False
     server_module._ldap_config = None
     server_module._ldap_session_manager = None
+    server_module.ssh_manager = original_ssh_manager

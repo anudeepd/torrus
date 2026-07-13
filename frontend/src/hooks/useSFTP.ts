@@ -13,6 +13,7 @@ interface ListingPayload {
   entries?: SFTPEntry[]
   code?: string
   message?: string
+  username?: string | null
 }
 
 interface DownloadPayload {
@@ -74,6 +75,7 @@ export function useSFTP(tabId: string, sourceTabId: string | undefined, socket: 
   const transfers = useSFTPStore(s => s.transfers.filter(t => t.tabId === tabId))
   const ensureTab = useSFTPStore(s => s.ensureTab)
   const setListing = useSFTPStore(s => s.setListing)
+  const setUsername = useSFTPStore(s => s.setUsername)
   const setLoading = useSFTPStore(s => s.setLoading)
   const setError = useSFTPStore(s => s.setError)
   const setDisconnected = useSFTPStore(s => s.setDisconnected)
@@ -114,8 +116,13 @@ export function useSFTP(tabId: string, sourceTabId: string | undefined, socket: 
       if (payload.tab_id !== tabId) return
       if (payload.ok === false) {
         setError(tabId, payload.message ?? payload.code ?? 'Unable to list directory.')
+        if (payload.code === 'CONNECTION_CLOSED') {
+          setDisconnected(tabId, true)
+          setTabStatus(tabId, 'dead')
+        }
         return
       }
+      if (payload.username !== undefined) setUsername(tabId, payload.username)
       setListing(tabId, payload.path ?? '.', payload.entries ?? [])
       setTabStatus(tabId, 'connected')
     }
@@ -153,7 +160,7 @@ export function useSFTP(tabId: string, sourceTabId: string | undefined, socket: 
       socket.off('sftp:mkdir:result', onUploaded)
       socket.off('sftp:download:result', onDownload)
     }
-  }, [socket, tabId, state.path, list, setTabStatus, setError, setListing, setDisconnected])
+  }, [socket, tabId, state.path, list, setTabStatus, setError, setListing, setUsername, setDisconnected])
 
   const uploadFiles = useCallback(async (files: FileList | File[]) => {
     const currentPath = useSFTPStore.getState().tabs[tabId]?.path ?? '.'

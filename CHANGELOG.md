@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.2.2] - 2026-07-13
+
+### Added
+
+- Add direct SFTP path navigation, visible SSH username, and robust connection-loss recovery.
+
+### Changed
+
+- Return SFTP open and list failures through their corresponding result events for inline navigation feedback.
+
 ## [0.2.1] - 2026-07-13
 
 ### Added

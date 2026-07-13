@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowUp, Download, FolderPlus, RefreshCw, Trash2, Upload } from 'lucide-react'
 import clsx from 'clsx'
 import type { Socket } from 'socket.io-client'
@@ -38,31 +38,78 @@ function formatDate(mtime: number): string {
   })
 }
 
-function pathSegments(path: string): { label: string; path: string }[] {
-  if (!path || path === '.') return [{ label: '~', path: '.' }]
-  const absolute = path.startsWith('/')
-  const parts = path.split('/').filter(Boolean)
-  const segments = parts.map((part, index) => ({
-    label: part,
-    path: `${absolute ? '/' : ''}${parts.slice(0, index + 1).join('/')}`,
-  }))
-  return [{ label: absolute ? '/' : '~', path: absolute ? '/' : '.' }, ...segments]
-}
-
 function joinName(path: string, name: string): string {
   if (!path || path === '.') return name
   return `${path.replace(/\/$/, '')}/${name}`
 }
 
+interface PathInputProps {
+  inputRef: React.RefObject<HTMLInputElement>
+  path: string
+  error: string | null
+  list: (path: string) => void
+  parentPath: (path: string) => string
+}
+
+function PathInput({ inputRef, path, error, list, parentPath }: PathInputProps) {
+  const [value, setValue] = useState(path)
+  const submittedRef = useRef(false)
+
+  const navigate = () => {
+    const nextPath = value.trim()
+    if (!nextPath || nextPath === path) {
+      setValue(path)
+      return
+    }
+    submittedRef.current = true
+    list(nextPath)
+  }
+
+  return (
+    <input
+      ref={inputRef}
+      aria-label="Remote path"
+      value={value}
+      onChange={event => setValue(event.target.value)}
+      onBlur={() => {
+        if (!submittedRef.current) setValue(path)
+      }}
+      onKeyDown={event => {
+        if (event.key === 'Enter') {
+          event.preventDefault()
+          navigate()
+          inputRef.current?.blur()
+        } else if (event.key === 'Escape') {
+          event.preventDefault()
+          submittedRef.current = false
+          setValue(path)
+          inputRef.current?.blur()
+        } else if (event.altKey && event.key === 'ArrowUp') {
+          event.preventDefault()
+          const nextPath = parentPath(path)
+          setValue(nextPath)
+          submittedRef.current = true
+          list(nextPath)
+        }
+      }}
+      className={clsx('min-w-0 flex-1 border border-transparent bg-transparent px-1 font-mono text-xs text-slate-300 outline-none hover:bg-surface-900 focus:border-brand-500 focus:bg-surface-900', {
+        'border-red-500 text-red-200': error !== null,
+      })}
+    />
+  )
+}
+
 export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserProps) {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
+  const pathInputRef = useRef<HTMLInputElement>(null)
   const [dragging, setDragging] = useState(false)
   const [renamePath, setRenamePath] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
   const [deletePaths, setDeletePaths] = useState<string[] | null>(null)
   const {
     path,
+    username,
     entries,
     selectedPaths,
     loading,
@@ -80,16 +127,22 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
   } = useSFTP(tabId, sourceTabId, socket)
   const { toggleSelected, setSelected, clearSelected } = useSFTPStore()
 
+  useEffect(() => {
+    const focusPath = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'l') {
+        event.preventDefault()
+        pathInputRef.current?.focus()
+        pathInputRef.current?.select()
+      }
+    }
+    window.addEventListener('keydown', focusPath)
+    return () => window.removeEventListener('keydown', focusPath)
+  }, [])
+
   const selectedEntries = useMemo(
     () => entries.filter(entry => selectedPaths.includes(entry.path)),
     [entries, selectedPaths],
   )
-
-  const breadcrumbs = useMemo(() => {
-    const segments = pathSegments(path)
-    if (segments.length <= 5) return segments
-    return [segments[0], { label: '...', path }, ...segments.slice(-2)]
-  }, [path])
 
   const startRename = useCallback((entry: SFTPEntry) => {
     setRenamePath(entry.path)
@@ -164,24 +217,17 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
   return (
     <div className="relative flex h-full min-h-0 flex-col bg-surface-950 text-slate-200">
       <div className="flex h-9 flex-shrink-0 items-center justify-between gap-2 border-b border-surface-800 px-2">
-        <nav className="flex min-w-0 items-center text-xs" aria-label="Current path">
-          {breadcrumbs.map((segment, index) => (
-            <span key={`${segment.label}-${index}`} className="flex min-w-0 items-center">
-              {index > 0 && <span className="px-1 text-slate-600">/</span>}
-              <button
-                type="button"
-                onClick={() => segment.label !== '...' && list(segment.path)}
-                className={clsx('truncate px-1 hover:text-slate-200', {
-                  'font-medium text-slate-200': index === breadcrumbs.length - 1,
-                  'text-slate-400': index !== breadcrumbs.length - 1,
-                  'cursor-default': segment.label === '...',
-                })}
-              >
-                {segment.label}
-              </button>
-            </span>
-          ))}
-        </nav>
+        <div className="flex min-w-0 flex-1 items-center gap-2">
+          <PathInput
+            key={`${path}-${error ?? ''}`}
+            inputRef={pathInputRef}
+            path={path}
+            error={error}
+            list={list}
+            parentPath={parentPath}
+          />
+          {username && <span className="hidden flex-shrink-0 text-xs text-slate-500 sm:inline">Connected as {username}</span>}
+        </div>
         <div className="flex flex-shrink-0 items-center gap-1">
           <Button variant="ghost" size="sm" title="Refresh" onClick={() => list(path)}>
             <RefreshCw className="h-3.5 w-3.5" />
