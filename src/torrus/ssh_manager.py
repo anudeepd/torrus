@@ -9,6 +9,7 @@ import shlex
 import socket
 import time
 from dataclasses import dataclass, field
+from collections.abc import Awaitable, Callable
 from typing import Optional
 
 import paramiko
@@ -72,8 +73,13 @@ class SSHSession:
 
 
 class SSHManager:
-    def __init__(self, sio):
+    def __init__(
+        self,
+        sio,
+        on_disconnect: Callable[[str], Awaitable[None]] | None = None,
+    ):
         self.sio = sio
+        self._on_disconnect = on_disconnect
         # (session_id, tab_id) -> SSHSession
         self._sessions: dict[tuple[str, str], SSHSession] = {}
         # socket.io sid -> set of (session_id, tab_id) keys
@@ -318,6 +324,29 @@ class SSHManager:
                 return None
             return session.host, session.port, session.username
 
+    async def has_session(self, session_id: str) -> bool:
+        """Return True when any active tab exists for this browser session."""
+        async with self._lock:
+            return any(key_session_id == session_id for key_session_id, _tab_id in self._sessions)
+
+    async def open_sftp_channel(self, session_id: str, tab_id: str):
+        """Open a new SFTP channel on an existing SSH transport."""
+        loop = asyncio.get_running_loop()
+        async with self._lock:
+            session = self._sessions.get((session_id, tab_id))
+            if session is None or session.channel.closed:
+                return None
+            transport = session.client.get_transport()
+            if transport is None or not transport.is_active():
+                return None
+            try:
+                return await loop.run_in_executor(self._ssh_executor, transport.open_sftp_client)
+            except AttributeError:
+                return await loop.run_in_executor(self._ssh_executor, session.client.open_sftp)
+            except Exception:
+                logger.warning("Failed to open SFTP channel for %s/%s", session_id, tab_id, exc_info=True)
+                return None
+
     async def handle_resize(self, session_id: str, tab_id: str, cols: int, rows: int) -> None:
         key = (session_id, tab_id)
         async with self._lock:
@@ -473,6 +502,9 @@ class SSHManager:
             session.write_task.cancel()
         async with self._lock:
             self._sessions.pop((session.session_id, session.tab_id), None)
+            still_connected = any(key[0] == session.session_id for key in self._sessions)
+        if not still_connected and self._on_disconnect is not None:
+            await self._on_disconnect(session.session_id)
 
     async def _write_loop(self, session: SSHSession) -> None:
         """Serialize all input writes to the SSH channel per session."""

@@ -9,6 +9,7 @@ import LayoutPickerModal from './LayoutPickerModal'
 import BroadcastPickerModal from './BroadcastPickerModal'
 import SessionSidebar from './SessionSidebar'
 import TerminalPane from '@/components/terminal/TerminalPane'
+import SFTPBrowser from '@/components/sftp/SFTPBrowser'
 import SettingsDialog from '@/components/settings/SettingsDialog'
 import Logo from '@/components/ui/Logo'
 import AuthRedirectOverlay from '@/components/ui/AuthRedirectOverlay'
@@ -33,7 +34,7 @@ function getTabDisplayName(tab: Tab | undefined): string {
 }
 
 export default function AppLayout() {
-  const { tabs, activeTabId, addTab, closeTab, closeAllTabs, setActiveTab, sessionId } = useTerminalStore()
+  const { tabs, activeTabId, addTab, addSftpTab, closeTab, closeAllTabs, setActiveTab, sessionId } = useTerminalStore()
   const { root: layoutRoot, closePane, exitSplitMode, applyLayout } = useLayoutStore()
   const { enabled: broadcastEnabled, excludedTabIds, disable: disableBroadcast } = useBroadcastStore()
   const socket = getSocket()
@@ -50,6 +51,7 @@ export default function AppLayout() {
   const shouldWarnBeforeClosingTab = useCallback((tabId: string) => {
     const tab = useTerminalStore.getState().tabs.find(t => t.id === tabId)
     if (!tab) return false
+    if (tab.type !== 'terminal') return false
     return tab.status !== 'disconnected' || !!tab.host || !!tab.username
   }, [])
 
@@ -57,7 +59,7 @@ export default function AppLayout() {
   useEffect(() => {
     const handler = (e: BeforeUnloadEvent) => {
       if (authRedirectingRef.current) return
-      const hasActive = useTerminalStore.getState().tabs.some(t => t.status === 'connected')
+      const hasActive = useTerminalStore.getState().tabs.some(t => t.type === 'terminal' && t.status === 'connected')
       if (!hasActive) return
       e.preventDefault()
       e.returnValue = 'You have active SSH sessions. Leave anyway?'
@@ -91,6 +93,7 @@ export default function AppLayout() {
     const onConnect = () => {
       const { tabs: currentTabs, sessionId: sid } = useTerminalStore.getState()
       for (const tab of currentTabs) {
+        if (tab.type !== 'terminal') continue
         socket.emit('session:register', { session_id: sid, tab_id: tab.id })
       }
     }
@@ -165,6 +168,14 @@ export default function AppLayout() {
     })
   }, [addTab, socket, sessionId])
 
+  const handleOpenSftpTab = useCallback((sourceTabId: string) => {
+    const sourceTab = useTerminalStore.getState().tabs.find(t => t.id === sourceTabId)
+    if (!sourceTab || sourceTab.status !== 'connected') return
+    const tabId = addSftpTab(sourceTabId)
+    socket.emit('session:register', { session_id: sessionId, tab_id: sourceTabId })
+    setActiveTab(tabId)
+  }, [addSftpTab, socket, sessionId, setActiveTab])
+
   const handleSetActiveTab = useCallback((tabId: string) => {
     if (layoutRoot) {
       const inLayout = getLayoutTabIds(layoutRoot).includes(tabId)
@@ -179,9 +190,10 @@ export default function AppLayout() {
 
   const handleCloseAllTabs = useCallback(() => {
     const currentTabs = useTerminalStore.getState().tabs
-    const hasActive = currentTabs.some(t => t.status === 'connected')
+    const terminalTabs = currentTabs.filter(t => t.type === 'terminal')
+    const hasActive = terminalTabs.some(t => t.status === 'connected')
     if (hasActive && !confirm('Close all tabs? All SSH sessions will be disconnected.')) return
-    for (const tab of currentTabs) socket.emit('ssh:disconnect', { session_id: sessionId, tab_id: tab.id })
+    for (const tab of terminalTabs) socket.emit('ssh:disconnect', { session_id: sessionId, tab_id: tab.id })
     exitSplitMode()
     disableBroadcast()
     closeAllTabs()
@@ -292,7 +304,7 @@ export default function AppLayout() {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [])
 
-  const connectedTabs = useMemo(() => tabs.filter(t => t.status === 'connected'), [tabs])
+  const connectedTabs = useMemo(() => tabs.filter(t => t.type === 'terminal' && t.status === 'connected'), [tabs])
   const broadcastIncluded = useMemo(
     () => new Set(connectedTabs.filter(t => !excludedTabIds.includes(t.id)).map(t => t.id)),
     [connectedTabs, excludedTabIds]
@@ -331,6 +343,7 @@ export default function AppLayout() {
           onAddTab={handleAddTab}
           onCloseTab={handleCloseTab}
           onCloneTab={handleCloneTab}
+          onOpenSftpTab={handleOpenSftpTab}
           onDuplicateTab={handleDuplicateTab}
           onCloseAllTabs={handleCloseAllTabs}
           onOpenSettings={() => setSettingsOpen(true)}
@@ -363,7 +376,11 @@ export default function AppLayout() {
                 className="absolute inset-0"
                 style={{ display: tab.id === activeTabId ? 'flex' : 'none', flexDirection: 'column' }}
               >
-                <TerminalPane tabId={tab.id} isActive={tab.id === activeTabId} socket={socket} />
+                {tab.type === 'sftp' ? (
+                  <SFTPBrowser tabId={tab.id} sourceTabId={tab.sourceTabId} socket={socket} />
+                ) : (
+                  <TerminalPane tabId={tab.id} isActive={tab.id === activeTabId} socket={socket} />
+                )}
               </div>
             ))
           )}

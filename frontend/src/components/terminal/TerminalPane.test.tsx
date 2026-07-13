@@ -14,6 +14,7 @@ function seedStores(tabId: string, status: 'connected' | 'disconnected') {
     tabs: [
       {
         id: tabId,
+        type: 'terminal',
         host: 'localhost',
         port: 22,
         username: 'test',

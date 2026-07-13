@@ -1,13 +1,26 @@
 export type TabStatus = 'disconnected' | 'connecting' | 'connected' | 'dead'
+export type TabType = 'terminal' | 'sftp'
 
 export interface Tab {
   id: string
+  type: TabType
   host: string | null
   port: number | null
   username: string | null
   label: string | null
   status: TabStatus
   sessionKey: string  // `${sessionId}:${tabId}` — used as Socket.IO room key
+  sourceTabId?: string
+}
+
+export interface SFTPEntry {
+  name: string
+  path: string
+  type: 'directory' | 'file' | 'symlink'
+  is_symlink?: boolean
+  size: number
+  mtime: number
+  mode?: number
 }
 
 export interface ConnectFormValues {

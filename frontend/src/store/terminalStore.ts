@@ -22,6 +22,7 @@ interface TerminalState {
   activeTabId: string | null
 
   addTab: () => string
+  addSftpTab: (sourceTabId: string) => string
   closeTab: (id: string) => void
   closeAllTabs: () => void
   setActiveTab: (id: string) => void
@@ -54,12 +55,31 @@ export const useTerminalStore = create<TerminalState>()(
         const tabId = newTabId()
         const tab: Tab = {
           id: tabId,
+          type: 'terminal',
           host: null,
           port: null,
           username: null,
           label: null,
           status: 'disconnected',
           sessionKey: `${get().sessionId}:${tabId}`,
+        }
+        set(s => ({ tabs: [...s.tabs, tab], activeTabId: tabId }))
+        return tabId
+      },
+
+      addSftpTab: (sourceTabId) => {
+        const source = get().tabs.find(t => t.id === sourceTabId)
+        const tabId = newTabId()
+        const tab: Tab = {
+          id: tabId,
+          type: 'sftp',
+          host: source?.host ?? null,
+          port: source?.port ?? null,
+          username: source?.username ?? null,
+          label: source?.host ? `SFTP ${source.username}@${source.host}` : 'SFTP',
+          status: 'connecting',
+          sessionKey: `${get().sessionId}:${tabId}`,
+          sourceTabId,
         }
         set(s => ({ tabs: [...s.tabs, tab], activeTabId: tabId }))
         return tabId
@@ -100,14 +120,15 @@ export const useTerminalStore = create<TerminalState>()(
     }),
     {
       name: 'torrus-tabs',
-      version: 2,
+      version: 3,
       migrate: (persistedState: unknown, version: number) => {
-        if (version < 2) {
+        if (version < 3) {
           const s = persistedState as Record<string, unknown>
           return {
             ...s,
             tabs: (Array.isArray(s.tabs) ? s.tabs : []).map((t: Record<string, unknown>) => ({
               ...t,
+              type: t.type ?? 'terminal',
               sessionKey: t.sessionKey ?? `${s.sessionId ?? ''}:${t.id ?? ''}`,
             })),
           }
