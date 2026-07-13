@@ -6,6 +6,7 @@ import type { PaneNode } from '@/store/layoutStore'
 import { useLayoutStore } from '@/store/layoutStore'
 import { useTerminalStore } from '@/store/terminalStore'
 import TerminalPane from '@/components/terminal/TerminalPane'
+import SFTPBrowser from '@/components/sftp/SFTPBrowser'
 
 interface SplitPaneProps {
   node: PaneNode
@@ -25,7 +26,7 @@ class LeafErrorBoundary extends Component<{ children: ReactNode; fallback: React
     return { hasError: true, error }
   }
   componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
-    console.error("TerminalPane error:", error, errorInfo)
+    console.error("Pane error:", error, errorInfo)
   }
   render() {
     if (this.state.hasError) {
@@ -39,7 +40,7 @@ function LeafPaneErrorFallback({ tabId, onClose }: { tabId: string; onClose: () 
   return (
     <div className="flex flex-col w-full h-full bg-surface-900 items-center justify-center p-4">
       <AlertTriangle className="w-8 h-8 text-red-400 mb-2" />
-      <p className="text-sm text-slate-300 mb-2">Terminal failed to load</p>
+      <p className="text-sm text-slate-300 mb-2">Pane failed to load</p>
       <p className="text-xs text-slate-500 mb-3">Tab: {tabId}</p>
       <button
         onClick={onClose}
@@ -124,12 +125,16 @@ function LeafPane({ tabId, socket, onClose, isOnlyPane }: {
 
       <div className="flex-1 min-h-0 relative">
         <LeafErrorBoundary fallback={<LeafPaneErrorFallback tabId={tabId} onClose={() => onClose(tabId)} />}>
-          <TerminalPane
-            tabId={tabId}
-            isActive={true}
-            focused={isFocused}
-            socket={socket}
-          />
+          {tab?.type === 'sftp' ? (
+            <SFTPBrowser tabId={tabId} sourceTabId={tab.sourceTabId} socket={socket} />
+          ) : (
+            <TerminalPane
+              tabId={tabId}
+              isActive={true}
+              focused={isFocused}
+              socket={socket}
+            />
+          )}
         </LeafErrorBoundary>
       </div>
     </div>

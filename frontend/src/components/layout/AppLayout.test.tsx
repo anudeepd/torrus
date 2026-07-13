@@ -89,6 +89,7 @@ describe('AppLayout LDAP auth handling', () => {
       sessionId: 'test-session',
       tabs: [{
         id: 'tab-1',
+        type: 'terminal',
         host: 'localhost',
         port: 22,
         username: 'alice',

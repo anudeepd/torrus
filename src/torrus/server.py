@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 from http.cookies import SimpleCookie
 import ipaddress
 import logging
@@ -12,15 +13,17 @@ import time
 from contextlib import asynccontextmanager
 from importlib.resources import files
 from pathlib import Path
+from urllib.parse import quote
 
 import socketio
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from torrus import audit_store
 from torrus.logging_utils import configure_logging, suppress_routine_polling_logs
+from torrus.sftp_manager import SFTPError, SFTPManager
 from torrus.ssh_manager import SSHManager
 
 logger = logging.getLogger("torrus.server")
@@ -36,6 +39,7 @@ _ALLOW_PRIVATE_HOSTS_WITHOUT_LDAP = os.getenv(
     "TORRUS_ALLOW_PRIVATE_HOSTS_WITHOUT_LDAP", "true"
 ).lower() in {"1", "true", "yes", "on"}
 _MAX_SESSIONS_PER_SID = 20
+_SFTP_HTTP_UPLOAD_MAX_BYTES = 100 * 1024 * 1024
 APP_CSP = (
     "default-src 'self'; "
     "connect-src 'self' ws: wss:; "
@@ -102,6 +106,7 @@ async def lifespan(app):
         audit_store.init_db()
     ssh_manager.start_background_tasks()
     yield
+    await sftp_manager.shutdown()
     await ssh_manager.stop_background_tasks()
 
 
@@ -149,7 +154,8 @@ _MAX_INPUT_BUFFER = 1_048_576
 # Combined ASGI app — uvicorn runs this
 app = socketio.ASGIApp(sio, other_asgi_app=fastapi_app)
 
-ssh_manager = SSHManager(sio)
+sftp_manager = SFTPManager()
+ssh_manager = SSHManager(sio, on_disconnect=sftp_manager.on_ssh_disconnect)
 
 
 # ---------------------------------------------------------------------------
@@ -219,6 +225,57 @@ async def favicon():
 @fastapi_app.get("/api/config", include_in_schema=False)
 async def api_config():
     return {"ldap_enabled": bool(os.getenv("TORRUS_LDAP_CONFIG"))}
+
+
+@fastapi_app.post("/sftp/upload", include_in_schema=False)
+async def sftp_stream_upload(request: Request):
+    session_id = request.query_params.get("session_id", "")
+    tab_id = request.query_params.get("tab_id", "")
+    remote_path = request.query_params.get("path", "")
+    if not _valid_id(session_id) or not _valid_id(tab_id) or not remote_path:
+        return JSONResponse(status_code=400, content={"ok": False, "code": "invalid_request"})
+    if not await ssh_manager.has_session(session_id):
+        return JSONResponse(status_code=403, content={"ok": False, "code": "auth_required"})
+    try:
+        result = await sftp_manager.stream_upload(
+            tab_id,
+            remote_path,
+            request.stream(),
+            max_bytes=_SFTP_HTTP_UPLOAD_MAX_BYTES,
+            expected_session_id=session_id,
+        )
+        return JSONResponse(content=result)
+    except SFTPError as exc:
+        return JSONResponse(
+            status_code=404 if exc.code == "FILE_NOT_FOUND" else 413 if exc.code == "FILE_TOO_LARGE" else 403 if exc.code == "PERMISSION_DENIED" else 400,
+            content={"ok": False, "code": exc.code, "message": exc.message},
+        )
+
+
+@fastapi_app.get("/sftp/download", include_in_schema=False)
+async def sftp_stream_download(request: Request):
+    session_id = request.query_params.get("session_id", "")
+    tab_id = request.query_params.get("tab_id", "")
+    remote_path = request.query_params.get("path", "")
+    if not _valid_id(session_id) or not _valid_id(tab_id) or not remote_path:
+        return JSONResponse(status_code=400, content={"ok": False, "code": "invalid_request"})
+    if not await ssh_manager.has_session(session_id):
+        return JSONResponse(status_code=403, content={"ok": False, "code": "auth_required"})
+
+    try:
+        download = await sftp_manager.prepare_download(tab_id, remote_path, expected_session_id=session_id)
+    except SFTPError as exc:
+        return JSONResponse(
+            status_code=404 if exc.code == "FILE_NOT_FOUND" else 403 if exc.code == "PERMISSION_DENIED" else 400,
+            content={"ok": False, "code": exc.code, "message": exc.message},
+        )
+
+    filename = download["name"] or Path(remote_path).name or "download"
+    return StreamingResponse(
+        sftp_manager.stream_download(tab_id, download["path"], expected_session_id=session_id),
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"},
+    )
 
 
 @fastapi_app.get("/{full_path:path}", include_in_schema=False)
@@ -655,6 +712,7 @@ async def on_ssh_disconnect(sid, data):
         return
     if not await _require_auth(sid, tab_id):
         return
+    await sftp_manager.close_sftp(tab_id)
     await ssh_manager.disconnect_session(session_id, tab_id)
     async with _input_buffer_lock:
         _input_buffers.pop((sid, session_id, tab_id), None)
@@ -693,3 +751,137 @@ async def on_ssh_clone(sid, data):
         cols=cols,
         rows=rows,
     )
+
+
+# ---------------------------------------------------------------------------
+# SFTP events
+# ---------------------------------------------------------------------------
+
+async def _emit_sftp_error(sid: str, tab_id: str, exc: SFTPError) -> None:
+    await sio.emit(
+        "sftp:error",
+        {"tab_id": tab_id, "code": exc.code, "message": exc.message},
+        to=sid,
+    )
+
+
+def _sftp_request_ids(data) -> tuple[str, str]:
+    return data.get("session_id", ""), data.get("tab_id", "")
+
+
+@sio.on("sftp:open")
+async def on_sftp_open(sid, data):
+    session_id, tab_id = _sftp_request_ids(data)
+    source_tab_id = data.get("source_tab_id", tab_id)
+    if not _valid_id(session_id) or not _valid_id(tab_id) or not _valid_id(source_tab_id):
+        await sio.emit("sftp:open:result", {"tab_id": tab_id, "ok": False, "code": "invalid_request"}, to=sid)
+        return
+    if not await _require_auth(sid, tab_id):
+        return
+    ok = await sftp_manager.open_sftp(session_id, tab_id, ssh_manager, source_tab_id=source_tab_id)
+    if not ok:
+        await sio.emit(
+            "sftp:open:result",
+            {"tab_id": tab_id, "ok": False, "code": "CONNECTION_CLOSED"},
+            to=sid,
+        )
+        return
+    try:
+        result = await sftp_manager.list_directory(tab_id, ".")
+        await sio.emit("sftp:open:result", {"tab_id": tab_id, **result}, to=sid)
+    except SFTPError as exc:
+        await _emit_sftp_error(sid, tab_id, exc)
+
+
+@sio.on("sftp:list")
+async def on_sftp_list(sid, data):
+    session_id, tab_id = _sftp_request_ids(data)
+    if not _valid_id(session_id) or not _valid_id(tab_id):
+        return
+    if not await _require_auth(sid, tab_id):
+        return
+    try:
+        result = await sftp_manager.list_directory(tab_id, data.get("path", "."))
+        await sio.emit("sftp:list:result", {"tab_id": tab_id, **result}, to=sid)
+    except SFTPError as exc:
+        await _emit_sftp_error(sid, tab_id, exc)
+
+
+@sio.on("sftp:upload")
+async def on_sftp_upload(sid, data):
+    session_id, tab_id = _sftp_request_ids(data)
+    if not _valid_id(session_id) or not _valid_id(tab_id):
+        return
+    if not await _require_auth(sid, tab_id):
+        return
+    try:
+        raw = base64.b64decode(data.get("data", ""), validate=True)
+        result = await sftp_manager.upload_file(tab_id, data.get("path", ""), raw)
+        await sio.emit("sftp:upload:result", {"tab_id": tab_id, **result}, to=sid)
+    except SFTPError as exc:
+        await _emit_sftp_error(sid, tab_id, exc)
+    except Exception:
+        await _emit_sftp_error(sid, tab_id, SFTPError("TRANSFER_FAILED", "Transfer failed. Check connection and retry."))
+
+
+@sio.on("sftp:download")
+async def on_sftp_download(sid, data):
+    session_id, tab_id = _sftp_request_ids(data)
+    if not _valid_id(session_id) or not _valid_id(tab_id):
+        return
+    if not await _require_auth(sid, tab_id):
+        return
+    try:
+        result = await sftp_manager.download_file(tab_id, data.get("path", ""))
+        await sio.emit("sftp:download:result", {"tab_id": tab_id, **result}, to=sid)
+    except SFTPError as exc:
+        await _emit_sftp_error(sid, tab_id, exc)
+
+
+@sio.on("sftp:delete")
+async def on_sftp_delete(sid, data):
+    session_id, tab_id = _sftp_request_ids(data)
+    if not _valid_id(session_id) or not _valid_id(tab_id):
+        return
+    if not await _require_auth(sid, tab_id):
+        return
+    paths = data.get("paths") if isinstance(data.get("paths"), list) else [data.get("path", "")]
+    results = []
+    for path in paths:
+        try:
+            results.append(await sftp_manager.delete(tab_id, str(path)))
+        except SFTPError as exc:
+            results.append({"ok": False, "path": str(path), "code": exc.code, "message": exc.message})
+    await sio.emit(
+        "sftp:delete:result",
+        {"tab_id": tab_id, "ok": all(item.get("ok") for item in results), "results": results},
+        to=sid,
+    )
+
+
+@sio.on("sftp:rename")
+async def on_sftp_rename(sid, data):
+    session_id, tab_id = _sftp_request_ids(data)
+    if not _valid_id(session_id) or not _valid_id(tab_id):
+        return
+    if not await _require_auth(sid, tab_id):
+        return
+    try:
+        result = await sftp_manager.rename(tab_id, data.get("old_path", ""), data.get("new_path", ""))
+        await sio.emit("sftp:rename:result", {"tab_id": tab_id, **result}, to=sid)
+    except SFTPError as exc:
+        await _emit_sftp_error(sid, tab_id, exc)
+
+
+@sio.on("sftp:mkdir")
+async def on_sftp_mkdir(sid, data):
+    session_id, tab_id = _sftp_request_ids(data)
+    if not _valid_id(session_id) or not _valid_id(tab_id):
+        return
+    if not await _require_auth(sid, tab_id):
+        return
+    try:
+        result = await sftp_manager.mkdir(tab_id, data.get("path", ""))
+        await sio.emit("sftp:mkdir:result", {"tab_id": tab_id, **result}, to=sid)
+    except SFTPError as exc:
+        await _emit_sftp_error(sid, tab_id, exc)

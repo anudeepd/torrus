@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback, useMemo, type FormEvent } from 'react'
-import { Plus, X, Pencil, Bookmark, Copy, GitFork, Settings, LogOut, PanelLeftClose, Radio, Columns2 } from 'lucide-react'
+import { Plus, X, Pencil, Bookmark, Copy, Folder, GitFork, Settings, LogOut, PanelLeftClose, Radio, Columns2 } from 'lucide-react'
 import clsx from 'clsx'
 import { useTerminalStore } from '@/store/terminalStore'
 import { useSavedServerStore } from '@/store/savedServerStore'
@@ -14,6 +14,7 @@ interface TabBarProps {
   onAddTab: () => void
   onCloseTab: (id: string) => void
   onCloneTab: (id: string) => void
+  onOpenSftpTab: (id: string) => void
   onDuplicateTab: (id: string) => void
   onCloseAllTabs: () => void
   onOpenSettings: () => void
@@ -48,6 +49,7 @@ function StatusDot({ status }: { status: Tab['status'] }) {
 
 function getTabDisplayName(tab: Tab): string {
   if (tab.label) return tab.label
+  if (tab.type === 'sftp') return 'SFTP'
   if (tab.host && tab.username) return `${tab.username}@${tab.host}`
   return 'New Connection'
 }
@@ -144,12 +146,12 @@ function SaveSessionDialog({ state, onSave, onClose }: {
   )
 }
 
-export default function TabBar({ onAddTab, onCloseTab, onCloneTab, onDuplicateTab, onCloseAllTabs, onOpenSettings, onOpenSplitPicker, onOpenBroadcastPicker, onExitSplit, onSetActiveTab, inSplitMode }: TabBarProps) {
+export default function TabBar({ onAddTab, onCloseTab, onCloneTab, onOpenSftpTab, onDuplicateTab, onCloseAllTabs, onOpenSettings, onOpenSplitPicker, onOpenBroadcastPicker, onExitSplit, onSetActiveTab, inSplitMode }: TabBarProps) {
   const { tabs, activeTabId, renameTab } = useTerminalStore()
   const addServer = useSavedServerStore(s => s.addServer)
   const ldapEnabled = useServerConfigStore(s => s.ldapEnabled)
   const { enabled: broadcastEnabled } = useBroadcastStore()
-  const connectedCount = useMemo(() => tabs.filter(t => t.status === 'connected').length, [tabs])
+  const connectedCount = useMemo(() => tabs.filter(t => t.type === 'terminal' && t.status === 'connected').length, [tabs])
   const [editingTabId, setEditingTabId] = useState<string | null>(null)
   const [editValue, setEditValue] = useState('')
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
@@ -258,9 +260,10 @@ export default function TabBar({ onAddTab, onCloseTab, onCloneTab, onDuplicateTa
               )}
             >
               <StatusDot status={tab.status} />
+              {tab.type === 'sftp' && <Folder className="h-3.5 w-3.5 flex-shrink-0 text-brand-400" />}
 
               {/* Broadcast active indicator */}
-              {broadcastEnabled && tab.status === 'connected' && (
+              {broadcastEnabled && tab.type === 'terminal' && tab.status === 'connected' && (
                 <Radio className="flex-shrink-0 w-3 h-3 text-amber-400" />
               )}
 
@@ -384,7 +387,15 @@ export default function TabBar({ onAddTab, onCloseTab, onCloneTab, onDuplicateTa
               <Pencil className="w-3 h-3" />
               Rename
             </button>
-            {tab.status === 'connected' && (
+            {tab.type === 'terminal' && tab.status === 'connected' && (
+              <>
+              <button
+                className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-300 hover:bg-surface-700 transition-colors"
+                onClick={() => { setContextMenu(null); onOpenSftpTab(tab.id) }}
+              >
+                <Folder className="w-3 h-3" />
+                Open SFTP
+              </button>
               <button
                 className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-300 hover:bg-surface-700 transition-colors"
                 onClick={() => { setContextMenu(null); onCloneTab(tab.id) }}
@@ -392,6 +403,7 @@ export default function TabBar({ onAddTab, onCloseTab, onCloneTab, onDuplicateTa
                 <GitFork className="w-3 h-3" />
                 Clone (same connection)
               </button>
+              </>
             )}
             {tab.host && tab.username && (
               <button

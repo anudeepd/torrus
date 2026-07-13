@@ -87,7 +87,7 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
   const broadcastTargets = useMemo(() => {
     if (!broadcastEnabled) return new Set<string>()
     return new Set(
-      tabs.filter(t => t.status === 'connected' && !broadcastExcluded.includes(t.id)).map(t => t.id)
+      tabs.filter(t => t.type === 'terminal' && t.status === 'connected' && !broadcastExcluded.includes(t.id)).map(t => t.id)
     )
   }, [tabs, broadcastEnabled, broadcastExcluded])
 
