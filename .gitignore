@@ -29,6 +29,7 @@ Thumbs.db
 frontend/node_modules/
 frontend/dist/
 frontend/test-results/
+/node_modules/
 
 # Project specific
 torrus.log
@@ -46,3 +47,4 @@ PLAN-*.md
 TESTING.md
 TODO.md
 /package-lock.json
+.gstack/
