@@ -22,15 +22,38 @@ type PendingClose = {
   tabId: string
 } | null
 
-type SshErrorPayload = {
+type AuthErrorPayload = {
   code?: string
 }
+
+const SFTP_AUTH_RESULT_EVENTS = [
+  'sftp:error',
+  'sftp:open:result',
+  'sftp:list:result',
+  'sftp:upload:result',
+  'sftp:delete:result',
+  'sftp:rename:result',
+  'sftp:mkdir:result',
+  'sftp:chmod:result',
+  'sftp:chown:result',
+  'sftp:download:result',
+  'sftp:accounts:result',
+] as const
 
 function getTabDisplayName(tab: Tab | undefined): string {
   if (!tab) return 'this tab'
   if (tab.label) return tab.label
   if (tab.host && tab.username) return `${tab.username}@${tab.host}`
   return 'New Connection'
+}
+
+function getCloseTitle(tab: Tab | undefined): string {
+  return tab?.type === 'sftp' ? 'Close SFTP tab?' : 'Close session?'
+}
+
+function getCloseMessage(tab: Tab | undefined): string {
+  if (tab?.type === 'sftp') return `Closing ${getTabDisplayName(tab)} will close its SFTP browser.`
+  return `Closing ${getTabDisplayName(tab)} will disconnect its SSH session.`
 }
 
 export default function AppLayout() {
@@ -51,9 +74,18 @@ export default function AppLayout() {
   const shouldWarnBeforeClosingTab = useCallback((tabId: string) => {
     const tab = useTerminalStore.getState().tabs.find(t => t.id === tabId)
     if (!tab) return false
-    if (tab.type !== 'terminal') return false
+    if (tab.type === 'sftp') return true
     return tab.status !== 'disconnected' || !!tab.host || !!tab.username
   }, [])
+
+  const closeRemoteTab = useCallback((tabId: string) => {
+    const tab = useTerminalStore.getState().tabs.find(t => t.id === tabId)
+    if (tab?.type === 'sftp') {
+      socket.emit('sftp:close', { session_id: sessionId, tab_id: tabId })
+      return
+    }
+    socket.emit('ssh:disconnect', { session_id: sessionId, tab_id: tabId })
+  }, [socket, sessionId])
 
   // Warn before close/reload if any active SSH sessions
   useEffect(() => {
@@ -80,12 +112,20 @@ export default function AppLayout() {
   // Socket.IO bypasses FastAPI middleware, so expired LDAP sessions are reported
   // by socket events. Send the browser through LDAPGate instead of showing the SSH form.
   useEffect(() => {
-    const onError = (payload: SshErrorPayload | undefined) => {
+    const onError = (payload: AuthErrorPayload | undefined) => {
       if (payload?.code !== 'auth_required') return
       redirectToLdapLogin()
     }
     socket.on('ssh:error', onError)
-    return () => { socket.off('ssh:error', onError) }
+    for (const eventName of SFTP_AUTH_RESULT_EVENTS) {
+      socket.on(eventName, onError)
+    }
+    return () => {
+      socket.off('ssh:error', onError)
+      for (const eventName of SFTP_AUTH_RESULT_EVENTS) {
+        socket.off(eventName, onError)
+      }
+    }
   }, [socket])
 
   // Register all tabs on socket connect
@@ -108,7 +148,7 @@ export default function AppLayout() {
   }, [addTab, socket, sessionId])
 
   const closePaneNow = useCallback((tabId: string) => {
-    socket.emit('ssh:disconnect', { session_id: sessionId, tab_id: tabId })
+    closeRemoteTab(tabId)
     const { root } = useLayoutStore.getState()
     if (!root) return
     const remaining = getLayoutTabIds(root).filter(id => id !== tabId)
@@ -118,12 +158,12 @@ export default function AppLayout() {
     } else {
       closePane(tabId)
     }
-  }, [socket, sessionId, closePane, exitSplitMode, setActiveTab])
+  }, [closeRemoteTab, closePane, exitSplitMode, setActiveTab])
 
   const closeTabNow = useCallback((id: string) => {
     const { root } = useLayoutStore.getState()
     if (root && getLayoutTabIds(root).includes(id)) {
-      socket.emit('ssh:disconnect', { session_id: sessionId, tab_id: id })
+      closeRemoteTab(id)
       const remaining = getLayoutTabIds(root).filter(tabId => tabId !== id)
       if (remaining.length <= 1) {
         exitSplitMode()
@@ -132,10 +172,10 @@ export default function AppLayout() {
         closePane(id)
       }
     } else {
-      socket.emit('ssh:disconnect', { session_id: sessionId, tab_id: id })
+      closeRemoteTab(id)
     }
     closeTab(id)
-  }, [socket, sessionId, closeTab, closePane, exitSplitMode, setActiveTab])
+  }, [closeRemoteTab, closeTab, closePane, exitSplitMode, setActiveTab])
 
   const handleClosePane = useCallback((tabId: string) => {
     if (shouldWarnBeforeClosingTab(tabId)) {
@@ -191,9 +231,11 @@ export default function AppLayout() {
   const handleCloseAllTabs = useCallback(() => {
     const currentTabs = useTerminalStore.getState().tabs
     const terminalTabs = currentTabs.filter(t => t.type === 'terminal')
-    const hasActive = terminalTabs.some(t => t.status === 'connected')
-    if (hasActive && !confirm('Close all tabs? All SSH sessions will be disconnected.')) return
+    const sftpTabs = currentTabs.filter(t => t.type === 'sftp')
+    const hasActive = terminalTabs.some(t => t.status === 'connected') || sftpTabs.length > 0
+    if (hasActive && !confirm('Close all tabs? SSH sessions and SFTP browsers will be closed.')) return
     for (const tab of terminalTabs) socket.emit('ssh:disconnect', { session_id: sessionId, tab_id: tab.id })
+    for (const tab of sftpTabs) socket.emit('sftp:close', { session_id: sessionId, tab_id: tab.id })
     exitSplitMode()
     disableBroadcast()
     closeAllTabs()
@@ -415,9 +457,9 @@ export default function AppLayout() {
         >
           <div className="w-80 bg-surface-900 border border-surface-700 rounded-xl shadow-2xl p-5 flex flex-col gap-4">
             <div>
-              <h2 className="text-sm font-semibold text-slate-200">Close session?</h2>
+              <h2 className="text-sm font-semibold text-slate-200">{getCloseTitle(pendingCloseTab)}</h2>
               <p className="mt-2 text-xs text-slate-400 leading-relaxed">
-                Closing {getTabDisplayName(pendingCloseTab)} will disconnect its SSH session.
+                {getCloseMessage(pendingCloseTab)}
               </p>
             </div>
             <div className="flex gap-2">

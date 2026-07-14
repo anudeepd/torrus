@@ -210,6 +210,54 @@ async def test_sftp_chmod_rejects_invalid_mode(reset_server_state, mode):
         to="sid-1",
     )
 
+
+@pytest.mark.asyncio
+async def test_sftp_accounts_emits_remote_users_and_groups(reset_server_state):
+    from torrus.server import on_sftp_accounts
+    import torrus.server as server_module
+
+    sio_mock = MagicMock()
+    sio_mock.emit = AsyncMock()
+    server_module.sftp_manager = MagicMock()
+    server_module.sftp_manager.accounts = AsyncMock(
+        return_value={
+            "ok": True,
+            "users": [{"uid": 1000, "name": "app"}],
+            "groups": [{"gid": 1000, "name": "app"}],
+        }
+    )
+
+    with patch("torrus.server.sio", sio_mock):
+        await on_sftp_accounts("sid-1", {"session_id": "sess1", "tab_id": "tab1"})
+
+    server_module.sftp_manager.accounts.assert_awaited_once_with("tab1")
+    sio_mock.emit.assert_awaited_once_with(
+        "sftp:accounts:result",
+        {"tab_id": "tab1", "ok": True, "users": [{"uid": 1000, "name": "app"}], "groups": [{"gid": 1000, "name": "app"}]},
+        to="sid-1",
+    )
+
+
+@pytest.mark.asyncio
+async def test_sftp_close_closes_sftp_session(reset_server_state):
+    from torrus.server import on_sftp_close
+    import torrus.server as server_module
+
+    sio_mock = MagicMock()
+    sio_mock.emit = AsyncMock()
+    server_module.sftp_manager = MagicMock()
+    server_module.sftp_manager.close_sftp = AsyncMock()
+
+    with patch("torrus.server.sio", sio_mock):
+        await on_sftp_close("sid-1", {"session_id": "sess1", "tab_id": "sftp-tab"})
+
+    server_module.sftp_manager.close_sftp.assert_awaited_once_with("sftp-tab")
+    sio_mock.emit.assert_awaited_once_with(
+        "sftp:close:result",
+        {"tab_id": "sftp-tab", "ok": True},
+        to="sid-1",
+    )
+
 @pytest.mark.asyncio
 async def test_sftp_open_emits_connection_closed_when_channel_unavailable(reset_server_state):
     from torrus.server import on_sftp_open

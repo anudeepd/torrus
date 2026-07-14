@@ -2,11 +2,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ArrowUp,
   CircleHelp,
+  ChevronDown,
+  ChevronUp,
   Download,
   FolderOpen,
   FolderPlus,
   Pencil,
   RefreshCw,
+  RotateCcw,
   ShieldCheck,
   Trash2,
   Upload,
@@ -36,6 +39,16 @@ interface ContextMenuState {
 interface ChmodDialogState {
   entry: SFTPEntry
   mode: number
+  uid: string
+  gid: string
+}
+
+type SortKey = 'name' | 'size' | 'owner' | 'mode' | 'mtime'
+type SortDirection = 'asc' | 'desc'
+
+interface SortRule {
+  key: SortKey
+  direction: SortDirection
 }
 
 function provideContextFeedback() {
@@ -90,6 +103,64 @@ function formatMode(mode?: number): string {
   return ((mode ?? 0) & 0o7777).toString(8).padStart(4, '0')
 }
 
+function permissionTitle(mode?: number): string {
+  const permissionMode = (mode ?? 0) & 0o7777
+  return `${formatMode(permissionMode)} ${symbolicMode(permissionMode)}`
+}
+
+function formatOwnership(entry: SFTPEntry): string {
+  return String(entry.owner ?? entry.uid ?? '-')
+}
+
+function formatOwnerGroup(entry: SFTPEntry): string {
+  const owner = entry.owner ?? entry.uid ?? '-'
+  const group = entry.group ?? entry.gid ?? '-'
+  return `${owner}:${group}`
+}
+
+function ownershipTitle(entry: SFTPEntry): string {
+  return `${formatOwnerGroup(entry)} (uid ${entry.uid ?? '-'}, gid ${entry.gid ?? '-'})`
+}
+
+function sortValue(entry: SFTPEntry, key: SortKey): string | number {
+  switch (key) {
+    case 'name':
+      return entry.name.toLowerCase()
+    case 'size':
+      return entry.type === 'directory' ? -1 : entry.size
+    case 'owner':
+      return formatOwnership(entry).toLowerCase()
+    case 'mode':
+      return (entry.mode ?? 0) & 0o7777
+    case 'mtime':
+      return entry.mtime ?? 0
+  }
+}
+
+function compareEntries(a: SFTPEntry, b: SFTPEntry, rules: SortRule[]): number {
+  for (const rule of rules) {
+    const left = sortValue(a, rule.key)
+    const right = sortValue(b, rule.key)
+    const result = typeof left === 'number' && typeof right === 'number'
+      ? left - right
+      : String(left).localeCompare(String(right), undefined, { numeric: true, sensitivity: 'base' })
+    if (result !== 0) return rule.direction === 'asc' ? result : -result
+  }
+  return 0
+}
+
+function SortIndicator({ rules, sortKey }: { rules: SortRule[]; sortKey: SortKey }) {
+  const index = rules.findIndex(rule => rule.key === sortKey)
+  if (index < 0) return null
+  const Icon = rules[index].direction === 'asc' ? ChevronUp : ChevronDown
+  return (
+    <span className="inline-flex items-center gap-0.5 text-brand-400">
+      <Icon className="h-3 w-3" />
+      {rules.length > 1 && <span className="text-[10px]">{index + 1}</span>}
+    </span>
+  )
+}
+
 function symbolicMode(mode: number): string {
   const chars = ['r', 'w', 'x']
   const symbolic = PERMISSION_BITS.map((permission, index) => mode & permission.bit ? chars[index % 3] : '-')
@@ -97,6 +168,20 @@ function symbolicMode(mode: number): string {
   if (mode & 0o2000) symbolic[5] = mode & 0o010 ? 's' : 'S'
   if (mode & 0o1000) symbolic[8] = mode & 0o001 ? 't' : 'T'
   return symbolic.join('')
+}
+
+function ownershipInputValid(uid: string, gid: string): boolean {
+  if (uid.trim() === '' && gid.trim() === '') return true
+  const nextUid = Number(uid)
+  const nextGid = Number(gid)
+  return (
+    uid.trim() !== ''
+    && gid.trim() !== ''
+    && Number.isInteger(nextUid)
+    && Number.isInteger(nextGid)
+    && nextUid >= 0
+    && nextGid >= 0
+  )
 }
 
 function joinName(path: string, name: string): string {
@@ -108,9 +193,15 @@ function pathSegments(path: string): Array<{ label: string; path: string }> {
   if (!path || path === '.') return [{ label: '~', path: '~' }]
   if (path === '/') return [{ label: '/', path: '/' }]
   const parts = path.split('/').filter(Boolean)
+  if (path.startsWith('/')) {
+    return [
+      { label: '/', path: '/' },
+      ...parts.map((part, index) => ({ label: part, path: `/${parts.slice(0, index + 1).join('/')}` })),
+    ]
+  }
   return [
     { label: '~', path: '~' },
-    ...parts.map((part, index) => ({ label: part, path: `/${parts.slice(0, index + 1).join('/')}` })),
+    ...parts.map((part, index) => ({ label: part, path: parts.slice(0, index + 1).join('/') })),
   ]
 }
 
@@ -181,7 +272,7 @@ function Breadcrumbs({ path, list, onEdit }: BreadcrumbsProps) {
     >
       {visible.map((segment, index) => (
         <span key={`${segment.path}-${index}`} className="flex min-w-0 items-center">
-          {index > 0 && <span className="px-1 text-slate-600">/</span>}
+          {index > 0 && !(index === 1 && visible[0]?.path === '/') && <span className="px-1 text-slate-600">/</span>}
           {index === 1 && hiddenCount > 0 && (
             <>
               <button
@@ -237,6 +328,7 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
   const [chmodDialog, setChmodDialog] = useState<ChmodDialogState | null>(null)
   const [helpOpen, setHelpOpen] = useState(false)
+  const [sortRules, setSortRules] = useState<SortRule[]>([])
   const {
     path,
     username,
@@ -245,6 +337,7 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
     selectedPaths,
     loading,
     error,
+    notice,
     disconnected,
     transfers,
     list,
@@ -255,10 +348,15 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
     rename,
     mkdir,
     chmod,
+    chown,
+    loadAccounts,
+    users,
+    groups,
     clearError,
+    clearNotice,
     parentPath,
   } = useSFTP(tabId, sourceTabId, socket)
-  const { toggleSelected, setSelected, clearSelected } = useSFTPStore()
+  const { toggleSelected, setSelected, clearSelected, removeTransfer } = useSFTPStore()
 
   useEffect(() => {
     if (!editingPath) return
@@ -283,6 +381,22 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
   }, [clearError, error])
 
   useEffect(() => {
+    if (!notice) return
+    const timeout = window.setTimeout(clearNotice, notice.tone === 'error' ? 12000 : 5000)
+    return () => window.clearTimeout(timeout)
+  }, [clearNotice, notice])
+
+  useEffect(() => {
+    const timers = transfers
+      .filter(transfer => transfer.status === 'done' || transfer.status === 'error')
+      .map(transfer => window.setTimeout(
+        () => removeTransfer(transfer.id),
+        transfer.status === 'done' ? 5000 : 12000,
+      ))
+    return () => timers.forEach(timer => window.clearTimeout(timer))
+  }, [removeTransfer, transfers])
+
+  useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'l') {
         event.preventDefault()
@@ -301,9 +415,13 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
     }
   }, [])
 
+  const sortedEntries = useMemo(
+    () => sortRules.length === 0 ? entries : [...entries].sort((a, b) => compareEntries(a, b, sortRules)),
+    [entries, sortRules],
+  )
   const selectedEntries = useMemo(
-    () => entries.filter(entry => selectedPaths.includes(entry.path)),
-    [entries, selectedPaths],
+    () => sortedEntries.filter(entry => selectedPaths.includes(entry.path)),
+    [selectedPaths, sortedEntries],
   )
   const deleteEntries = useMemo(
     () => entries.filter(entry => deletePaths?.includes(entry.path)),
@@ -313,6 +431,17 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
     () => deleteEntries.reduce((total, entry) => total + (entry.type === 'directory' ? 0 : entry.size), 0),
     [deleteEntries],
   )
+
+  const toggleSort = useCallback((key: SortKey) => {
+    setSortRules(rules => {
+      const existing = rules.find(rule => rule.key === key)
+      if (!existing) return [...rules, { key, direction: 'asc' }]
+      if (existing.direction === 'asc') {
+        return rules.map(rule => rule.key === key ? { key, direction: 'desc' } : rule)
+      }
+      return rules.filter(rule => rule.key !== key)
+    })
+  }, [])
 
   const startRename = useCallback((entry: SFTPEntry) => {
     setRenamePath(entry.path)
@@ -335,30 +464,50 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
   }, [download, list])
 
   const openPermissions = useCallback((entry: SFTPEntry) => {
-    setChmodDialog({ entry, mode: (entry.mode ?? 0) & 0o7777 })
+    loadAccounts()
+    setChmodDialog({
+      entry,
+      mode: (entry.mode ?? 0) & 0o7777,
+      uid: entry.uid == null ? '' : String(entry.uid),
+      gid: entry.gid == null ? '' : String(entry.gid),
+    })
     setContextMenu(null)
-  }, [])
+  }, [loadAccounts])
 
-  const handleRowClick = useCallback((event: React.MouseEvent, entry: SFTPEntry, index: number) => {
-    if (event.shiftKey && selectedPaths.length > 0) {
-      const last = entries.findIndex(item => item.path === selectedPaths[selectedPaths.length - 1])
-      const start = Math.min(last < 0 ? index : last, index)
-      const end = Math.max(last < 0 ? index : last, index)
-      setSelected(tabId, entries.slice(start, end + 1).map(item => item.path))
-      return
+  const applyPermissions = useCallback(() => {
+    if (!chmodDialog) return
+    const nextUid = Number(chmodDialog.uid)
+    const nextGid = Number(chmodDialog.gid)
+    const ownerChanged = ownershipInputValid(chmodDialog.uid, chmodDialog.gid)
+      && chmodDialog.uid.trim() !== ''
+      && chmodDialog.gid.trim() !== ''
+      && (nextUid !== chmodDialog.entry.uid || nextGid !== chmodDialog.entry.gid)
+    if (chmodDialog.mode !== ((chmodDialog.entry.mode ?? 0) & 0o7777)) {
+      chmod(chmodDialog.entry.path, chmodDialog.mode)
     }
+    if (ownerChanged) {
+      chown(chmodDialog.entry.path, nextUid, nextGid)
+    }
+    setChmodDialog(null)
+  }, [chmod, chmodDialog, chown])
+
+  const handleRowClick = useCallback((event: React.MouseEvent, entry: SFTPEntry) => {
     if (event.ctrlKey || event.metaKey) {
       toggleSelected(tabId, entry.path)
       return
     }
+    if (selectedPaths.includes(entry.path)) {
+      toggleSelected(tabId, entry.path)
+      return
+    }
     setSelected(tabId, [entry.path])
-  }, [entries, selectedPaths, setSelected, tabId, toggleSelected])
+  }, [selectedPaths, setSelected, tabId, toggleSelected])
 
   const handleKeyDown = useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
     const selected = selectedEntries[0]
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'a') {
       event.preventDefault()
-      setSelected(tabId, entries.map(entry => entry.path))
+      setSelected(tabId, sortedEntries.map(entry => entry.path))
     } else if (event.key === 'Escape') {
       clearSelected(tabId)
       setRenamePath(null)
@@ -372,14 +521,14 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
       startRename(selected)
     } else if (event.key === 'Delete' && selectedPaths.length) {
       setDeletePaths(selectedPaths)
-    } else if ((event.key === 'ArrowDown' || event.key === 'ArrowUp') && entries.length) {
+    } else if ((event.key === 'ArrowDown' || event.key === 'ArrowUp') && sortedEntries.length) {
       event.preventDefault()
-      const currentIndex = selected ? entries.findIndex(entry => entry.path === selected.path) : -1
+      const currentIndex = selected ? sortedEntries.findIndex(entry => entry.path === selected.path) : -1
       const delta = event.key === 'ArrowDown' ? 1 : -1
-      const nextIndex = Math.max(0, Math.min(entries.length - 1, currentIndex + delta))
-      setSelected(tabId, [entries[nextIndex].path])
+      const nextIndex = Math.max(0, Math.min(sortedEntries.length - 1, currentIndex + delta))
+      setSelected(tabId, [sortedEntries[nextIndex].path])
     }
-  }, [clearSelected, entries, list, openEntry, parentPath, path, selectedEntries, selectedPaths, setSelected, startRename, tabId])
+  }, [clearSelected, list, openEntry, parentPath, path, selectedEntries, selectedPaths, setSelected, sortedEntries, startRename, tabId])
 
   const confirmDelete = useCallback(() => {
     if (!deletePaths?.length) return
@@ -400,6 +549,9 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
     <div className="relative flex h-full min-h-0 flex-col bg-surface-950 text-slate-200">
       <div className="flex h-10 flex-shrink-0 items-center justify-between gap-2 border-b border-surface-800 px-2 max-[600px]:h-12">
         <div className="flex min-w-0 flex-1 items-center gap-2">
+          <Button className="max-[600px]:h-11 max-[600px]:w-11 max-[600px]:px-0" variant="ghost" size="sm" onClick={() => list(parentPath(path))} title="Go to parent folder (Backspace)">
+            <ArrowUp className="h-3.5 w-3.5" />
+          </Button>
           {editingPath ? (
             <PathInput
               key={`${path}-${error ?? ''}`}
@@ -411,6 +563,12 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
             />
           ) : (
             <Breadcrumbs path={path} list={list} onEdit={() => setEditingPath(true)} />
+          )}
+          {sortRules.length > 0 && (
+            <Button className="max-[600px]:h-11 max-[600px]:w-11 max-[600px]:px-0" variant="secondary" size="sm" title="Reset sort" aria-label="Reset sort" onClick={() => setSortRules([])}>
+              <RotateCcw className="h-3.5 w-3.5" />
+              <span className="hidden min-[720px]:inline">Reset sort</span>
+            </Button>
           )}
           {username && (
             <span className="max-w-24 flex-shrink truncate text-xs font-medium text-slate-300 sm:max-w-40" title={`Connected as ${username}`}>
@@ -427,10 +585,39 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
           <Button className="max-[600px]:h-11 max-[600px]:w-11 max-[600px]:px-0" variant="ghost" size="sm" title="Refresh current folder" onClick={() => list(path)}>
             <RefreshCw className="h-3.5 w-3.5" />
           </Button>
+          <Button className="max-[600px]:h-11 max-[600px]:min-w-11 max-[600px]:px-0" variant="ghost" size="sm" onClick={() => setNewFolderOpen(true)} title="Create new folder">
+            <FolderPlus className="h-3.5 w-3.5" />
+            <span className="hidden sm:inline">New Folder</span>
+          </Button>
           <Button className="max-[600px]:h-11 max-[600px]:w-11 max-[600px]:px-0" variant="ghost" size="sm" title="Upload files" onClick={() => fileInputRef.current?.click()}>
             <Upload className="h-3.5 w-3.5" />
             <span className="hidden sm:inline">Upload</span>
           </Button>
+          {selectedPaths.length > 0 && (
+            <div className="mx-1 h-5 border-l border-surface-800" />
+          )}
+          {selectedPaths.length > 0 && (
+            <>
+              <span className="hidden text-[11px] text-slate-500 min-[720px]:inline">{selectedPaths.length} selected</span>
+              <button
+                type="button"
+                onClick={() => clearSelected(tabId)}
+                className="flex h-8 w-8 items-center justify-center text-slate-500 hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 max-[600px]:h-11 max-[600px]:w-11"
+                title="Clear selection"
+                aria-label="Clear selection"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+              {selectedEntries.length === 1 && selectedEntries[0].type !== 'directory' && (
+                <Button className="max-[600px]:h-11 max-[600px]:w-11 max-[600px]:px-0" variant="ghost" size="sm" onClick={() => void download(selectedEntries[0])} title="Download selected file">
+                  <Download className="h-3.5 w-3.5" />
+                </Button>
+              )}
+              <Button className="max-[600px]:h-11 max-[600px]:w-11 max-[600px]:px-0" variant="danger" size="sm" onClick={() => setDeletePaths(selectedPaths)} title="Delete selection (Delete)">
+                <Trash2 className="h-3.5 w-3.5" />
+              </Button>
+            </>
+          )}
           <Button
             className="max-[600px]:h-11 max-[600px]:w-11 max-[600px]:px-0"
             variant="ghost"
@@ -470,6 +657,21 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
         }}
       />
 
+      {notice && (
+        <div
+          className={clsx('flex min-h-9 flex-shrink-0 items-center gap-2 border-b px-3 py-2 text-xs', {
+            'border-red-400/20 bg-red-950/20 text-red-200': notice.tone === 'error',
+            'border-emerald-400/20 bg-emerald-950/20 text-emerald-200': notice.tone === 'success',
+          })}
+          role={notice.tone === 'error' ? 'alert' : 'status'}
+        >
+          <span className="min-w-0 flex-1 truncate">{notice.message}</span>
+          <button type="button" onClick={clearNotice} className="flex h-7 w-7 flex-shrink-0 items-center justify-center opacity-70 hover:opacity-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500" aria-label="Dismiss message">
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      )}
+
       <div
         ref={listRef}
         role="listbox"
@@ -477,6 +679,9 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
         aria-multiselectable="true"
         tabIndex={0}
         onKeyDown={handleKeyDown}
+        onMouseDown={event => {
+          if (event.target === event.currentTarget) clearSelected(tabId)
+        }}
         onDragOver={event => { event.preventDefault(); setDragging(true) }}
         onDragLeave={event => { if (event.currentTarget === event.target) setDragging(false) }}
         onDrop={event => {
@@ -491,9 +696,10 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
         {loading && (
           <div className="p-2">
             {[0, 1, 2].map(row => (
-              <div key={row} className="mb-2 grid h-8 animate-pulse grid-cols-[24px_minmax(0,1fr)_80px_80px_120px] items-center gap-2 opacity-50 max-[600px]:grid-cols-[24px_minmax(0,1fr)]">
+              <div key={row} className="mb-2 grid h-8 animate-pulse grid-cols-[24px_minmax(0,1fr)_96px_104px_112px_144px] items-center gap-2 opacity-50 max-[600px]:grid-cols-[24px_minmax(0,1fr)]">
                 <div className="h-4 w-4 bg-surface-800" />
                 <div className="h-3 w-3/5 bg-surface-800" />
+                <div className="h-3 bg-surface-800 max-[600px]:hidden" />
                 <div className="h-3 bg-surface-800 max-[600px]:hidden" />
                 <div className="h-3 bg-surface-800 max-[600px]:hidden" />
                 <div className="h-3 bg-surface-800 max-[600px]:hidden" />
@@ -508,23 +714,33 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
 
         {!loading && entries.length > 0 && (
           <div>
-            <div className="sticky top-0 z-10 grid h-8 grid-cols-[24px_minmax(0,1fr)_80px_80px_120px] items-center gap-2 border-b border-surface-800 bg-surface-950 px-2 font-mono text-[11px] font-medium text-slate-500 max-[600px]:grid-cols-[24px_minmax(0,1fr)]">
-              <span />
-              <span>name</span>
-              <span className="text-right max-[600px]:hidden">size</span>
-              <span className="text-right max-[600px]:hidden">permissions</span>
-              <span className="text-right max-[600px]:hidden">date</span>
+            <div className="sticky top-0 z-10 grid h-8 grid-cols-[24px_minmax(0,1fr)_96px_104px_112px_144px] items-center gap-2 border-b border-surface-800 bg-surface-950 px-2 font-mono text-[11px] font-medium text-slate-500 max-[600px]:grid-cols-[24px_minmax(0,1fr)]">
+              <button type="button" className="col-span-2 flex h-full min-w-0 items-center gap-1 pl-[32px] text-left hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 max-[600px]:pl-0" onClick={() => toggleSort('name')} title="Sort by name">
+                <span>name</span><SortIndicator rules={sortRules} sortKey="name" />
+              </button>
+              <button type="button" className="flex h-full min-w-0 items-center gap-1 text-left hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 max-[600px]:hidden" onClick={() => toggleSort('size')} title="Sort by size">
+                <span>size</span><SortIndicator rules={sortRules} sortKey="size" />
+              </button>
+              <button type="button" className="flex h-full min-w-0 items-center gap-1 text-left hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 max-[600px]:hidden" onClick={() => toggleSort('owner')} title="Sort by owner">
+                <span>owner</span><SortIndicator rules={sortRules} sortKey="owner" />
+              </button>
+              <button type="button" className="flex h-full min-w-0 items-center gap-1 text-left hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 max-[600px]:hidden" onClick={() => toggleSort('mode')} title="Sort by permissions">
+                <span>permissions</span><SortIndicator rules={sortRules} sortKey="mode" />
+              </button>
+              <button type="button" className="flex h-full min-w-0 items-center gap-1 text-left hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 max-[600px]:hidden" onClick={() => toggleSort('mtime')} title="Sort by date">
+                <span>date</span><SortIndicator rules={sortRules} sortKey="mtime" />
+              </button>
             </div>
-            {entries.map((entry, index) => {
+            {sortedEntries.map((entry) => {
               const selected = selectedPaths.includes(entry.path)
               return (
                 <div
                   key={entry.path}
                   role="option"
                   aria-selected={selected}
-                  aria-label={`${entry.name}, ${formatSize(entry)}, permissions ${formatMode(entry.mode)}, ${entry.type}`}
+                  aria-label={`${entry.name}, ${formatSize(entry)}, owner ${formatOwnership(entry)}, permissions ${permissionTitle(entry.mode)}, ${entry.type}`}
                   tabIndex={-1}
-                  onClick={event => handleRowClick(event, entry, index)}
+                  onClick={event => handleRowClick(event, entry)}
                   onDoubleClick={() => openEntry(entry)}
                   onContextMenu={event => {
                     event.preventDefault()
@@ -537,7 +753,7 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
                       entry,
                     })
                   }}
-                  className={clsx('grid h-8 cursor-default grid-cols-[24px_minmax(0,1fr)_80px_80px_120px] items-center gap-2 px-2 font-mono text-xs max-[600px]:h-11 max-[600px]:grid-cols-[24px_minmax(0,1fr)]', {
+                  className={clsx('grid min-h-8 cursor-default grid-cols-[24px_minmax(0,1fr)_96px_104px_112px_144px] items-center gap-2 px-2 py-1 font-mono text-xs max-[600px]:min-h-11 max-[600px]:grid-cols-[24px_minmax(0,1fr)]', {
                     'bg-brand-500/10 hover:bg-brand-500/20': selected,
                     'hover:bg-surface-800': !selected,
                   })}
@@ -556,11 +772,12 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
                       className="min-w-0 border border-brand-500 bg-surface-950 px-1 text-xs text-slate-200 outline-none"
                     />
                   ) : (
-                    <span className="min-w-0 truncate text-slate-200">{entry.name}</span>
+                    <span className="min-w-0 break-all leading-5 text-slate-200">{entry.name}</span>
                   )}
-                  <span className="text-right text-slate-500 max-[600px]:hidden">{formatSize(entry)}</span>
-                  <span className="text-right text-slate-400 max-[600px]:hidden">{formatMode(entry.mode)}</span>
-                  <span className="text-right text-slate-500 max-[600px]:hidden">{formatDate(entry.mtime)}</span>
+                  <span className="text-left text-slate-500 max-[600px]:hidden">{formatSize(entry)}</span>
+                  <span className="text-left text-slate-500 max-[600px]:hidden" title={ownershipTitle(entry)}>{formatOwnership(entry)}</span>
+                  <span className="text-left text-slate-400 max-[600px]:hidden" title={permissionTitle(entry.mode)}>{formatMode(entry.mode)}</span>
+                  <span className="text-left text-slate-500 max-[600px]:hidden">{formatDate(entry.mtime)}</span>
                 </div>
               )
             })}
@@ -613,7 +830,7 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
         </div>
       )}
 
-      {error && (
+      {error && !notice && (
         <div className="absolute bottom-12 right-3 z-40 flex max-w-sm items-start gap-2 border border-red-400/20 bg-surface-900 px-3 py-2 text-xs text-red-300 shadow-lg" role="alert">
           <span className="min-w-0 flex-1">{error}</span>
           <button type="button" onClick={clearError} className="flex h-8 w-8 flex-shrink-0 items-center justify-center text-red-300/70 hover:text-red-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-400" aria-label="Dismiss error">
@@ -622,32 +839,15 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
         </div>
       )}
 
-      <div className="flex h-10 flex-shrink-0 items-center justify-between gap-2 border-t border-surface-800 px-2 max-[600px]:h-12">
-        <div className="flex items-center gap-2">
-          <Button className="max-[600px]:h-11 max-[600px]:min-w-11" variant="ghost" size="sm" onClick={() => setNewFolderOpen(true)} title="Create new folder">
-            <FolderPlus className="h-3.5 w-3.5" />
-            <span className="hidden min-[480px]:inline">New Folder</span>
-          </Button>
-          <Button className="max-[600px]:h-11 max-[600px]:w-11 max-[600px]:px-0" variant="ghost" size="sm" onClick={() => list(parentPath(path))} title="Go to parent folder (Backspace)">
-            <ArrowUp className="h-3.5 w-3.5" />
-          </Button>
-        </div>
-        <div className="flex items-center gap-2">
-          {selectedPaths.length > 0 && <span className="hidden text-[11px] text-slate-500 min-[480px]:inline">{selectedPaths.length} selected</span>}
-          {selectedEntries.length === 1 && selectedEntries[0].type !== 'directory' && (
-            <Button className="max-[600px]:h-11 max-[600px]:w-11 max-[600px]:px-0" variant="ghost" size="sm" onClick={() => void download(selectedEntries[0])} title="Download selected file">
-              <Download className="h-3.5 w-3.5" />
-            </Button>
-          )}
-          {selectedPaths.length > 0 && (
-            <Button className="max-[600px]:h-11 max-[600px]:w-11 max-[600px]:px-0" variant="danger" size="sm" onClick={() => setDeletePaths(selectedPaths)} title="Delete selection (Delete)">
-              <Trash2 className="h-3.5 w-3.5" />
-            </Button>
-          )}
-        </div>
-      </div>
-
-      <TransferQueue transfers={transfers} />
+      <TransferQueue
+        transfers={transfers}
+        onDismiss={removeTransfer}
+        onClearCompleted={() => {
+          for (const transfer of transfers) {
+            if (transfer.status === 'done' || transfer.status === 'error') removeTransfer(transfer.id)
+          }
+        }}
+      />
 
       {newFolderOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onMouseDown={event => { if (event.target === event.currentTarget) setNewFolderOpen(false) }}>
@@ -721,16 +921,81 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
                 ))}
               </div>
             </div>
+            <div>
+              <p className="mb-2 text-[11px] font-medium text-slate-400">Ownership</p>
+              <div className="grid grid-cols-2 gap-2">
+                <label className="flex flex-col gap-1">
+                  <span className="text-[11px] text-slate-500">Owner</span>
+                  {users.length > 0 ? (
+                    <select
+                      value={chmodDialog.uid}
+                      onChange={event => setChmodDialog(dialog => dialog ? { ...dialog, uid: event.target.value } : null)}
+                      className="h-8 border border-surface-800 bg-surface-950 px-2 text-xs text-slate-200 outline-none focus:border-brand-500 max-[600px]:h-11"
+                      aria-label="Owner"
+                    >
+                      {!users.some(user => String(user.uid) === chmodDialog.uid) && chmodDialog.uid !== '' && (
+                        <option value={chmodDialog.uid}>{chmodDialog.entry.owner ?? chmodDialog.uid}</option>
+                      )}
+                      {users.map(user => <option key={user.uid} value={String(user.uid)}>{user.name}</option>)}
+                    </select>
+                  ) : (
+                    <input
+                      type="number"
+                      min={0}
+                      step={1}
+                      value={chmodDialog.uid}
+                      onChange={event => setChmodDialog(dialog => dialog ? { ...dialog, uid: event.target.value } : null)}
+                      className="h-8 border border-surface-800 bg-surface-950 px-2 font-mono text-xs text-slate-200 outline-none focus:border-brand-500 max-[600px]:h-11"
+                      aria-label="Owner UID"
+                    />
+                  )}
+                </label>
+                <label className="flex flex-col gap-1">
+                  <span className="text-[11px] text-slate-500">Group</span>
+                  {groups.length > 0 ? (
+                    <select
+                      value={chmodDialog.gid}
+                      onChange={event => setChmodDialog(dialog => dialog ? { ...dialog, gid: event.target.value } : null)}
+                      className="h-8 border border-surface-800 bg-surface-950 px-2 text-xs text-slate-200 outline-none focus:border-brand-500 max-[600px]:h-11"
+                      aria-label="Group"
+                    >
+                      {!groups.some(group => String(group.gid) === chmodDialog.gid) && chmodDialog.gid !== '' && (
+                        <option value={chmodDialog.gid}>{chmodDialog.entry.group ?? chmodDialog.gid}</option>
+                      )}
+                      {groups.map(group => <option key={group.gid} value={String(group.gid)}>{group.name}</option>)}
+                    </select>
+                  ) : (
+                    <input
+                      type="number"
+                      min={0}
+                      step={1}
+                      value={chmodDialog.gid}
+                      onChange={event => setChmodDialog(dialog => dialog ? { ...dialog, gid: event.target.value } : null)}
+                      className="h-8 border border-surface-800 bg-surface-950 px-2 font-mono text-xs text-slate-200 outline-none focus:border-brand-500 max-[600px]:h-11"
+                      aria-label="Group GID"
+                    />
+                  )}
+                </label>
+              </div>
+              {!ownershipInputValid(chmodDialog.uid, chmodDialog.gid) && (
+                <p className="mt-2 text-[11px] text-red-300">Enter numeric UID and GID, or leave both blank.</p>
+              )}
+            </div>
             <div className="flex items-center justify-between border-t border-surface-800 pt-3 font-mono text-xs">
               <span className="text-slate-300">{symbolicMode(chmodDialog.mode)}</span>
-              <span className="font-medium text-brand-400">{formatMode(chmodDialog.mode)}</span>
+              <span className="font-medium text-brand-400">
+                {(users.find(user => String(user.uid) === chmodDialog.uid)?.name ?? chmodDialog.uid.trim()) || '-'}
+                :
+                {(groups.find(group => String(group.gid) === chmodDialog.gid)?.name ?? chmodDialog.gid.trim()) || '-'} {formatMode(chmodDialog.mode)}
+              </span>
             </div>
             <div className="flex gap-2">
               <Button className="flex-1 max-[600px]:h-11" variant="secondary" onClick={() => setChmodDialog(null)}>Cancel</Button>
               <Button
                 className="flex-1 max-[600px]:h-11"
                 variant="primary"
-                onClick={() => { chmod(chmodDialog.entry.path, chmodDialog.mode); setChmodDialog(null) }}
+                disabled={!ownershipInputValid(chmodDialog.uid, chmodDialog.gid)}
+                onClick={applyPermissions}
               >
                 Apply
               </Button>

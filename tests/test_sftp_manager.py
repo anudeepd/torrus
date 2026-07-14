@@ -42,10 +42,15 @@ class FakeRemoteFile:
 
 class FakeSFTP:
     def __init__(self):
-        self.fs: dict[str, bytes] = {"/home/app/readme.txt": b"hello"}
+        self.fs: dict[str, bytes] = {
+            "/home/app/readme.txt": b"hello",
+            "/etc/passwd": b"app:x:1000:1000:App User:/home/app:/bin/bash\nsvc:x:1001:1001:Svc:/home/svc:/bin/bash\n",
+            "/etc/group": b"app:x:1000:\nsvc:x:1002:\n",
+        }
         self.dirs = {"/home/app"}
         self.cwd = "/home/app"
         self.modes: dict[str, int] = {}
+        self.owners: dict[str, tuple[int, int]] = {}
         self.closed = False
         self.close_count = 0
         self.next_file_close_error: Exception | None = None
@@ -69,12 +74,14 @@ class FakeSFTP:
             if directory.startswith(prefix):
                 rest = directory[len(prefix):]
                 if rest and "/" not in rest:
-                    names.append(SimpleNamespace(filename=rest, st_mode=0o040755, st_size=0, st_mtime=1))
+                    uid, gid = self.owners.get(directory, (1000, 1000))
+                    names.append(SimpleNamespace(filename=rest, st_mode=0o040755, st_size=0, st_mtime=1, st_uid=uid, st_gid=gid))
         for file_path, data in self.fs.items():
             if file_path.startswith(prefix):
                 rest = file_path[len(prefix):]
                 if rest and "/" not in rest:
-                    names.append(SimpleNamespace(filename=rest, st_mode=0o100644, st_size=len(data), st_mtime=2))
+                    uid, gid = self.owners.get(file_path, (1000, 1000))
+                    names.append(SimpleNamespace(filename=rest, st_mode=0o100644, st_size=len(data), st_mtime=2, st_uid=uid, st_gid=gid))
         return names
 
     def open(self, path: str, mode: str):
@@ -127,6 +134,13 @@ class FakeSFTP:
             raise FileNotFoundError(errno.ENOENT, "missing", path)
         self.modes[path] = mode
 
+    def chown(self, path: str, uid: int, gid: int) -> None:
+        if not path.startswith("/"):
+            path = f"{self.cwd.rstrip('/')}/{path}"
+        if path not in self.fs and path not in self.dirs:
+            raise FileNotFoundError(errno.ENOENT, "missing", path)
+        self.owners[path] = (uid, gid)
+
     def close(self) -> None:
         self.closed = True
         self.close_count += 1
@@ -167,6 +181,26 @@ async def test_list_directory_returns_sorted_schema():
     assert result["path"] == "/home/app"
     assert result["entries"][0]["name"] == "readme.txt"
     assert result["entries"][0]["type"] == "file"
+    assert result["entries"][0]["uid"] == 1000
+    assert result["entries"][0]["gid"] == 1000
+    assert result["entries"][0]["owner"] == "app"
+    assert result["entries"][0]["group"] == "app"
+
+
+@pytest.mark.asyncio
+async def test_accounts_returns_remote_users_and_groups():
+    from torrus.sftp_manager import SFTPManager
+
+    sftp = FakeSFTP()
+    manager = SFTPManager()
+    try:
+        assert await manager.open_sftp("sess1", "tab1", FakeSSHManager(sftp))
+        result = await manager.accounts("tab1")
+    finally:
+        await manager.shutdown()
+
+    assert {"uid": 1000, "name": "app"} in result["users"]
+    assert {"gid": 1002, "name": "svc"} in result["groups"]
 
 
 @pytest.mark.asyncio
@@ -203,6 +237,8 @@ async def test_upload_download_rename_delete_and_mkdir():
         assert made["path"] == "/home/app/docs"
         changed = await manager.chmod("tab1", "docs", 0o750)
         assert changed == {"ok": True, "path": "/home/app/docs", "mode": 0o750}
+        owned = await manager.chown("tab1", "docs", 1001, 1002)
+        assert owned == {"ok": True, "path": "/home/app/docs", "uid": 1001, "gid": 1002}
         deleted = await manager.delete("tab1", "renamed.txt")
         assert deleted["ok"] is True
     finally:
@@ -210,6 +246,7 @@ async def test_upload_download_rename_delete_and_mkdir():
 
     assert "/home/app/renamed.txt" not in sftp.fs
     assert sftp.modes["/home/app/docs"] == 0o750
+    assert sftp.owners["/home/app/docs"] == (1001, 1002)
 
 
 @pytest.mark.asyncio
@@ -239,6 +276,22 @@ async def test_chmod_missing_file_maps_to_file_not_found():
         await manager.open_sftp("sess1", "tab1", FakeSSHManager(sftp))
         with pytest.raises(SFTPError) as exc:
             await manager.chmod("tab1", "missing.txt", 0o640)
+    finally:
+        await manager.shutdown()
+
+    assert exc.value.code == "FILE_NOT_FOUND"
+
+
+@pytest.mark.asyncio
+async def test_chown_missing_file_maps_to_file_not_found():
+    from torrus.sftp_manager import SFTPError, SFTPManager
+
+    sftp = FakeSFTP()
+    manager = SFTPManager()
+    try:
+        await manager.open_sftp("sess1", "tab1", FakeSSHManager(sftp))
+        with pytest.raises(SFTPError) as exc:
+            await manager.chown("tab1", "missing.txt", 1000, 1000)
     finally:
         await manager.shutdown()
 

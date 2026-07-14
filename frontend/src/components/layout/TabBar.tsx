@@ -158,6 +158,15 @@ export default function TabBar({ onAddTab, onCloseTab, onCloneTab, onOpenSftpTab
   const [saveDialog, setSaveDialog] = useState<SaveDialogState | null>(null)
   const editInputRef = useRef<HTMLInputElement>(null)
   const contextMenuRef = useRef<HTMLDivElement>(null)
+  const tabRefs = useRef<Record<string, HTMLDivElement | null>>({})
+
+  useEffect(() => {
+    if (!activeTabId) return
+    tabRefs.current[activeTabId]?.scrollIntoView({
+      block: 'nearest',
+      inline: 'nearest',
+    })
+  }, [activeTabId, tabs.length])
 
   // Reset save dialog if its tab is closed
   useEffect(() => {
@@ -245,6 +254,9 @@ export default function TabBar({ onAddTab, onCloseTab, onCloneTab, onOpenSftpTab
           {tabs.map(tab => (
             <div
               key={tab.id}
+              ref={(element) => {
+                tabRefs.current[tab.id] = element
+              }}
               onContextMenu={(e) => {
                 e.preventDefault()
                 setContextMenu({ tabId: tab.id, x: e.clientX, y: e.clientY })

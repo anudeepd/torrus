@@ -3,6 +3,12 @@ import type { SFTPEntry } from '@/types'
 
 export type TransferStatus = 'queued' | 'active' | 'done' | 'error'
 export type TransferDirection = 'upload' | 'download'
+export type SFTPNoticeTone = 'success' | 'error'
+
+export interface SFTPNotice {
+  tone: SFTPNoticeTone
+  message: string
+}
 
 export interface TransferItem {
   id: string
@@ -25,6 +31,7 @@ interface SFTPTabState {
   selectedPaths: string[]
   loading: boolean
   error: string | null
+  notice: SFTPNotice | null
   disconnected: boolean
 }
 
@@ -37,6 +44,7 @@ interface SFTPStore {
   setIsRoot: (tabId: string, isRoot: boolean) => void
   setLoading: (tabId: string, loading: boolean) => void
   setError: (tabId: string, error: string | null) => void
+  setNotice: (tabId: string, notice: SFTPNotice | null) => void
   setDisconnected: (tabId: string, disconnected: boolean) => void
   toggleSelected: (tabId: string, path: string, range?: string[]) => void
   setSelected: (tabId: string, paths: string[]) => void
@@ -55,6 +63,7 @@ const emptyTab = (): SFTPTabState => ({
   selectedPaths: [],
   loading: false,
   error: null,
+  notice: null,
   disconnected: false,
 })
 
@@ -84,6 +93,9 @@ export const useSFTPStore = create<SFTPStore>((set, get) => ({
 
   setError: (tabId, error) =>
     set(s => ({ tabs: { ...s.tabs, [tabId]: { ...(s.tabs[tabId] ?? emptyTab()), error, loading: false } } })),
+
+  setNotice: (tabId, notice) =>
+    set(s => ({ tabs: { ...s.tabs, [tabId]: { ...(s.tabs[tabId] ?? emptyTab()), notice } } })),
 
   setDisconnected: (tabId, disconnected) =>
     set(s => ({ tabs: { ...s.tabs, [tabId]: { ...(s.tabs[tabId] ?? emptyTab()), disconnected, loading: false } } })),

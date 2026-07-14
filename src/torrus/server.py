@@ -719,6 +719,17 @@ async def on_ssh_disconnect(sid, data):
         _input_buffers.pop((sid, session_id, tab_id), None)
 
 
+@sio.on("sftp:close")
+async def on_sftp_close(sid, data):
+    session_id, tab_id = _sftp_request_ids(data)
+    if not _valid_id(session_id) or not _valid_id(tab_id):
+        return
+    if not await _require_auth(sid, tab_id):
+        return
+    await sftp_manager.close_sftp(tab_id)
+    await sio.emit("sftp:close:result", {"tab_id": tab_id, "ok": True}, to=sid)
+
+
 @sio.on("ssh:clone")
 async def on_ssh_clone(sid, data):
     session_id = data.get("session_id", "")
@@ -938,3 +949,57 @@ async def on_sftp_chmod(sid, data):
         )
         return
     await sio.emit("sftp:chmod:result", {"tab_id": tab_id, **result}, to=sid)
+
+
+@sio.on("sftp:chown")
+async def on_sftp_chown(sid, data):
+    session_id, tab_id = _sftp_request_ids(data)
+    if not _valid_id(session_id) or not _valid_id(tab_id):
+        return
+    if not await _require_auth(sid, tab_id):
+        return
+    uid = data.get("uid")
+    gid = data.get("gid")
+    if (
+        isinstance(uid, bool)
+        or isinstance(gid, bool)
+        or not isinstance(uid, int)
+        or not isinstance(gid, int)
+        or uid < 0
+        or gid < 0
+    ):
+        await sio.emit(
+            "sftp:chown:result",
+            {"tab_id": tab_id, "ok": False, "code": "invalid_request", "message": "Invalid owner or group id."},
+            to=sid,
+        )
+        return
+    try:
+        result = await sftp_manager.chown(tab_id, data.get("path", ""), uid, gid)
+    except SFTPError as exc:
+        await sio.emit(
+            "sftp:chown:result",
+            {"tab_id": tab_id, "ok": False, "code": exc.code, "message": exc.message},
+            to=sid,
+        )
+        return
+    await sio.emit("sftp:chown:result", {"tab_id": tab_id, **result}, to=sid)
+
+
+@sio.on("sftp:accounts")
+async def on_sftp_accounts(sid, data):
+    session_id, tab_id = _sftp_request_ids(data)
+    if not _valid_id(session_id) or not _valid_id(tab_id):
+        return
+    if not await _require_auth(sid, tab_id):
+        return
+    try:
+        result = await sftp_manager.accounts(tab_id)
+    except SFTPError as exc:
+        await sio.emit(
+            "sftp:accounts:result",
+            {"tab_id": tab_id, "ok": False, "code": exc.code, "message": exc.message},
+            to=sid,
+        )
+        return
+    await sio.emit("sftp:accounts:result", {"tab_id": tab_id, **result}, to=sid)

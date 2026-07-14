@@ -33,6 +33,8 @@ class SFTPSession:
     client: paramiko.SFTPClient
     cwd: str = "."
     home: str = "."
+    users: dict[int, str] = field(default_factory=dict)
+    groups: dict[int, str] = field(default_factory=dict)
     last_activity: float = field(default_factory=time.time)
 
 
@@ -136,6 +138,12 @@ class SFTPManager:
 
     async def chmod(self, tab_id: str, path: str, mode: int) -> dict[str, Any]:
         return await self._locked(tab_id, lambda session: self._chmod_sync(session, path, mode))
+
+    async def chown(self, tab_id: str, path: str, uid: int, gid: int) -> dict[str, Any]:
+        return await self._locked(tab_id, lambda session: self._chown_sync(session, path, uid, gid))
+
+    async def accounts(self, tab_id: str) -> dict[str, Any]:
+        return await self._locked(tab_id, self._accounts_sync)
 
     async def stream_upload(
         self,
@@ -295,6 +303,7 @@ class SFTPManager:
     def _list_directory_sync(self, session: SFTPSession, path: str) -> dict[str, Any]:
         resolved = _resolve_remote_path(session.cwd, path, session.home)
         try:
+            users, groups = self._account_maps_sync(session)
             entries = []
             for attr in session.client.listdir_attr(resolved):
                 mode = attr.st_mode or 0
@@ -315,6 +324,10 @@ class SFTPManager:
                         "size": attr.st_size or 0,
                         "mtime": attr.st_mtime or 0,
                         "mode": mode,
+                        "uid": attr.st_uid,
+                        "gid": attr.st_gid,
+                        "owner": users.get(attr.st_uid),
+                        "group": groups.get(attr.st_gid),
                     }
                 )
             entries.sort(key=lambda item: (item["type"] != "directory", item["name"].lower()))
@@ -393,6 +406,35 @@ class SFTPManager:
         except Exception as exc:
             raise _map_error(exc, resolved) from exc
 
+    def _chown_sync(self, session: SFTPSession, path: str, uid: int, gid: int) -> dict[str, Any]:
+        resolved = _resolve_remote_path(session.cwd, path, session.home)
+        try:
+            session.client.chown(resolved, uid, gid)
+            return {"ok": True, "path": resolved, "uid": uid, "gid": gid}
+        except Exception as exc:
+            raise _map_error(exc, resolved) from exc
+
+    def _accounts_sync(self, session: SFTPSession) -> dict[str, Any]:
+        users, groups = self._account_maps_sync(session, force=True)
+        return {
+            "ok": True,
+            "users": [{"uid": uid, "name": name} for uid, name in sorted(users.items(), key=lambda item: (item[1], item[0]))],
+            "groups": [{"gid": gid, "name": name} for gid, name in sorted(groups.items(), key=lambda item: (item[1], item[0]))],
+        }
+
+    def _account_maps_sync(self, session: SFTPSession, force: bool = False) -> tuple[dict[int, str], dict[int, str]]:
+        if (session.users or session.groups) and not force:
+            return session.users, session.groups
+        try:
+            session.users = _parse_passwd(_read_remote_text(session.client, "/etc/passwd"))
+        except Exception:
+            session.users = {}
+        try:
+            session.groups = _parse_group(_read_remote_text(session.client, "/etc/group"))
+        except Exception:
+            session.groups = {}
+        return session.users, session.groups
+
     def _mkdir_sync(self, session: SFTPSession, path: str) -> dict[str, Any]:
         resolved = _resolve_remote_path(session.cwd, path, session.home)
         try:
@@ -413,6 +455,44 @@ def _resolve_remote_path(cwd: str, path: str, home: str | None = None) -> str:
         return posixpath.normpath(raw)
     base = cwd if cwd and cwd != "." else "."
     return posixpath.normpath(posixpath.join(base, raw))
+
+
+def _read_remote_text(client: paramiko.SFTPClient, path: str, max_bytes: int = 512 * 1024) -> str:
+    with client.open(path, "r") as remote_file:
+        data = remote_file.read(max_bytes + 1)
+    if isinstance(data, str):
+        return data[:max_bytes]
+    return bytes(data[:max_bytes]).decode("utf-8", errors="replace")
+
+
+def _parse_passwd(text: str) -> dict[int, str]:
+    users: dict[int, str] = {}
+    for line in text.splitlines():
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split(":")
+        if len(parts) < 3:
+            continue
+        try:
+            users[int(parts[2])] = parts[0]
+        except ValueError:
+            continue
+    return users
+
+
+def _parse_group(text: str) -> dict[int, str]:
+    groups: dict[int, str] = {}
+    for line in text.splitlines():
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split(":")
+        if len(parts) < 3:
+            continue
+        try:
+            groups[int(parts[2])] = parts[0]
+        except ValueError:
+            continue
+    return groups
 
 
 def _initial_cwd(client: paramiko.SFTPClient) -> str:

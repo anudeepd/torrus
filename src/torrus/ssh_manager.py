@@ -638,7 +638,14 @@ def _open_tmux_channel(
     channel = transport.open_session()
     channel.set_environment_variable("COLORTERM", "truecolor")
     channel.get_pty(term="xterm-256color", width=cols, height=rows)
-    channel.exec_command(f"tmux new-session -A -s {shlex.quote(session_name)}")
+    quoted_name = shlex.quote(session_name)
+    command = (
+        f"tmux has-session -t {quoted_name} 2>/dev/null "
+        f"|| tmux new-session -d -s {quoted_name}; "
+        f"tmux set-option -t {quoted_name} status off; "
+        f"exec tmux attach-session -t {quoted_name}"
+    )
+    channel.exec_command(command)
     return channel
 
 

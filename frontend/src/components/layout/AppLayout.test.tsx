@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { act, render, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { StrictMode } from 'react'
 import { createMockSocket } from '@/test/mocks/socket'
 import { useTerminalStore } from '@/store/terminalStore'
@@ -29,13 +29,17 @@ async function renderAppLayout({ strict = false }: { strict?: boolean } = {}) {
   vi.doMock('@/components/terminal/TerminalPane', () => ({
     default: () => <div data-testid="terminal-pane" />,
   }))
+  vi.doMock('@/components/sftp/SFTPBrowser', () => ({
+    default: () => <div data-testid="sftp-browser" />,
+  }))
 
   const { default: AppLayout } = await import('./AppLayout')
   render(strict ? <StrictMode><AppLayout /></StrictMode> : <AppLayout />)
 
-  await waitFor(() => {
-    expect(socket.on).toHaveBeenCalledWith('ssh:error', expect.any(Function))
-  })
+    await waitFor(() => {
+      expect(socket.on).toHaveBeenCalledWith('ssh:error', expect.any(Function))
+      expect(socket.on).toHaveBeenCalledWith('sftp:error', expect.any(Function))
+    })
 
   return { socket, redirectToLdapLogin }
 }
@@ -48,6 +52,7 @@ describe('AppLayout LDAP auth handling', () => {
     vi.doUnmock('./TabBar')
     vi.doUnmock('./SessionSidebar')
     vi.doUnmock('@/components/terminal/TerminalPane')
+    vi.doUnmock('@/components/sftp/SFTPBrowser')
     useTerminalStore.setState({ sessionId: '', tabs: [], activeTabId: null })
   })
 
@@ -73,6 +78,19 @@ describe('AppLayout LDAP auth handling', () => {
     })
 
     expect(redirectToLdapLogin).not.toHaveBeenCalled()
+  })
+
+  it('redirects to LDAPGate when an SFTP event reports expired auth', async () => {
+    const { socket, redirectToLdapLogin } = await renderAppLayout()
+
+    socket._trigger('sftp:list:result', {
+      tab_id: 'sftp-tab',
+      ok: false,
+      message: 'Authentication required.',
+      code: 'auth_required',
+    })
+
+    expect(redirectToLdapLogin).toHaveBeenCalledOnce()
   })
 
   it('preserves an empty restored tab list on reload', async () => {
@@ -110,5 +128,35 @@ describe('AppLayout LDAP auth handling', () => {
 
     expect(allowed).toBe(true)
     expect(event.defaultPrevented).toBe(false)
+  })
+
+  it('confirms before closing an sftp tab and closes only the sftp channel', async () => {
+    useTerminalStore.setState({
+      sessionId: 'test-session',
+      tabs: [{
+        id: 'sftp-tab',
+        type: 'sftp',
+        host: 'localhost',
+        port: 22,
+        username: 'alice',
+        label: 'SFTP alice@localhost',
+        status: 'connected',
+        sessionKey: 'test-session:sftp-tab',
+        sourceTabId: 'terminal-tab',
+      }],
+      activeTabId: 'sftp-tab',
+    })
+    const { socket } = await renderAppLayout()
+
+    fireEvent.keyDown(window, { key: 'w', ctrlKey: true })
+
+    expect(screen.getByText('Close SFTP tab?')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Close tab' }))
+
+    expect(socket.emit).toHaveBeenCalledWith('sftp:close', {
+      session_id: 'test-session',
+      tab_id: 'sftp-tab',
+    })
+    expect(socket.emit).not.toHaveBeenCalledWith('ssh:disconnect', expect.anything())
   })
 })

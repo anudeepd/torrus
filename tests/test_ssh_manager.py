@@ -309,6 +309,25 @@ class TestRootCheck:
         client.exec_command.assert_not_called()
 
 
+class TestTmuxChannel:
+    def test_open_tmux_channel_hides_status_for_torrus_session(self):
+        from torrus.ssh_manager import _open_tmux_channel
+
+        channel = MagicMock()
+        transport = MagicMock()
+        transport.open_session.return_value = channel
+        client = MagicMock()
+        client.get_transport.return_value = transport
+
+        result = _open_tmux_channel(client, "sc_test_tab", 120, 40)
+
+        assert result is channel
+        channel.get_pty.assert_called_once_with(term="xterm-256color", width=120, height=40)
+        command = channel.exec_command.call_args.args[0]
+        assert "tmux set-option -t sc_test_tab status off" in command
+        assert command.endswith("exec tmux attach-session -t sc_test_tab")
+
+
 class TestForceRedraw:
     """force_redraw must be safe against concurrent destruction."""
 

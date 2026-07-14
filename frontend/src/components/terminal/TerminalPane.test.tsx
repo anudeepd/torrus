@@ -88,6 +88,91 @@ describe('TerminalPane', () => {
     )
   })
 
+  it('drops terminal probe replies instead of sending them to the shell', async () => {
+    const tabId = 'tab-probe'
+    act(() => {
+      seedStores(tabId, 'connected')
+    })
+
+    const socket = createMockSocket()
+    render(
+      <TerminalPane
+        tabId={tabId}
+        isActive={true}
+        focused={true}
+        socket={socket as unknown as import('socket.io-client').Socket}
+      />
+    )
+
+    await waitFor(() => {
+      expect(mockTerminalInstances.length).toBeGreaterThan(0)
+    })
+
+    const term = mockTerminalInstances[mockTerminalInstances.length - 1]
+    socket.emit.mockClear()
+
+    act(() => {
+      term.simulateData('\x1b[?1;2c')
+      term.simulateData('\x1b[24;80R')
+      term.simulateData('\x1b]11;rgb:0000/0000/0000\x07')
+    })
+
+    expect(socket.emit).not.toHaveBeenCalledWith('ssh:input', expect.anything())
+  })
+
+  it('keeps restore probe replies quiet before re-enabling user input', async () => {
+    const tabId = 'tab-restore'
+    act(() => {
+      seedStores(tabId, 'disconnected')
+    })
+
+    const socket = createMockSocket()
+    render(
+      <TerminalPane
+        tabId={tabId}
+        isActive={true}
+        focused={true}
+        socket={socket as unknown as import('socket.io-client').Socket}
+      />
+    )
+
+    await waitFor(() => {
+      expect(mockTerminalInstances.length).toBeGreaterThan(0)
+    })
+
+    const term = mockTerminalInstances[mockTerminalInstances.length - 1]
+    socket.emit.mockClear()
+
+    act(() => {
+      socket._trigger('session:restored', { tab_id: tabId, status: 'active' })
+    })
+    await act(async () => {
+      await new Promise(resolve => requestAnimationFrame(resolve))
+    })
+
+    act(() => {
+      term.simulateData('\x1b[?1;2c')
+      term.simulateData('too-soon')
+    })
+    expect(socket.emit).not.toHaveBeenCalledWith('ssh:input', expect.anything())
+
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 850))
+    })
+    act(() => {
+      term.simulateData('ready')
+    })
+
+    expect(socket.emit).toHaveBeenCalledWith(
+      'ssh:input',
+      expect.objectContaining({
+        session_id: 'test-session',
+        tab_id: tabId,
+        data: 'ready',
+      })
+    )
+  })
+
   it('suppresses input when mounted with a disconnected tab', async () => {
     const tabId = 'tab-2'
     act(() => {

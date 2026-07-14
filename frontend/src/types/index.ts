@@ -21,6 +21,20 @@ export interface SFTPEntry {
   size: number
   mtime: number
   mode?: number
+  uid?: number
+  gid?: number
+  owner?: string
+  group?: string
+}
+
+export interface SFTPUser {
+  uid: number
+  name: string
+}
+
+export interface SFTPGroup {
+  gid: number
+  name: string
 }
 
 export interface ConnectFormValues {

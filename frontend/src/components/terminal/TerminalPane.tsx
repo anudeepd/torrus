@@ -19,6 +19,11 @@ interface TerminalPaneProps {
 
 const ANSI_ESCAPE = String.fromCharCode(0x1b)
 const SCROLLBACK_CLEAR_SEQUENCE = new RegExp(`${ANSI_ESCAPE}\\[[?]?(?:3J)`, 'g')
+const TERMINAL_REPLY_SEQUENCE = new RegExp(
+  `${ANSI_ESCAPE}(?:\\[(?:\\?|>|!|=)?[0-9;]*[cRn]|\\][0-9;]*(?:;[^${ANSI_ESCAPE}\\x07]*)?(?:\\x07|${ANSI_ESCAPE}\\\\))`,
+  'g'
+)
+const RESTORE_INPUT_SUPPRESSION_MS = 800
 
 function prepareTextForTerminal(text: string): string {
   return text.replace(/\r?\n/g, '\r')
@@ -30,6 +35,11 @@ function bracketTextForPaste(text: string, bracketedPasteMode: boolean): string 
 
 function stripScrollbackClearSequences(data: string): string {
   return data.replace(SCROLLBACK_CLEAR_SEQUENCE, '')
+}
+
+function isTerminalReplyOnly(data: string): boolean {
+  if (!data.includes(ANSI_ESCAPE)) return false
+  return data.replace(TERMINAL_REPLY_SEQUENCE, '') === ''
 }
 
 function isVisibleTerminalContainer(el: HTMLElement | null): el is HTMLElement {
@@ -74,6 +84,7 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
   // Suppress xterm onData during session restore to prevent terminal query
   // responses (OSC 11, DSR, DA) from being echoed back to the remote shell
   const suppressInputRef = useRef(true)
+  const suppressInputTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // Tracks actual xterm.js keyboard focus — only the focused terminal broadcasts.
   // Prevents other panes' DA/DSR escape responses from leaking into all terminals.
   const hasFocusRef = useRef(false)
@@ -95,8 +106,18 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
     broadcastTargetIdsRef.current = broadcastTargets
   }, [broadcastTargets])
 
+  const suppressRestoreInputBriefly = useCallback(() => {
+    suppressInputRef.current = true
+    if (suppressInputTimerRef.current) clearTimeout(suppressInputTimerRef.current)
+    suppressInputTimerRef.current = setTimeout(() => {
+      suppressInputRef.current = false
+      suppressInputTimerRef.current = null
+    }, RESTORE_INPUT_SUPPRESSION_MS)
+  }, [])
+
   const emitInput = useCallback((data: string) => {
     if (suppressInputRef.current) return
+    if (isTerminalReplyOnly(data)) return
 
     const currentTab = useTerminalStore.getState().tabs.find(t => t.id === tabId)
     if (currentTab?.status !== 'connected') return
@@ -375,7 +396,6 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
       termRef.current = null
       fitRef.current = null
       hasFocusRef.current = false
-      suppressInputRef.current = false
     }
   }, [tabId, emitInput, emitResize, fitAndEmitResize, scheduleFitAndEmitResize, installCustomKeyHandler, handleFocus, handleBlur])
 
@@ -439,7 +459,7 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
             fitAndEmitResize(termRef.current, fitRef.current)
           }
           termRef.current?.focus()
-          suppressInputRef.current = false
+          suppressRestoreInputBriefly()
         })
       } else {
         suppressInputRef.current = false
@@ -451,7 +471,6 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
       if (tab_id !== tabId) return
       errorRef.current = ''
       setConnectionError('')
-      suppressInputRef.current = false
       setTabStatus(tabId, 'connected')
       requestAnimationFrame(() => {
         if (!mounted) return
@@ -459,6 +478,7 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
           fitAndEmitResize(termRef.current, fitRef.current)
         }
         termRef.current?.focus()
+        suppressRestoreInputBriefly()
       })
     }
 
@@ -484,12 +504,16 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
 
     return () => {
       mounted = false
+      if (suppressInputTimerRef.current) {
+        clearTimeout(suppressInputTimerRef.current)
+        suppressInputTimerRef.current = null
+      }
       socket.off('session:restored', onRestored)
       socket.off('ssh:connected', onConnected)
       socket.off('ssh:error', onError)
       socket.off('ssh:closed', onClosed)
     }
-  }, [socket, tabId, setTabStatus, fitAndEmitResize])
+  }, [socket, tabId, setTabStatus, fitAndEmitResize, suppressRestoreInputBriefly])
 
   // Focus terminal when tab becomes active
   useEffect(() => {
