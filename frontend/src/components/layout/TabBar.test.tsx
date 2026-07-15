@@ -49,6 +49,8 @@ describe('TabBar', () => {
       />,
     )
 
-    expect(fireEvent.mouseDown(screen.getByRole('tab', { name: /production/i }), { button: 2 })).toBe(false)
+    const tab = screen.getByRole('tab', { name: /production/i })
+    expect(tab.parentElement).toHaveClass('select-none')
+    expect(fireEvent.mouseDown(tab, { button: 2 })).toBe(false)
   })
 })

@@ -169,10 +169,6 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
     term.attachCustomKeyEventHandler((e) => {
       const mod = e.ctrlKey || e.metaKey
       const key = e.key.toLowerCase()
-      const isModifierKey = ['Alt', 'AltGraph', 'Control', 'Meta', 'Shift'].includes(e.key)
-      if (e.type === 'keydown' && !e.isComposing && !mod && !e.altKey && !isModifierKey) {
-        e.preventDefault()
-      }
       if (mod && (key === 'w' || key === 't' || key === ',')) return false
       if (e.ctrlKey && key === 'tab') return false
       if (mod && key === 'f') return false

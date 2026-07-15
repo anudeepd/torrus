@@ -262,7 +262,7 @@ export default function TabBar({ onAddTab, onCloseTab, onCloneTab, onOpenSftpTab
                 setContextMenu({ tabId: tab.id, x: e.clientX, y: e.clientY })
               }}
               className={clsx(
-                'group h-[40px] flex flex-shrink-0 items-center min-w-32 max-w-48 border-r border-surface-800 whitespace-nowrap transition-colors text-xs font-mono',
+                'group h-[40px] flex flex-shrink-0 select-none items-center min-w-32 max-w-48 border-r border-surface-800 whitespace-nowrap transition-colors text-xs font-mono',
                 activeTabId === tab.id
                   ? 'bg-surface-950 text-slate-200 border-t-2 border-t-brand-500'
                   : 'text-slate-500 hover:text-slate-300 hover:bg-surface-800'

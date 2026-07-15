@@ -276,7 +276,7 @@ describe('TerminalPane', () => {
     )
   })
 
-  it('keeps normal-mode terminal keys out of browser input handling', async () => {
+  it('leaves ordinary key events available to xterm input handling', async () => {
     const tabId = 'tab-vi-navigation'
     act(() => {
       seedStores(tabId, 'connected')
@@ -297,9 +297,9 @@ describe('TerminalPane', () => {
     })
 
     const term = mockTerminalInstances[mockTerminalInstances.length - 1]
-    for (const key of ['h', 'j', 'k', 'l', 'w', 'b', '0', '$', 'Escape', 'ArrowUp', 'Tab', 'Enter']) {
+    for (const key of [' ', 'a', 'h', 'j', 'k', 'l', 'w', 'b', '0', '$', 'Escape', 'ArrowUp', 'Tab', 'Enter']) {
       expect(term.simulateKey({ key })).toBe(true)
-      expect(term.lastKeyEvent?.defaultPrevented).toBe(true)
+      expect(term.lastKeyEvent?.defaultPrevented).toBe(false)
     }
   })
 
