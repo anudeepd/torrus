@@ -3,6 +3,7 @@ import { getSocket } from '@/hooks/useSocket'
 import { useTerminalStore } from '@/store/terminalStore'
 import { useLayoutStore, getLayoutTabIds } from '@/store/layoutStore'
 import { useBroadcastStore } from '@/store/broadcastStore'
+import { useSFTPStore } from '@/store/sftpStore'
 import TabBar from './TabBar'
 import SplitPane from './SplitPane'
 import LayoutPickerModal from './LayoutPickerModal'
@@ -13,6 +14,7 @@ import SFTPBrowser from '@/components/sftp/SFTPBrowser'
 import SettingsDialog from '@/components/settings/SettingsDialog'
 import Logo from '@/components/ui/Logo'
 import AuthRedirectOverlay from '@/components/ui/AuthRedirectOverlay'
+import { useModalFocus } from '@/hooks/useModalFocus'
 import { AUTH_REDIRECT_EVENT, redirectToLdapLogin } from '@/utils/authRedirect'
 import type { PaneNode } from '@/store/layoutStore'
 import type { SavedServer, Tab } from '@/types'
@@ -60,6 +62,7 @@ export default function AppLayout() {
   const { tabs, activeTabId, addTab, addSftpTab, closeTab, closeAllTabs, setActiveTab, sessionId } = useTerminalStore()
   const { root: layoutRoot, closePane, exitSplitMode, applyLayout } = useLayoutStore()
   const { enabled: broadcastEnabled, excludedTabIds, disable: disableBroadcast } = useBroadcastStore()
+  const setSFTPDisconnected = useSFTPStore(s => s.setDisconnected)
   const socket = getSocket()
 
   const [sidebarOpen, setSidebarOpen] = useState(true)
@@ -69,6 +72,9 @@ export default function AppLayout() {
   // true when split was initiated by broadcast — exiting broadcast exits split too
   const [splitOwnedByBroadcast, setSplitOwnedByBroadcast] = useState(false)
   const [pendingClose, setPendingClose] = useState<PendingClose>(null)
+  const pendingCloseCancelRef = useRef<HTMLButtonElement>(null)
+  const dismissPendingClose = useCallback(() => setPendingClose(null), [])
+  const pendingCloseDialogRef = useModalFocus(Boolean(pendingClose), dismissPendingClose, pendingCloseCancelRef)
   const authRedirectingRef = useRef(false)
 
   const shouldWarnBeforeClosingTab = useCallback((tabId: string) => {
@@ -127,6 +133,47 @@ export default function AppLayout() {
       }
     }
   }, [socket])
+
+  // Keep inactive SFTP tabs in sync when their source SSH tab closes.
+  useEffect(() => {
+    const markSourceDead = (sourceTabId: string) => {
+      const currentTabs = useTerminalStore.getState().tabs
+      for (const tab of currentTabs) {
+        if (tab.type === 'sftp' && tab.sourceTabId === sourceTabId) {
+          const sftpState = useSFTPStore.getState().tabs[tab.id]
+          if (!sftpState?.disconnected) setSFTPDisconnected(tab.id, true)
+          if (tab.status !== 'dead') useTerminalStore.getState().setTabStatus(tab.id, 'dead')
+        }
+      }
+    }
+    const onSourceClosed = (payload: { tab_id?: string }) => {
+      if (payload.tab_id) markSourceDead(payload.tab_id)
+    }
+    const onSourceRestored = (payload: { tab_id?: string; status?: string }) => {
+      if (payload.tab_id && payload.status !== undefined && payload.status !== 'active') {
+        markSourceDead(payload.tab_id)
+      }
+    }
+    socket.on('ssh:closed', onSourceClosed)
+    socket.on('ssh:error', onSourceClosed)
+    socket.on('session:restored', onSourceRestored)
+    return () => {
+      socket.off('ssh:closed', onSourceClosed)
+      socket.off('ssh:error', onSourceClosed)
+      socket.off('session:restored', onSourceRestored)
+    }
+  }, [setSFTPDisconnected, socket])
+
+  useEffect(() => {
+    const currentTabIds = new Set(tabs.map(tab => tab.id))
+    for (const tab of tabs) {
+      if (tab.type === 'sftp' && tab.sourceTabId && !currentTabIds.has(tab.sourceTabId)) {
+        const sftpState = useSFTPStore.getState().tabs[tab.id]
+        if (!sftpState?.disconnected) setSFTPDisconnected(tab.id, true)
+        if (tab.status !== 'dead') useTerminalStore.getState().setTabStatus(tab.id, 'dead')
+      }
+    }
+  }, [setSFTPDisconnected, tabs])
 
   // Register all tabs on socket connect
   useEffect(() => {
@@ -453,9 +500,9 @@ export default function AppLayout() {
       {pendingClose && (
         <div
           className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center"
-          onMouseDown={e => { if (e.target === e.currentTarget) setPendingClose(null) }}
+          onMouseDown={e => { if (e.target === e.currentTarget) dismissPendingClose() }}
         >
-          <div className="w-80 bg-surface-900 border border-surface-700 rounded-xl shadow-2xl p-5 flex flex-col gap-4">
+          <div ref={pendingCloseDialogRef} role="dialog" aria-modal="true" aria-label="Close tab" tabIndex={-1} className="w-80 bg-surface-900 border border-surface-700 rounded-xl shadow-2xl p-5 flex flex-col gap-4">
             <div>
               <h2 className="text-sm font-semibold text-slate-200">{getCloseTitle(pendingCloseTab)}</h2>
               <p className="mt-2 text-xs text-slate-400 leading-relaxed">
@@ -464,8 +511,9 @@ export default function AppLayout() {
             </div>
             <div className="flex gap-2">
               <button
+                ref={pendingCloseCancelRef}
                 type="button"
-                onClick={() => setPendingClose(null)}
+                onClick={dismissPendingClose}
                 className="flex-1 px-3 py-2 rounded-md text-sm text-slate-400 bg-surface-800 hover:bg-surface-700 hover:text-slate-200 transition-colors"
               >
                 Cancel
@@ -473,7 +521,6 @@ export default function AppLayout() {
               <button
                 type="button"
                 onClick={handleConfirmPendingClose}
-                autoFocus
                 className="flex-1 px-3 py-2 rounded-md text-sm font-medium text-white bg-red-600 hover:bg-red-500 transition-colors"
               >
                 Close tab

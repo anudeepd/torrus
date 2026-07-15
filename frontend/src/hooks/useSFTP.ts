@@ -5,6 +5,11 @@ import { useTerminalStore } from '@/store/terminalStore'
 import type { SFTPEntry, SFTPGroup, SFTPUser } from '@/types'
 
 const LARGE_UPLOAD_THRESHOLD = 25 * 1024 * 1024
+const MIN_UPLOAD_CHUNK_BYTES = 8 * 1024 * 1024
+const MAX_UPLOAD_CHUNK_BYTES = 32 * 1024 * 1024
+const TARGET_UPLOAD_CHUNKS = 128
+const UPLOAD_RETRY_LIMIT = 3
+const MAX_CONCURRENT_UPLOADS = 2
 
 interface ListingPayload {
   tab_id: string
@@ -40,6 +45,13 @@ interface AccountsPayload {
   message?: string
 }
 
+interface PendingUpload {
+  file: File
+  remotePath: string
+  uploadId: string
+  offset: number
+}
+
 function joinPath(base: string, name: string): string {
   if (name.startsWith('/')) return name
   if (!base || base === '.') return name
@@ -64,6 +76,35 @@ function itemLabel(path?: string): string {
 
 function plural(count: number, singular: string): string {
   return `${count} ${singular}${count === 1 ? '' : 's'}`
+}
+
+export function uploadChunkSize(fileSize: number): number {
+  if (fileSize <= 0) return MIN_UPLOAD_CHUNK_BYTES
+  return Math.min(
+    MAX_UPLOAD_CHUNK_BYTES,
+    Math.max(MIN_UPLOAD_CHUNK_BYTES, Math.ceil(fileSize / TARGET_UPLOAD_CHUNKS)),
+  )
+}
+
+function uploadChunkWithProgress(url: string, body: Blob, onProgress: (bytes: number) => void): Promise<{ offset?: number }> {
+  return new Promise((resolve, reject) => {
+    const request = new XMLHttpRequest()
+    request.open('POST', url)
+    request.upload.onprogress = event => onProgress(event.loaded)
+    request.onload = () => {
+      let payload: { offset?: number; message?: string } | null = null
+      try { payload = JSON.parse(request.responseText) } catch { /* response handled below */ }
+      if (request.status >= 200 && request.status < 300) {
+        resolve(payload ?? {})
+      } else {
+        reject(Object.assign(new Error(payload?.message ?? `Upload failed (${request.status})`), {
+          retryable: request.status >= 500 || request.status === 408 || request.status === 429,
+        }))
+      }
+    }
+    request.onerror = () => reject(new Error('Upload connection failed'))
+    request.send(body)
+  })
 }
 
 function deleteSuccessMessage(payload: ListingPayload): string {
@@ -91,18 +132,6 @@ function deleteFailureMessage(payload: ListingPayload): string {
   return `Failed to delete ${itemLabel(firstFailure?.path)}: ${detail}`
 }
 
-function fileToBase64(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => {
-      const value = String(reader.result ?? '')
-      resolve(value.includes(',') ? value.split(',')[1] : value)
-    }
-    reader.onerror = () => reject(reader.error)
-    reader.readAsDataURL(file)
-  })
-}
-
 function triggerDownload(name: string, base64Data: string) {
   const binary = atob(base64Data)
   const bytes = Uint8Array.from(binary, char => char.charCodeAt(0))
@@ -120,7 +149,12 @@ export function useSFTP(tabId: string, sourceTabId: string | undefined, socket: 
   const [users, setUsers] = useState<SFTPUser[]>([])
   const [groups, setGroups] = useState<SFTPGroup[]>([])
   const openedRef = useRef(false)
+  const pendingUploadsRef = useRef(new Map<string, PendingUpload>())
   const sessionId = useTerminalStore(s => s.sessionId)
+  const addTab = useTerminalStore(s => s.addTab)
+  const setActiveTab = useTerminalStore(s => s.setActiveTab)
+  const setSourceTab = useTerminalStore(s => s.setSourceTab)
+  const setTabConnection = useTerminalStore(s => s.setTabConnection)
   const setTabStatus = useTerminalStore(s => s.setTabStatus)
   const sourceStatus = useTerminalStore(s => sourceTabId ? s.tabs.find(tab => tab.id === sourceTabId)?.status : 'connected')
   const tab = useSFTPStore(s => s.tabs[tabId])
@@ -160,6 +194,24 @@ export function useSFTP(tabId: string, sourceTabId: string | undefined, socket: 
   }, [list, tabId])
 
   const open = useCallback(() => {
+    const currentTabs = useTerminalStore.getState().tabs
+    const source = sourceTabId ? currentTabs.find(currentTab => currentTab.id === sourceTabId) : undefined
+    if (sourceTabId && !source) {
+      const sftpTab = currentTabs.find(currentTab => currentTab.id === tabId)
+      const newSourceTabId = addTab()
+      if (sftpTab?.host && sftpTab.username) {
+        setTabConnection(newSourceTabId, sftpTab.host, sftpTab.port ?? 22, sftpTab.username)
+      }
+      setSourceTab(tabId, newSourceTabId)
+      socket.emit('session:register', { session_id: sessionId, tab_id: newSourceTabId })
+      setActiveTab(newSourceTabId)
+      return
+    }
+    const sourceStatus = source?.status ?? 'connected'
+    if (sourceTabId && (sourceStatus === 'disconnected' || sourceStatus === 'dead')) {
+      setActiveTab(sourceTabId)
+      return
+    }
     ensureTab(tabId)
     setLoading(tabId, true)
     setDisconnected(tabId, false)
@@ -168,7 +220,7 @@ export function useSFTP(tabId: string, sourceTabId: string | undefined, socket: 
       tab_id: tabId,
       source_tab_id: sourceTabId ?? tabId,
     })
-  }, [socket, sessionId, tabId, sourceTabId, ensureTab, setDisconnected, setLoading])
+  }, [addTab, ensureTab, sessionId, setActiveTab, setDisconnected, setSourceTab, setTabConnection, socket, tabId, sourceTabId, setLoading])
 
   const loadAccounts = useCallback(() => {
     socket.emit('sftp:accounts', { session_id: sessionId, tab_id: tabId })
@@ -184,24 +236,41 @@ export function useSFTP(tabId: string, sourceTabId: string | undefined, socket: 
       openedRef.current = true
       open()
     }
+    if (sourceTabId && (sourceStatus === 'disconnected' || sourceStatus === 'dead')) {
+      setDisconnected(tabId, true)
+      setTabStatus(tabId, 'dead')
+    }
     if (!sourceTabId) {
       openOnce()
       return
     }
     const onSourceReady = (payload: { tab_id?: string; status?: string }) => {
       if (payload.tab_id !== sourceTabId) return
-      if (payload.status !== undefined && payload.status !== 'active') return
+      if (payload.status !== undefined && payload.status !== 'active') {
+        setDisconnected(tabId, true)
+        setTabStatus(tabId, 'dead')
+        return
+      }
       openOnce()
+    }
+    const onSourceClosed = (payload: { tab_id?: string }) => {
+      if (payload.tab_id !== sourceTabId) return
+      setDisconnected(tabId, true)
+      setTabStatus(tabId, 'dead')
     }
     const timeout = sourceStatus === 'connected' ? window.setTimeout(openOnce, 250) : undefined
     socket.on('session:restored', onSourceReady)
     socket.on('ssh:connected', onSourceReady)
+    socket.on('ssh:closed', onSourceClosed)
+    socket.on('ssh:error', onSourceClosed)
     return () => {
       if (timeout !== undefined) window.clearTimeout(timeout)
       socket.off('session:restored', onSourceReady)
       socket.off('ssh:connected', onSourceReady)
+      socket.off('ssh:closed', onSourceClosed)
+      socket.off('ssh:error', onSourceClosed)
     }
-  }, [open, socket, sourceStatus, sourceTabId])
+  }, [open, setDisconnected, setTabStatus, socket, sourceStatus, sourceTabId, tabId])
 
   useEffect(() => {
     const onListing = (payload: ListingPayload) => {
@@ -221,7 +290,9 @@ export function useSFTP(tabId: string, sourceTabId: string | undefined, socket: 
     }
     const onError = (payload: SFTPErrorPayload) => {
       if (payload.tab_id !== tabId) return
-      setError(tabId, payload.message ?? 'Transfer failed. Check connection and retry.')
+      const message = payload.message ?? 'Transfer failed. Check connection and retry.'
+      setError(tabId, message)
+      setNotice(tabId, { tone: 'error', message })
       if (payload.code === 'CONNECTION_CLOSED') {
         setDisconnected(tabId, true)
         setTabStatus(tabId, 'dead')
@@ -309,10 +380,68 @@ export function useSFTP(tabId: string, sourceTabId: string | undefined, socket: 
     }
   }, [socket, tabId, refreshCurrentDirectory, setTabStatus, setError, setNotice, setListing, setUsername, setIsRoot, setDisconnected])
 
+  const resumeUpload = useCallback(async (transferId: string) => {
+    const pending = pendingUploadsRef.current.get(transferId)
+    if (!pending) return
+    const { file, remotePath, uploadId } = pending
+    const chunkSize = uploadChunkSize(file.size)
+    updateTransfer(transferId, { status: 'active', error: undefined })
+    try {
+      const initResponse = await fetch(
+        `/sftp/upload/init?session_id=${encodeURIComponent(sessionId)}&tab_id=${encodeURIComponent(tabId)}&upload_id=${uploadId}`,
+        { method: 'POST' },
+      )
+      if (!initResponse.ok) {
+        const body = await initResponse.json().catch(() => null) as { message?: string } | null
+        throw new Error(body?.message ?? `Upload failed (${initResponse.status})`)
+      }
+      do {
+        const offset = pending.offset
+        const end = Math.min(offset + chunkSize, file.size)
+        const complete = end === file.size
+        let result: { offset?: number } | undefined
+        let lastError: unknown
+        for (let attempt = 0; attempt < UPLOAD_RETRY_LIMIT; attempt++) {
+          try {
+            result = await uploadChunkWithProgress(
+              `/sftp/upload?session_id=${encodeURIComponent(sessionId)}&tab_id=${encodeURIComponent(tabId)}&path=${encodeURIComponent(remotePath)}&upload_id=${uploadId}&offset=${offset}&total=${file.size}&complete=${complete}`,
+              file.slice(offset, end),
+              loaded => updateTransfer(transferId, {
+                bytes: Math.min(file.size, offset + loaded),
+                progress: Math.round((Math.min(file.size, offset + loaded) / file.size) * 100),
+              }),
+            )
+            break
+          } catch (error) {
+            lastError = error
+            if ((error as { retryable?: boolean }).retryable === false) break
+            if (attempt + 1 < UPLOAD_RETRY_LIMIT) {
+              await new Promise(resolve => window.setTimeout(resolve, 500 * (attempt + 1)))
+            }
+          }
+        }
+        if (!result) throw lastError instanceof Error ? lastError : new Error('Upload failed')
+        const nextOffset = result.offset ?? end
+        if ((!complete && nextOffset <= offset) || nextOffset > file.size) throw new Error('Upload did not advance')
+        pending.offset = nextOffset
+        updateTransfer(transferId, {
+          bytes: nextOffset,
+          progress: Math.round((nextOffset / file.size) * 100),
+        })
+      } while (pending.offset < file.size)
+      pendingUploadsRef.current.delete(transferId)
+      updateTransfer(transferId, { status: 'done', progress: 100, bytes: file.size })
+    } catch (error) {
+      updateTransfer(transferId, {
+        status: 'error',
+        error: error instanceof Error ? error.message : 'Upload failed',
+      })
+    }
+  }, [sessionId, tabId, updateTransfer])
+
   const uploadFiles = useCallback(async (files: FileList | File[]) => {
     const currentPath = useSFTPStore.getState().tabs[tabId]?.path ?? '.'
-    for (const file of Array.from(files)) {
-      const remotePath = joinPath(currentPath, file.name)
+    const pendingIds = Array.from(files).map(file => {
       const transferId = `${tabId}-${file.name}-${Date.now()}`
       addTransfer({
         id: transferId,
@@ -324,31 +453,29 @@ export function useSFTP(tabId: string, sourceTabId: string | undefined, socket: 
         bytes: 0,
         total: file.size,
       })
-      try {
-        if (file.size > LARGE_UPLOAD_THRESHOLD) {
-          const response = await fetch(
-            `/sftp/upload?session_id=${encodeURIComponent(sessionId)}&tab_id=${encodeURIComponent(tabId)}&path=${encodeURIComponent(remotePath)}`,
-            { method: 'POST', body: file },
-          )
-          if (!response.ok) throw new Error(`Upload failed (${response.status})`)
-        } else {
-          socket.emit('sftp:upload', {
-            session_id: sessionId,
-            tab_id: tabId,
-            path: remotePath,
-            data: await fileToBase64(file),
-          })
-        }
-        updateTransfer(transferId, { status: 'done', progress: 100, bytes: file.size })
-      } catch (error) {
-        updateTransfer(transferId, {
-          status: 'error',
-          error: error instanceof Error ? error.message : 'Upload failed',
-        })
+      pendingUploadsRef.current.set(transferId, {
+        file,
+        remotePath: joinPath(currentPath, file.name),
+        uploadId: globalThis.crypto?.randomUUID?.().replace(/-/g, '')
+          ?? `${Date.now()}${Math.random().toString(36).slice(2)}`,
+        offset: 0,
+      })
+      return transferId
+    })
+    let next = 0
+    const worker = async () => {
+      while (next < pendingIds.length) {
+        const transferId = pendingIds[next++]
+        await resumeUpload(transferId)
       }
     }
+    await Promise.all(Array.from({ length: Math.min(MAX_CONCURRENT_UPLOADS, pendingIds.length) }, worker))
     list(currentPath)
-  }, [socket, sessionId, tabId, list, addTransfer, updateTransfer])
+  }, [tabId, list, addTransfer, resumeUpload])
+
+  const retryUpload = useCallback((transferId: string) => {
+    void resumeUpload(transferId)
+  }, [resumeUpload])
 
   const download = useCallback(async (entry: SFTPEntry) => {
     if (entry.size > LARGE_UPLOAD_THRESHOLD) {
@@ -401,6 +528,7 @@ export function useSFTP(tabId: string, sourceTabId: string | undefined, socket: 
     list,
     open,
     uploadFiles,
+    retryUpload,
     download,
     remove,
     rename,

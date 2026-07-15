@@ -14,11 +14,20 @@ class FakeRemoteFile:
         self.fs = fs
         self.path = path
         self.mode = mode
-        self.buffer = b"" if "w" in mode else fs[path]
+        self.buffer = b"" if "w" in mode else fs.get(path, b"")
+        self.position = 0
+        self.pipelined = False
         self.close_error = close_error
 
     def write(self, data: bytes) -> None:
-        self.buffer += data
+        self.buffer = self.buffer[:self.position] + data + self.buffer[self.position + len(data):]
+        self.position += len(data)
+
+    def seek(self, offset: int) -> None:
+        self.position = offset
+
+    def set_pipelined(self, pipelined: bool) -> None:
+        self.pipelined = pipelined
 
     def read(self, size: int | None = None) -> bytes:
         if size is None:
@@ -30,7 +39,7 @@ class FakeRemoteFile:
     def close(self) -> None:
         if self.close_error is not None:
             raise self.close_error
-        if "w" in self.mode:
+        if "w" in self.mode or "+" in self.mode:
             self.fs[self.path] = self.buffer
 
     def __enter__(self):
@@ -54,6 +63,7 @@ class FakeSFTP:
         self.closed = False
         self.close_count = 0
         self.next_file_close_error: Exception | None = None
+        self.last_file: FakeRemoteFile | None = None
 
     def chdir(self, path: str) -> None:
         if path == ".":
@@ -91,7 +101,8 @@ class FakeSFTP:
             raise FileNotFoundError(errno.ENOENT, "missing", path)
         close_error = self.next_file_close_error
         self.next_file_close_error = None
-        return FakeRemoteFile(self.fs, path, mode, close_error=close_error)
+        self.last_file = FakeRemoteFile(self.fs, path, mode, close_error=close_error)
+        return self.last_file
 
     def lstat(self, path: str):
         if not path.startswith("/"):
@@ -404,6 +415,36 @@ async def test_stream_upload_size_error_survives_close_failure():
 
     assert exc.value.code == "FILE_TOO_LARGE"
     assert "/home/app/too-big.txt" not in sftp.fs
+
+
+@pytest.mark.asyncio
+async def test_upload_chunk_retries_and_only_replaces_target_when_complete():
+    from torrus.sftp_manager import SFTPManager
+
+    async def first_chunk():
+        yield b"abc"
+
+    async def final_chunk():
+        yield b"def"
+
+    sftp = FakeSFTP()
+    ssh_manager = FakeSSHManager(sftp)
+    manager = SFTPManager()
+    try:
+        await manager.open_sftp("sess1", "tab1", ssh_manager)
+        await manager.upload_chunk("tab1", "readme.txt", "upload1", 0, 6, first_chunk(), False)
+        await manager.upload_chunk("tab1", "readme.txt", "upload1", 0, 6, first_chunk(), False)
+        assert sftp.fs["/home/app/readme.txt"] == b"hello"
+        assert sftp.fs["/home/app/.readme.txt.torrus-upload-upload1"] == b"abc"
+
+        result = await manager.upload_chunk("tab1", "readme.txt", "upload1", 3, 6, final_chunk(), True)
+    finally:
+        await manager.shutdown()
+
+    assert result == {"ok": True, "path": "/home/app/readme.txt", "offset": 6, "complete": True}
+    assert sftp.fs["/home/app/readme.txt"] == b"abcdef"
+    assert "/home/app/.readme.txt.torrus-upload-upload1" not in sftp.fs
+    assert sftp.last_file is not None and sftp.last_file.pipelined
 
 
 @pytest.mark.asyncio

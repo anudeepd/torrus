@@ -31,6 +31,7 @@ class SFTPSession:
     session_id: str
     tab_id: str
     client: paramiko.SFTPClient
+    source_tab_id: str | None = None
     cwd: str = "."
     home: str = "."
     users: dict[int, str] = field(default_factory=dict)
@@ -42,6 +43,8 @@ class SFTPManager:
     def __init__(self):
         self._sessions: dict[str, SFTPSession] = {}
         self._locks: dict[str, asyncio.Lock] = {}
+        self._upload_sessions: dict[tuple[str, str], SFTPSession] = {}
+        self._upload_locks: dict[tuple[str, str], asyncio.Lock] = {}
         self._executor = concurrent.futures.ThreadPoolExecutor(
             max_workers=10, thread_name_prefix="sftp"
         )
@@ -65,7 +68,10 @@ class SFTPManager:
             if client is None:
                 return False
 
-            sftp_session = SFTPSession(session_id=session_id, tab_id=tab_id, client=client)
+            sftp_session = SFTPSession(
+                session_id=session_id, tab_id=tab_id, client=client,
+                source_tab_id=source_tab_id or tab_id,
+            )
             try:
                 sftp_session.cwd = await self._run_blocking(_initial_cwd, client)
                 sftp_session.home = sftp_session.cwd
@@ -76,12 +82,36 @@ class SFTPManager:
             self._sessions[tab_id] = sftp_session
             return True
 
+    async def open_upload_channel(self, tab_id: str, upload_id: str, ssh_manager,
+                                  expected_session_id: str | None = None) -> bool:
+        key = (tab_id, upload_id)
+        lock = self._upload_locks.setdefault(key, asyncio.Lock())
+        async with lock:
+            existing = self._upload_sessions.get(key)
+            if existing is not None:
+                return existing.session_id == expected_session_id if expected_session_id else True
+            base = self._get_session(tab_id, expected_session_id=expected_session_id)
+            client = await ssh_manager.open_sftp_channel(base.session_id, base.source_tab_id or tab_id)
+            if client is None:
+                return False
+            self._upload_sessions[key] = SFTPSession(
+                session_id=base.session_id, tab_id=tab_id, client=client,
+                source_tab_id=base.source_tab_id, cwd=base.cwd, home=base.home,
+            )
+            return True
+
     async def close_sftp(self, tab_id: str) -> None:
         lock = self._locks.setdefault(tab_id, asyncio.Lock())
         async with lock:
             await self._close_sftp_unlocked(tab_id)
 
     async def _close_sftp_unlocked(self, tab_id: str) -> None:
+        for key in [key for key in self._upload_sessions if key[0] == tab_id]:
+            upload = self._upload_sessions.pop(key)
+            try:
+                await self._run_blocking(upload.client.close)
+            except Exception:
+                pass
         session = self._sessions.pop(tab_id, None)
         if session is None:
             return
@@ -160,6 +190,7 @@ class SFTPManager:
             try:
                 remote_file = await self._run_blocking(session.client.open, resolved, "wb")
                 try:
+                    await self._run_blocking(remote_file.set_pipelined, True)
                     async for chunk in chunks:
                         wrote += len(chunk)
                         if wrote > max_bytes:
@@ -180,6 +211,85 @@ class SFTPManager:
             return {"ok": True, "path": resolved, "size": wrote}
 
         return await self._locked_stream(tab_id, write_stream, expected_session_id=expected_session_id)
+
+    async def upload_chunk(
+        self,
+        tab_id: str,
+        remote_path: str,
+        upload_id: str,
+        offset: int,
+        total: int,
+        chunks,
+        complete: bool,
+        expected_session_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Write one resumable upload chunk to a temporary remote file.
+
+        The final path is only replaced after the last chunk is fully written.
+        Retrying a chunk at the same offset is safe because it overwrites that
+        range of the temporary file.
+        """
+        if offset < 0 or total < 0 or offset > total:
+            raise SFTPError("INVALID_UPLOAD", "Invalid upload offset.")
+
+        async def write_chunk(session: SFTPSession) -> dict[str, Any]:
+            resolved = _resolve_remote_path(session.cwd, remote_path, session.home)
+            directory, filename = posixpath.split(resolved)
+            temporary = posixpath.join(directory, f".{filename}.torrus-upload-{upload_id}")
+            written = 0
+            remote_file = None
+            try:
+                try:
+                    remote_file = await self._run_blocking(
+                        session.client.open, temporary, "r+b" if offset else "wb"
+                    )
+                except IOError:
+                    if offset and complete:
+                        try:
+                            existing = await self._run_blocking(session.client.stat, resolved)
+                        except Exception:
+                            raise
+                        if existing.st_size == total:
+                            return {"ok": True, "path": resolved, "offset": total, "complete": True}
+                    raise
+                await self._run_blocking(remote_file.set_pipelined, True)
+                await self._run_blocking(remote_file.seek, offset)
+                async for chunk in chunks:
+                    if written + len(chunk) > total - offset:
+                        raise SFTPError("INVALID_UPLOAD", "Upload data exceeds declared size.")
+                    await self._run_blocking(remote_file.write, chunk)
+                    written += len(chunk)
+            except Exception as exc:
+                raise _map_error(exc, resolved) from exc
+            finally:
+                if remote_file is not None:
+                    pending_error = sys.exc_info()[1]
+                    try:
+                        await self._run_blocking(remote_file.close)
+                    except Exception:
+                        if pending_error is None:
+                            raise
+
+            next_offset = offset + written
+            if complete:
+                if next_offset != total:
+                    raise SFTPError("INVALID_UPLOAD", "Final upload chunk is incomplete.")
+                try:
+                    await self._run_blocking(session.client.rename, temporary, resolved)
+                except Exception as exc:
+                    raise _map_error(exc, resolved) from exc
+                upload = self._upload_sessions.pop((tab_id, upload_id), None)
+                if upload is not None:
+                    try:
+                        await self._run_blocking(upload.client.close)
+                    except Exception:
+                        pass
+            return {"ok": True, "path": resolved, "offset": next_offset, "complete": complete}
+
+        key = (tab_id, upload_id)
+        if key not in self._upload_sessions:
+            return await self._locked_stream(tab_id, write_chunk, expected_session_id=expected_session_id)
+        return await self._locked_upload(key, write_chunk, expected_session_id=expected_session_id)
 
     async def stream_download(
         self,
@@ -234,6 +344,22 @@ class SFTPManager:
         lock = self._locks.setdefault(tab_id, asyncio.Lock())
         async with lock:
             session = self._get_session(tab_id, expected_session_id=expected_session_id)
+            session.last_activity = time.time()
+            try:
+                return await work(session)
+            except SFTPError:
+                raise
+            except Exception as exc:
+                raise _map_error(exc, getattr(exc, "filename", "")) from exc
+
+    async def _locked_upload(self, key: tuple[str, str], work, expected_session_id: str | None = None):
+        lock = self._upload_locks.setdefault(key, asyncio.Lock())
+        async with lock:
+            session = self._upload_sessions.get(key)
+            if session is None:
+                raise SFTPError("CONNECTION_CLOSED", "Upload channel closed. Reconnect and retry.")
+            if expected_session_id is not None and session.session_id != expected_session_id:
+                raise SFTPError("PERMISSION_DENIED", "SFTP tab is not available for this session.")
             session.last_activity = time.time()
             try:
                 return await work(session)
@@ -306,6 +432,8 @@ class SFTPManager:
             users, groups = self._account_maps_sync(session)
             entries = []
             for attr in session.client.listdir_attr(resolved):
+                if ".torrus-upload-" in attr.filename:
+                    continue
                 mode = attr.st_mode or 0
                 is_dir = stat.S_ISDIR(mode)
                 is_link = stat.S_ISLNK(mode)

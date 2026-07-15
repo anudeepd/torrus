@@ -9,6 +9,7 @@ import Logo from '@/components/ui/Logo'
 import type { Tab } from '@/types'
 import { modKey } from '@/utils/platform'
 import { submitLdapLogout } from '@/utils/authRedirect'
+import { useModalFocus } from '@/hooks/useModalFocus'
 
 interface TabBarProps {
   onAddTab: () => void
@@ -87,11 +88,7 @@ function SaveSessionDialog({ state, onSave, onClose }: {
     inputRef.current?.select()
   }, [])
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-  }, [onClose])
+  const dialogRef = useModalFocus(true, onClose, inputRef)
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault()
@@ -104,7 +101,7 @@ function SaveSessionDialog({ state, onSave, onClose }: {
       className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center"
       onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}
     >
-      <div className="bg-surface-900 border border-surface-700 rounded-xl p-5 w-72 shadow-2xl flex flex-col gap-3">
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-label="Save Session" tabIndex={-1} className="bg-surface-900 border border-surface-700 rounded-xl p-5 w-72 shadow-2xl flex flex-col gap-3">
         <div className="flex items-center gap-2">
           <Bookmark className="w-4 h-4 text-brand-400" />
           <h2 className="text-sm font-semibold text-slate-200">Save Session</h2>

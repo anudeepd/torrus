@@ -1,7 +1,7 @@
 import { act, renderHook } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Socket } from 'socket.io-client'
-import { useSFTP } from './useSFTP'
+import { uploadChunkSize, useSFTP } from './useSFTP'
 import { useSFTPStore } from '@/store/sftpStore'
 import { useTerminalStore } from '@/store/terminalStore'
 import { createMockSocket } from '@/test/mocks/socket'
@@ -30,6 +30,12 @@ describe('useSFTP', () => {
 
   afterEach(() => {
     vi.useRealTimers()
+  })
+
+  it('uses larger upload chunks for very large files without exceeding 32 MB', () => {
+    expect(uploadChunkSize(0)).toBe(8 * 1024 * 1024)
+    expect(uploadChunkSize(1024 * 1024 * 1024)).toBe(8 * 1024 * 1024)
+    expect(uploadChunkSize(5 * 1024 * 1024 * 1024)).toBe(32 * 1024 * 1024)
   })
 
   it('marks the tab dead when a directory listing reports a closed connection', () => {
@@ -72,6 +78,117 @@ describe('useSFTP', () => {
     expect(useTerminalStore.getState().tabs[0].status).toBe('dead')
   })
 
+  it('marks the tab dead when its source SSH session closes', () => {
+    const socket = createMockSocket()
+    useTerminalStore.setState({
+      sessionId: 'test-session',
+      activeTabId: tabId,
+      tabs: [
+        {
+          id: 'terminal-tab',
+          type: 'terminal',
+          host: 'server.example',
+          port: 22,
+          username: 'deploy',
+          label: 'deploy@server.example',
+          status: 'connected',
+          sessionKey: 'test-session:terminal-tab',
+        },
+        {
+          id: tabId,
+          type: 'sftp',
+          host: 'server.example',
+          port: 22,
+          username: 'deploy',
+          label: 'SFTP deploy@server.example',
+          status: 'connected',
+          sessionKey: 'test-session:sftp-tab',
+          sourceTabId: 'terminal-tab',
+        },
+      ],
+    })
+    renderHook(() => useSFTP(tabId, 'terminal-tab', socket as unknown as Socket))
+
+    act(() => socket._trigger('ssh:closed', { tab_id: 'terminal-tab', reason: 'Connection closed.' }))
+
+    expect(useSFTPStore.getState().tabs[tabId]).toMatchObject({ disconnected: true })
+    expect(useTerminalStore.getState().tabs.find(tab => tab.id === tabId)?.status).toBe('dead')
+  })
+
+  it('shows reconnect immediately when a persisted source SSH tab is disconnected', () => {
+    const socket = createMockSocket()
+    useTerminalStore.setState({
+      sessionId: 'test-session',
+      activeTabId: tabId,
+      tabs: [
+        {
+          id: 'terminal-tab',
+          type: 'terminal',
+          host: 'server.example',
+          port: 22,
+          username: 'deploy',
+          label: 'deploy@server.example',
+          status: 'disconnected',
+          sessionKey: 'test-session:terminal-tab',
+        },
+        {
+          id: tabId,
+          type: 'sftp',
+          host: 'server.example',
+          port: 22,
+          username: 'deploy',
+          label: 'SFTP deploy@server.example',
+          status: 'connected',
+          sessionKey: 'test-session:sftp-tab',
+          sourceTabId: 'terminal-tab',
+        },
+      ],
+    })
+
+    const { result } = renderHook(() => useSFTP(tabId, 'terminal-tab', socket as unknown as Socket))
+
+    expect(useSFTPStore.getState().tabs[tabId]).toMatchObject({ disconnected: true })
+    expect(useTerminalStore.getState().tabs.find(tab => tab.id === tabId)?.status).toBe('dead')
+    expect(socket.emit).not.toHaveBeenCalledWith('sftp:open', expect.anything())
+
+    act(() => result.current.open())
+
+    expect(useTerminalStore.getState().activeTabId).toBe('terminal-tab')
+    expect(socket.emit).not.toHaveBeenCalledWith('sftp:open', expect.anything())
+  })
+
+  it('creates and activates a replacement SSH tab when source tab is closed', () => {
+    const socket = createMockSocket()
+    useTerminalStore.setState({
+      sessionId: 'test-session',
+      activeTabId: tabId,
+      tabs: [{
+        id: tabId,
+        type: 'sftp',
+        host: 'server.example',
+        port: 2222,
+        username: 'deploy',
+        label: 'SFTP deploy@server.example',
+        status: 'dead',
+        sessionKey: 'test-session:sftp-tab',
+        sourceTabId: 'closed-terminal-tab',
+      }],
+    })
+    const { result } = renderHook(() => useSFTP(tabId, 'closed-terminal-tab', socket as unknown as Socket))
+
+    act(() => result.current.open())
+
+    const state = useTerminalStore.getState()
+    const replacement = state.tabs.find(tab => tab.type === 'terminal')
+    expect(replacement).toMatchObject({ host: 'server.example', port: 2222, username: 'deploy', status: 'disconnected' })
+    expect(state.tabs.find(tab => tab.id === tabId)?.sourceTabId).toBe(replacement?.id)
+    expect(state.activeTabId).toBe(replacement?.id)
+    expect(socket.emit).toHaveBeenCalledWith('session:register', {
+      session_id: 'test-session',
+      tab_id: replacement?.id,
+    })
+  })
+
   it('stores username and root status from the open response', () => {
     const socket = createMockSocket()
     renderHook(() => useSFTP(tabId, 'terminal-tab', socket as unknown as Socket))
@@ -94,6 +211,42 @@ describe('useSFTP', () => {
     })
   })
 
+  it('uploads through the resumable chunk endpoint and reports byte progress', async () => {
+    const socket = createMockSocket()
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ offset: 5 }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    class MockUploadRequest {
+      status = 200
+      responseText = '{"offset":5}'
+      upload: { onprogress?: (event: { loaded: number }) => void } = {}
+      onload: (() => void) | null = null
+      onerror: (() => void) | null = null
+      open() {}
+      send() {
+        this.upload.onprogress?.({ loaded: 5 })
+        this.onload?.()
+      }
+    }
+    vi.stubGlobal('XMLHttpRequest', MockUploadRequest)
+    const { result } = renderHook(() => useSFTP(tabId, 'terminal-tab', socket as unknown as Socket))
+
+    await act(async () => {
+      await result.current.uploadFiles([new File(['hello'], 'release.txt')])
+    })
+
+    expect(fetchMock).toHaveBeenCalledOnce()
+    expect(String(fetchMock.mock.calls[0][0])).toContain('/sftp/upload/init?')
+    expect(useSFTPStore.getState().transfers[0]).toMatchObject({
+      status: 'done',
+      bytes: 5,
+      progress: 100,
+    })
+    expect(socket.emit).not.toHaveBeenCalledWith('sftp:upload', expect.anything())
+  })
+
   it('shows detailed delete errors without reloading the directory', () => {
     const socket = createMockSocket()
     renderHook(() => useSFTP(tabId, 'terminal-tab', socket as unknown as Socket))
@@ -114,6 +267,24 @@ describe('useSFTP', () => {
       message: 'Failed to delete file: Permission denied: /root/file',
     })
     expect(socket.emit).not.toHaveBeenCalledWith('sftp:list', expect.anything())
+  })
+
+  it('shows SFTP error events as visible failure notices', () => {
+    const socket = createMockSocket()
+    renderHook(() => useSFTP(tabId, 'terminal-tab', socket as unknown as Socket))
+
+    act(() => {
+      socket._trigger('sftp:error', {
+        tab_id: tabId,
+        code: 'PERMISSION_DENIED',
+        message: 'Permission denied: /srv/app/locked.txt',
+      })
+    })
+
+    expect(useSFTPStore.getState().tabs[tabId].notice).toEqual({
+      tone: 'error',
+      message: 'Permission denied: /srv/app/locked.txt',
+    })
   })
 
   it('reloads the directory after a partially successful delete', () => {

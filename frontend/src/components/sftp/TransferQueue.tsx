@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import clsx from 'clsx'
-import { Check, ChevronDown, ChevronUp, Download, Upload, X, XCircle } from 'lucide-react'
+import { Check, ChevronDown, ChevronUp, Download, RotateCcw, Upload, X, XCircle } from 'lucide-react'
 import type { TransferItem } from '@/store/sftpStore'
 
 function formatBytes(bytes: number): string {
@@ -18,10 +18,11 @@ function formatBytes(bytes: number): string {
 interface TransferQueueProps {
   transfers: TransferItem[]
   onDismiss: (id: string) => void
+  onRetry: (id: string) => void
   onClearCompleted: () => void
 }
 
-export default function TransferQueue({ transfers, onDismiss, onClearCompleted }: TransferQueueProps) {
+export default function TransferQueue({ transfers, onDismiss, onRetry, onClearCompleted }: TransferQueueProps) {
   const [collapsed, setCollapsed] = useState(false)
 
   if (transfers.length === 0) {
@@ -68,6 +69,17 @@ export default function TransferQueue({ transfers, onDismiss, onClearCompleted }
                 <span className="min-w-0 flex-1 truncate font-mono text-slate-300">{item.name}</span>
                 {item.status === 'done' && <Check className="h-3.5 w-3.5 text-brand-400" />}
                 {item.status === 'error' && <XCircle className="h-3.5 w-3.5 text-red-400" />}
+                {item.status === 'error' && item.direction === 'upload' && (
+                  <button
+                    type="button"
+                    onClick={() => onRetry(item.id)}
+                    className="flex h-6 w-6 items-center justify-center text-slate-500 hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+                    aria-label={`Retry ${item.name}`}
+                    title="Retry upload"
+                  >
+                    <RotateCcw className="h-3.5 w-3.5" />
+                  </button>
+                )}
                 {(item.status === 'done' || item.status === 'error') && (
                   <button
                     type="button"

@@ -381,7 +381,7 @@ async def test_sftp_http_upload_binds_tab_to_session(reset_server_state):
     server_module.ssh_manager = MagicMock()
     server_module.ssh_manager.has_session = AsyncMock(return_value=True)
     server_module.sftp_manager = MagicMock()
-    server_module.sftp_manager.stream_upload = AsyncMock(
+    server_module.sftp_manager.upload_chunk = AsyncMock(
         side_effect=SFTPError("PERMISSION_DENIED", "SFTP tab is not available for this session.")
     )
 
@@ -390,12 +390,12 @@ async def test_sftp_http_upload_binds_tab_to_session(reset_server_state):
             "type": "http",
             "method": "POST",
             "path": "/sftp/upload",
-            "query_string": b"session_id=session-b&tab_id=tab-a&path=x.txt",
+            "query_string": b"session_id=session-b&tab_id=tab-a&path=x.txt&upload_id=upload1&offset=0&total=1",
             "headers": [],
         }
     )
     response = await sftp_stream_upload(request)
 
     assert response.status_code == 403
-    call = server_module.sftp_manager.stream_upload.await_args
+    call = server_module.sftp_manager.upload_chunk.await_args
     assert call.kwargs["expected_session_id"] == "session-b"

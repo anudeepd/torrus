@@ -5,6 +5,7 @@ import { useSavedServerStore } from '@/store/savedServerStore'
 import { useTerminalStore } from '@/store/terminalStore'
 import { uuid } from '@/utils/uuid'
 import type { SavedServer } from '@/types'
+import { useModalFocus } from '@/hooks/useModalFocus'
 
 interface SessionSidebarProps {
   isOpen: boolean
@@ -64,12 +65,7 @@ function EditModal({ server, onSave, onClose }: EditModalProps) {
   const [username, setUsername] = useState(server.username)
   const [error, setError] = useState('')
 
-  // Close on Escape
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-  }, [onClose])
+  const dialogRef = useModalFocus(true, onClose)
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault()
@@ -100,7 +96,7 @@ function EditModal({ server, onSave, onClose }: EditModalProps) {
       className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center"
       onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}
     >
-      <div className="bg-surface-900 border border-surface-700 rounded-xl p-6 w-80 shadow-2xl flex flex-col gap-4">
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-label="Edit Session" tabIndex={-1} className="bg-surface-900 border border-surface-700 rounded-xl p-6 w-80 shadow-2xl flex flex-col gap-4">
         <div className="flex items-center gap-2">
           <Pencil className="w-4 h-4 text-brand-400" />
           <h2 className="text-sm font-semibold text-slate-200">Edit Session</h2>

@@ -1,6 +1,7 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { Radio, X } from 'lucide-react'
 import clsx from 'clsx'
+import { useModalFocus } from '@/hooks/useModalFocus'
 import type { PaneNode } from '@/store/layoutStore'
 import { makeSplitId } from '@/store/layoutStore'
 import type { Tab } from '@/types'
@@ -45,11 +46,7 @@ export default function BroadcastPickerModal({ connectedTabs, initialIncluded, b
       : new Set(connectedTabs.map(t => t.id))
   )
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-  }, [onClose])
+  const dialogRef = useModalFocus(true, onClose)
 
   const toggle = (id: string) => setChecked(prev => {
     const next = new Set(prev)
@@ -70,7 +67,7 @@ export default function BroadcastPickerModal({ connectedTabs, initialIncluded, b
       className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center"
       onMouseDown={e => { if (e.target === e.currentTarget) onClose() }}
     >
-      <div className="bg-surface-900 border border-surface-700 rounded-xl shadow-2xl w-80 flex flex-col">
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-label="Broadcast input" tabIndex={-1} className="bg-surface-900 border border-surface-700 rounded-xl shadow-2xl w-80 flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-surface-800">
           <div className="flex items-center gap-2">

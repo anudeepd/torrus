@@ -44,7 +44,6 @@ _ALLOW_PRIVATE_HOSTS_WITHOUT_LDAP = os.getenv(
     "TORRUS_ALLOW_PRIVATE_HOSTS_WITHOUT_LDAP", "true"
 ).lower() in {"1", "true", "yes", "on"}
 _MAX_SESSIONS_PER_SID = 20
-_SFTP_HTTP_UPLOAD_MAX_BYTES = 100 * 1024 * 1024
 APP_CSP = (
     "default-src 'self'; "
     "connect-src 'self' ws: wss:; "
@@ -233,24 +232,54 @@ async def sftp_stream_upload(request: Request):
     session_id = request.query_params.get("session_id", "")
     tab_id = request.query_params.get("tab_id", "")
     remote_path = request.query_params.get("path", "")
-    if not _valid_id(session_id) or not _valid_id(tab_id) or not remote_path:
+    upload_id = request.query_params.get("upload_id", "")
+    try:
+        offset = int(request.query_params.get("offset", "0"))
+        total = int(request.query_params.get("total", "-1"))
+    except ValueError:
+        return JSONResponse(status_code=400, content={"ok": False, "code": "invalid_request"})
+    complete = request.query_params.get("complete", "false").lower() == "true"
+    if not _valid_id(session_id) or not _valid_id(tab_id) or not _valid_id(upload_id) or not remote_path:
         return JSONResponse(status_code=400, content={"ok": False, "code": "invalid_request"})
     if not await ssh_manager.has_session(session_id):
         return JSONResponse(status_code=403, content={"ok": False, "code": "auth_required"})
     try:
-        result = await sftp_manager.stream_upload(
+        result = await sftp_manager.upload_chunk(
             tab_id,
             remote_path,
+            upload_id,
+            offset,
+            total,
             request.stream(),
-            max_bytes=_SFTP_HTTP_UPLOAD_MAX_BYTES,
+            complete,
             expected_session_id=session_id,
         )
         return JSONResponse(content=result)
     except SFTPError as exc:
         return JSONResponse(
-            status_code=404 if exc.code == "FILE_NOT_FOUND" else 413 if exc.code == "FILE_TOO_LARGE" else 403 if exc.code == "PERMISSION_DENIED" else 400,
+            status_code=404 if exc.code == "FILE_NOT_FOUND" else 403 if exc.code == "PERMISSION_DENIED" else 400,
             content={"ok": False, "code": exc.code, "message": exc.message},
         )
+
+
+@fastapi_app.post("/sftp/upload/init", include_in_schema=False)
+async def sftp_upload_init(request: Request):
+    session_id = request.query_params.get("session_id", "")
+    tab_id = request.query_params.get("tab_id", "")
+    upload_id = request.query_params.get("upload_id", "")
+    if not _valid_id(session_id) or not _valid_id(tab_id) or not _valid_id(upload_id):
+        return JSONResponse(status_code=400, content={"ok": False, "code": "invalid_request"})
+    if not await ssh_manager.has_session(session_id):
+        return JSONResponse(status_code=403, content={"ok": False, "code": "auth_required"})
+    try:
+        opened = await sftp_manager.open_upload_channel(
+            tab_id, upload_id, ssh_manager, expected_session_id=session_id,
+        )
+    except SFTPError as exc:
+        return JSONResponse(status_code=403, content={"ok": False, "code": exc.code, "message": exc.message})
+    if not opened:
+        return JSONResponse(status_code=400, content={"ok": False, "code": "CONNECTION_CLOSED"})
+    return JSONResponse(content={"ok": True})
 
 
 @fastapi_app.get("/sftp/download", include_in_schema=False)

@@ -28,6 +28,7 @@ interface TerminalState {
   setActiveTab: (id: string) => void
   setTabStatus: (id: string, status: TabStatus) => void
   setTabConnection: (id: string, host: string, port: number, username: string) => void
+  setSourceTab: (id: string, sourceTabId: string) => void
   renameTab: (id: string, label: string | null) => void
   getActiveTab: () => Tab | null
 }
@@ -105,6 +106,9 @@ export const useTerminalStore = create<TerminalState>()(
 
       setTabConnection: (id, host, port, username) =>
         set(s => ({ tabs: s.tabs.map(t => t.id === id ? { ...t, host, port, username } : t) })),
+
+      setSourceTab: (id, sourceTabId) =>
+        set(s => ({ tabs: s.tabs.map(t => t.id === id ? { ...t, sourceTabId } : t) })),
 
       renameTab: (id, label) =>
         set(s => ({

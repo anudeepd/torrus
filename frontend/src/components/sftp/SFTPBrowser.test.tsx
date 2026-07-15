@@ -93,9 +93,20 @@ describe('SFTPBrowser', () => {
     })
 
     expect(screen.queryByRole('button', { name: '~' })).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: '/' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '/' })).toHaveClass('text-slate-600')
     expect(screen.getByRole('button', { name: 'tmp' })).toHaveAttribute('title', '/tmp')
     expect(screen.getByRole('button', { name: 'anudeep' })).toHaveAttribute('title', '/tmp/anudeep')
+  })
+
+  it('dismisses the new-folder modal with Escape', () => {
+    const socket = createMockSocket()
+    render(<SFTPBrowser tabId={tabId} sourceTabId="terminal-tab" socket={socket as unknown as Socket} />)
+
+    fireEvent.click(screen.getByTitle('Create new folder'))
+    expect(screen.getByRole('dialog', { name: 'New folder' })).toBeInTheDocument()
+
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(screen.queryByRole('dialog', { name: 'New folder' })).not.toBeInTheDocument()
   })
 
   it('supports breadcrumbs, root identity, context chmod, and a styled folder dialog', () => {
@@ -186,11 +197,57 @@ describe('SFTPBrowser', () => {
       })
     })
     expect(screen.getByRole('alert')).toHaveTextContent('Failed to delete item: Permission denied.')
+    expect(screen.getByRole('alert')).toHaveTextContent('ERROR')
+    expect(screen.getByText('Failed to delete item: Permission denied.')).toHaveClass('break-words')
 
     act(() => vi.advanceTimersByTime(11999))
     expect(screen.getByRole('alert')).toBeInTheDocument()
     act(() => vi.advanceTimersByTime(1))
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
+  it('keeps failed transfers visible until dismissed', () => {
+    vi.useFakeTimers()
+    useSFTPStore.setState({
+      transfers: [{
+        id: 'failed-upload',
+        tabId,
+        name: 'restricted.txt',
+        direction: 'upload',
+        status: 'error',
+        progress: 40,
+        bytes: 40,
+        total: 100,
+        startedAt: Date.now(),
+        error: 'Permission denied',
+      }],
+    })
+    const socket = createMockSocket()
+    render(<SFTPBrowser tabId={tabId} sourceTabId="terminal-tab" socket={socket as unknown as Socket} />)
+
+    act(() => vi.advanceTimersByTime(60_000))
+    expect(screen.getByText('Permission denied')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss restricted.txt' }))
+    expect(screen.queryByText('Permission denied')).not.toBeInTheDocument()
+  })
+
+  it('sets the active descendant for keyboard-selected files', () => {
+    const socket = createMockSocket()
+    render(<SFTPBrowser tabId={tabId} sourceTabId="terminal-tab" socket={socket as unknown as Socket} />)
+
+    act(() => {
+      socket._trigger('sftp:open:result', {
+        tab_id: tabId,
+        ok: true,
+        path: '/var/log',
+        entries: [{ name: 'app.log', path: '/var/log/app.log', type: 'file', size: 2, mtime: 1 }],
+      })
+    })
+
+    const browser = screen.getByRole('listbox', { name: 'File browser' })
+    fireEvent.keyDown(browser, { key: 'ArrowDown' })
+    expect(browser).toHaveAttribute('aria-activedescendant', `sftp-entry-${tabId}-${encodeURIComponent('/var/log/app.log')}`)
   })
 
   it('clears selected files when clicking blank browser space', () => {
