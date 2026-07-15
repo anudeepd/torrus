@@ -8,6 +8,7 @@ export class MockTerminal {
   textarea: HTMLTextAreaElement | null = null
   modes = { bracketedPasteMode: false }
   options: Record<string, unknown> = {}
+  lastKeyEvent: KeyboardEvent | null = null
   selection = false
   buffer = { active: { viewportY: 0, baseY: 0 } }
   scrollToBottom = vi.fn()
@@ -47,7 +48,8 @@ export class MockTerminal {
   }
 
   simulateKey(eventInit: KeyboardEventInit) {
-    const event = new KeyboardEvent('keydown', eventInit)
+    const event = new KeyboardEvent('keydown', { cancelable: true, ...eventInit })
+    this.lastKeyEvent = event
     return this._keyHandler?.(event)
   }
 }

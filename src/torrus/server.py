@@ -224,7 +224,15 @@ async def favicon():
 
 @fastapi_app.get("/api/config", include_in_schema=False)
 async def api_config():
-    return {"ldap_enabled": bool(os.getenv("TORRUS_LDAP_CONFIG"))}
+    ldap_enabled = bool(os.getenv("TORRUS_LDAP_CONFIG"))
+    idle_timeout = _safe_int(
+        getattr(getattr(_ldap_config, "proxy", None), "idle_timeout", 0),
+        0,
+    )
+    return {
+        "ldap_enabled": ldap_enabled,
+        "ldap_idle_timeout": max(0, idle_timeout) if ldap_enabled else 0,
+    }
 
 
 @fastapi_app.post("/sftp/upload", include_in_schema=False)

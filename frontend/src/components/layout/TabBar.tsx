@@ -254,6 +254,9 @@ export default function TabBar({ onAddTab, onCloseTab, onCloneTab, onOpenSftpTab
               ref={(element) => {
                 tabRefs.current[tab.id] = element
               }}
+              onMouseDown={(e) => {
+                if (e.button === 2) e.preventDefault()
+              }}
               onContextMenu={(e) => {
                 e.preventDefault()
                 setContextMenu({ tabId: tab.id, x: e.clientX, y: e.clientY })

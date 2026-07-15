@@ -35,6 +35,7 @@
   #root {
     height: 100%;
     overflow: hidden;
+    overscroll-behavior: none;
     margin: 0;
     padding: 0;
   }

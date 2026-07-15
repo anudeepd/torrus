@@ -25,13 +25,14 @@ describe('useServerConfigStore', () => {
     const redirectToLdapLogin = vi.fn()
     vi.doMock('@/utils/authRedirect', () => ({ redirectToLdapLogin }))
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
-      Response.json({ ldap_enabled: true })
+      Response.json({ ldap_enabled: true, ldap_idle_timeout: 900 })
     ))
 
     const { useServerConfigStore } = await import('./serverConfigStore')
     await useServerConfigStore.getState().load()
 
     expect(useServerConfigStore.getState().ldapEnabled).toBe(true)
+    expect(useServerConfigStore.getState().ldapIdleTimeout).toBe(900)
     expect(redirectToLdapLogin).not.toHaveBeenCalled()
   })
 })

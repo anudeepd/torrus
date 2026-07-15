@@ -9,4 +9,8 @@ describe('terminal scrollbar CSS', () => {
     expect(css).toContain('scrollbar-color: #334155 #020617;')
     expect(css).toContain('.xterm-viewport::-webkit-scrollbar-track {\n  background: #020617;')
   })
+
+  it('prevents pane scrolling from moving the document viewport', () => {
+    expect(css).toContain('html,\n  body,\n  #root {\n    height: 100%;\n    overflow: hidden;\n    overscroll-behavior: none;')
+  })
 })

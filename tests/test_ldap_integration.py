@@ -4,7 +4,13 @@ from pathlib import Path
 
 from starlette.responses import FileResponse
 
-from torrus.server import APP_CSP, _ensure_ldapgate_static_paths, fastapi_app, favicon
+from torrus.server import (
+    APP_CSP,
+    _ensure_ldapgate_static_paths,
+    api_config,
+    fastapi_app,
+    favicon,
+)
 
 
 def test_app_csp_allows_self_fonts_and_websockets():
@@ -23,6 +29,22 @@ def test_ensure_ldapgate_static_paths_preserves_existing_paths():
     assert proxy.static_paths == ["/custom", "/favicon.svg", "/favicon.ico"]
 
 
+def test_api_config_exposes_ldap_idle_timeout(monkeypatch):
+    import torrus.server as server_module
+
+    monkeypatch.setenv("TORRUS_LDAP_CONFIG", "/etc/torrus/ldap.yaml")
+    monkeypatch.setattr(
+        server_module,
+        "_ldap_config",
+        types.SimpleNamespace(proxy=types.SimpleNamespace(idle_timeout=900)),
+    )
+
+    assert asyncio.run(api_config()) == {
+        "ldap_enabled": True,
+        "ldap_idle_timeout": 900,
+    }
+
+
 def test_login_template_uses_nonce_for_inline_assets():
     template = (
         Path(__file__).resolve().parents[1] / "src" / "torrus" / "templates" / "login.html"
@@ -31,6 +53,8 @@ def test_login_template_uses_nonce_for_inline_assets():
     assert '<style nonce="{{ csrf_nonce }}">' in template
     assert '<script nonce="{{ csrf_nonce }}">' in template
     assert '<input type="hidden" name="csrf_token" value="{{ csrf_token }}">' in template
+    assert 'id="password-toggle" aria-label="Show password"' in template
+    assert "password.type = visible ? 'password' : 'text';" in template
     assert 'style="' not in template
     assert "meta http-equiv=\"Content-Security-Policy\"" not in template
 

@@ -276,6 +276,33 @@ describe('TerminalPane', () => {
     )
   })
 
+  it('keeps normal-mode terminal keys out of browser input handling', async () => {
+    const tabId = 'tab-vi-navigation'
+    act(() => {
+      seedStores(tabId, 'connected')
+    })
+
+    const socket = createMockSocket()
+    render(
+      <TerminalPane
+        tabId={tabId}
+        isActive={true}
+        focused={true}
+        socket={socket as unknown as import('socket.io-client').Socket}
+      />
+    )
+
+    await waitFor(() => {
+      expect(mockTerminalInstances.length).toBeGreaterThan(0)
+    })
+
+    const term = mockTerminalInstances[mockTerminalInstances.length - 1]
+    for (const key of ['h', 'j', 'k', 'l', 'w', 'b', '0', '$', 'Escape', 'ArrowUp', 'Tab', 'Enter']) {
+      expect(term.simulateKey({ key })).toBe(true)
+      expect(term.lastKeyEvent?.defaultPrevented).toBe(true)
+    }
+  })
+
   it('keeps Ctrl+C as copy when terminal text is selected', async () => {
     const tabId = 'tab-5'
     act(() => {
