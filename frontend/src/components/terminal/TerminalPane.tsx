@@ -18,6 +18,8 @@ interface TerminalPaneProps {
 }
 
 const ANSI_ESCAPE = String.fromCharCode(0x1b)
+const BACKWARD_KILL_WORD_SEQUENCE = `${ANSI_ESCAPE}\x7f`
+const YANK_SEQUENCE = '\x19'
 const SCROLLBACK_CLEAR_SEQUENCE = new RegExp(`${ANSI_ESCAPE}\\[[?]?(?:3J)`, 'g')
 const TERMINAL_REPLY_SEQUENCE = new RegExp(
   `${ANSI_ESCAPE}(?:\\[(?:\\?|>|!|=)?[0-9;]*[cRn]|\\][0-9;]*(?:;[^${ANSI_ESCAPE}\\x07]*)?(?:\\x07|${ANSI_ESCAPE}\\\\))`,
@@ -169,6 +171,42 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
     term.attachCustomKeyEventHandler((e) => {
       const mod = e.ctrlKey || e.metaKey
       const key = e.key.toLowerCase()
+      const deletePreviousWord =
+        e.type === 'keydown'
+        && key === 'backspace'
+        && !e.metaKey
+        && !e.shiftKey
+        && ((e.altKey && !e.ctrlKey) || (e.ctrlKey && !e.altKey))
+      if (deletePreviousWord) {
+        emitInput(BACKWARD_KILL_WORD_SEQUENCE)
+        e.preventDefault()
+        return false
+      }
+      if (
+        e.type === 'keydown'
+        && e.ctrlKey
+        && !e.metaKey
+        && !e.altKey
+        && !e.shiftKey
+        && key === 'y'
+      ) {
+        emitInput(YANK_SEQUENCE)
+        e.preventDefault()
+        return false
+      }
+      if (
+        e.type === 'keydown'
+        && e.repeat
+        && e.key.length === 1
+        && !e.isComposing
+        && !e.ctrlKey
+        && !e.metaKey
+        && !e.altKey
+      ) {
+        term.input(e.key, true)
+        e.preventDefault()
+        return false
+      }
       if (mod && (key === 'w' || key === 't' || key === ',')) return false
       if (e.ctrlKey && key === 'tab') return false
       if (mod && key === 'f') return false

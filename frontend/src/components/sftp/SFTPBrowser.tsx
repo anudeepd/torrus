@@ -9,6 +9,7 @@ import {
   Download,
   FolderOpen,
   FolderPlus,
+  LoaderCircle,
   MoreHorizontal,
   Pencil,
   RefreshCw,
@@ -49,11 +50,15 @@ interface ChmodDialogState {
 
 type SortKey = 'name' | 'size' | 'owner' | 'mode' | 'mtime'
 type SortDirection = 'asc' | 'desc'
+type DropWaitState = 'preparing' | 'delayed' | null
 
 interface SortRule {
   key: SortKey
   direction: SortDirection
 }
+
+const DRAG_OVERLAY_STALE_MS = 1_500
+const DROP_DELAYED_MS = 15_000
 
 function provideContextFeedback() {
   if (window.matchMedia?.('(pointer: coarse)').matches) navigator.vibrate?.(10)
@@ -297,7 +302,7 @@ function Breadcrumbs({ path, list, onEdit }: BreadcrumbsProps) {
     >
       {visible.map((segment, index) => (
         <span key={`${segment.path}-${index}`} className="flex min-w-0 items-center">
-          {index > 0 && !(index === 1 && visible[0]?.path === '/') && <span className="px-1 text-slate-600">/</span>}
+          {index > 0 && !(index === 1 && visible[0]?.path === '/') && <span className="px-1 font-mono text-slate-600">/</span>}
           {index === 1 && hiddenCount > 0 && (
             <>
               <button
@@ -308,7 +313,7 @@ function Breadcrumbs({ path, list, onEdit }: BreadcrumbsProps) {
               >
                 ...
               </button>
-              <span className="px-1 text-slate-600">/</span>
+              <span className="px-1 font-mono text-slate-600">/</span>
             </>
           )}
           <button
@@ -385,7 +390,10 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
   const moreButtonRef = useRef<HTMLButtonElement>(null)
   const moreMenuRef = useRef<HTMLDivElement>(null)
   const deleteCancelRef = useRef<HTMLButtonElement>(null)
+  const dragOverlayTimerRef = useRef<number | null>(null)
+  const dropDelayTimerRef = useRef<number | null>(null)
   const [dragging, setDragging] = useState(false)
+  const [dropWaitState, setDropWaitState] = useState<DropWaitState>(null)
   const [editingPath, setEditingPath] = useState(false)
   const [renamePath, setRenamePath] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
@@ -427,6 +435,64 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
   } = useSFTP(tabId, sourceTabId, socket)
   const { toggleSelected, setSelected, clearSelected, removeTransfer } = useSFTPStore()
   const statusNotice = notice ?? (error ? { tone: 'error' as const, message: error } : null)
+
+  const clearDropFeedback = useCallback(() => {
+    if (dragOverlayTimerRef.current !== null) {
+      window.clearTimeout(dragOverlayTimerRef.current)
+      dragOverlayTimerRef.current = null
+    }
+    if (dropDelayTimerRef.current !== null) {
+      window.clearTimeout(dropDelayTimerRef.current)
+      dropDelayTimerRef.current = null
+    }
+    setDragging(false)
+    setDropWaitState(null)
+  }, [])
+
+  const refreshDragOverlay = useCallback(() => {
+    setDragging(true)
+    setDropWaitState(null)
+    if (dragOverlayTimerRef.current !== null) {
+      window.clearTimeout(dragOverlayTimerRef.current)
+    }
+    if (dropDelayTimerRef.current !== null) {
+      window.clearTimeout(dropDelayTimerRef.current)
+      dropDelayTimerRef.current = null
+    }
+    dragOverlayTimerRef.current = window.setTimeout(() => {
+      dragOverlayTimerRef.current = null
+      setDragging(false)
+      setDropWaitState('preparing')
+      dropDelayTimerRef.current = window.setTimeout(() => {
+        dropDelayTimerRef.current = null
+        setDropWaitState('delayed')
+      }, DROP_DELAYED_MS)
+    }, DRAG_OVERLAY_STALE_MS)
+  }, [])
+
+  useEffect(() => {
+    const clearWhenHidden = () => {
+      if (document.hidden) clearDropFeedback()
+    }
+    window.addEventListener('drop', clearDropFeedback)
+    window.addEventListener('dragend', clearDropFeedback)
+    window.addEventListener('blur', clearDropFeedback)
+    document.addEventListener('visibilitychange', clearWhenHidden)
+    return () => {
+      window.removeEventListener('drop', clearDropFeedback)
+      window.removeEventListener('dragend', clearDropFeedback)
+      window.removeEventListener('blur', clearDropFeedback)
+      document.removeEventListener('visibilitychange', clearWhenHidden)
+      if (dragOverlayTimerRef.current !== null) {
+        window.clearTimeout(dragOverlayTimerRef.current)
+        dragOverlayTimerRef.current = null
+      }
+      if (dropDelayTimerRef.current !== null) {
+        window.clearTimeout(dropDelayTimerRef.current)
+        dropDelayTimerRef.current = null
+      }
+    }
+  }, [clearDropFeedback])
 
   const dismissStatusNotice = useCallback(() => {
     clearNotice()
@@ -795,10 +861,45 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
         multiple
         className="hidden"
         onChange={event => {
-          if (event.target.files) void uploadFiles(event.target.files)
+          if (event.target.files) {
+            clearDropFeedback()
+            void uploadFiles(event.target.files)
+          }
           event.currentTarget.value = ''
         }}
       />
+
+      {dropWaitState && (
+        <div
+          className="flex min-h-9 flex-shrink-0 items-center gap-2 border-b border-surface-800 border-l-2 border-l-brand-400 bg-surface-900 px-3 py-1.5 font-mono text-[11px] text-slate-300"
+        >
+          {dropWaitState === 'preparing' ? (
+            <LoaderCircle className="h-3.5 w-3.5 flex-shrink-0 animate-spin text-brand-400 motion-reduce:animate-none" />
+          ) : (
+            <CircleAlert className="h-3.5 w-3.5 flex-shrink-0 text-amber-400" />
+          )}
+          <span role="status" aria-live="polite" className="min-w-0 flex-1">
+            {dropWaitState === 'preparing' ? 'Preparing upload…' : "Upload hasn't started yet."}
+          </span>
+          {dropWaitState === 'delayed' && (
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              className="flex h-8 flex-shrink-0 items-center px-2 font-sans text-xs font-medium text-brand-300 hover:text-brand-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+            >
+              Choose files
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={clearDropFeedback}
+            className="flex h-8 w-8 flex-shrink-0 items-center justify-center text-slate-500 hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+            aria-label="Dismiss upload status"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      )}
 
       {statusNotice && <StatusRail {...statusNotice} onDismiss={dismissStatusNotice} />}
 
@@ -813,11 +914,11 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
         onMouseDown={event => {
           if (event.target === event.currentTarget) clearSelected(tabId)
         }}
-        onDragOver={event => { event.preventDefault(); setDragging(true) }}
-        onDragLeave={event => { if (event.currentTarget === event.target) setDragging(false) }}
+        onDragOver={event => { event.preventDefault(); refreshDragOverlay() }}
+        onDragLeave={event => { if (event.currentTarget === event.target) clearDropFeedback() }}
         onDrop={event => {
           event.preventDefault()
-          setDragging(false)
+          clearDropFeedback()
           void uploadFiles(event.dataTransfer.files)
         }}
         className={clsx('relative min-h-0 flex-1 select-none overflow-y-auto outline-none focus-visible:ring-2 focus-visible:ring-brand-500', {

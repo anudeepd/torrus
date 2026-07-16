@@ -303,6 +303,88 @@ describe('TerminalPane', () => {
     }
   })
 
+  it('forwards held printable key repeats without synthesizing a sticky key', async () => {
+    const tabId = 'tab-held-vi-navigation'
+    act(() => {
+      seedStores(tabId, 'connected')
+    })
+
+    const socket = createMockSocket()
+    render(
+      <TerminalPane
+        tabId={tabId}
+        isActive={true}
+        focused={true}
+        socket={socket as unknown as import('socket.io-client').Socket}
+      />
+    )
+
+    await waitFor(() => {
+      expect(mockTerminalInstances.length).toBeGreaterThan(0)
+    })
+
+    const term = mockTerminalInstances[mockTerminalInstances.length - 1]
+    socket.emit.mockClear()
+
+    expect(term.simulateKey({ key: 'j' })).toBe(true)
+    for (const key of ['h', 'j', 'k', 'l']) {
+      expect(term.simulateKey({ key, repeat: true })).toBe(false)
+      expect(socket.emit).toHaveBeenCalledWith(
+        'ssh:input',
+        expect.objectContaining({ data: key })
+      )
+    }
+    expect(socket.emit).toHaveBeenCalledTimes(4)
+  })
+
+  it('normalizes cross-platform delete-word and restore shortcuts', async () => {
+    const tabId = 'tab-word-editing'
+    act(() => {
+      seedStores(tabId, 'connected')
+    })
+
+    const socket = createMockSocket()
+    render(
+      <TerminalPane
+        tabId={tabId}
+        isActive={true}
+        focused={true}
+        socket={socket as unknown as import('socket.io-client').Socket}
+      />
+    )
+
+    await waitFor(() => {
+      expect(mockTerminalInstances.length).toBeGreaterThan(0)
+    })
+
+    const term = mockTerminalInstances[mockTerminalInstances.length - 1]
+    socket.emit.mockClear()
+
+    expect(term.simulateKey({ key: 'Backspace', altKey: true })).toBe(false)
+    expect(term.lastKeyEvent?.defaultPrevented).toBe(true)
+    expect(term.simulateKey({ key: 'Backspace', ctrlKey: true })).toBe(false)
+    expect(term.lastKeyEvent?.defaultPrevented).toBe(true)
+    expect(term.simulateKey({ key: 'y', ctrlKey: true })).toBe(false)
+    expect(term.lastKeyEvent?.defaultPrevented).toBe(true)
+
+    expect(socket.emit).toHaveBeenNthCalledWith(
+      1,
+      'ssh:input',
+      expect.objectContaining({ data: '\x1b\x7f' })
+    )
+    expect(socket.emit).toHaveBeenNthCalledWith(
+      2,
+      'ssh:input',
+      expect.objectContaining({ data: '\x1b\x7f' })
+    )
+    expect(socket.emit).toHaveBeenNthCalledWith(
+      3,
+      'ssh:input',
+      expect.objectContaining({ data: '\x19' })
+    )
+    expect(socket.emit).toHaveBeenCalledTimes(3)
+  })
+
   it('keeps Ctrl+C as copy when terminal text is selected', async () => {
     const tabId = 'tab-5'
     act(() => {

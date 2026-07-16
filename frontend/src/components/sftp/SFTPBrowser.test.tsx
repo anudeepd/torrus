@@ -94,8 +94,44 @@ describe('SFTPBrowser', () => {
 
     expect(screen.queryByRole('button', { name: '~' })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: '/' })).toHaveClass('text-slate-600')
+    expect(screen.getByText('/', { selector: 'span' })).toHaveClass('font-mono')
     expect(screen.getByRole('button', { name: 'tmp' })).toHaveAttribute('title', '/tmp')
     expect(screen.getByRole('button', { name: 'anudeep' })).toHaveAttribute('title', '/tmp/anudeep')
+  })
+
+  it('shows non-blocking feedback when a drop event is delayed', () => {
+    vi.useFakeTimers()
+    const socket = createMockSocket()
+    render(<SFTPBrowser tabId={tabId} sourceTabId="terminal-tab" socket={socket as unknown as Socket} />)
+
+    const browser = screen.getByRole('listbox', { name: 'File browser' })
+    fireEvent.dragOver(browser)
+    expect(screen.getByText('Drop files to upload')).toBeInTheDocument()
+
+    act(() => vi.advanceTimersByTime(1_000))
+    expect(screen.getByText('Drop files to upload')).toBeInTheDocument()
+
+    fireEvent.dragOver(browser)
+    act(() => vi.advanceTimersByTime(1_000))
+    expect(screen.getByText('Drop files to upload')).toBeInTheDocument()
+
+    act(() => vi.advanceTimersByTime(500))
+    expect(screen.queryByText('Drop files to upload')).not.toBeInTheDocument()
+    expect(screen.getByRole('status')).toHaveTextContent('Preparing upload…')
+
+    act(() => vi.advanceTimersByTime(14_999))
+    expect(screen.getByRole('status')).toHaveTextContent('Preparing upload…')
+
+    act(() => vi.advanceTimersByTime(1))
+    expect(screen.getByRole('status')).toHaveTextContent("Upload hasn't started yet.")
+
+    const inputClick = vi.spyOn(HTMLInputElement.prototype, 'click')
+    fireEvent.click(screen.getByRole('button', { name: 'Choose files' }))
+    expect(inputClick).toHaveBeenCalledOnce()
+    inputClick.mockRestore()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss upload status' }))
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
   })
 
   it('dismisses the new-folder modal with Escape', () => {

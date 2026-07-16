@@ -47,6 +47,10 @@ export class MockTerminal {
     }
   }
 
+  input(data: string) {
+    this.simulateData(data)
+  }
+
   simulateKey(eventInit: KeyboardEventInit) {
     const event = new KeyboardEvent('keydown', { cancelable: true, ...eventInit })
     this.lastKeyEvent = event
