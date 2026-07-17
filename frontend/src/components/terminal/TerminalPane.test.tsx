@@ -1,10 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { act, render, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { useTerminalStore } from '@/store/terminalStore'
 import { useSettingsStore } from '@/store/settingsStore'
 import { useBroadcastStore } from '@/store/broadcastStore'
 import { createMockSocket } from '@/test/mocks/socket'
-import { mockTerminalInstances, clearMockTerminalInstances } from '@/test/mocks/xterm'
+import { mockSearchAddonInstances, mockTerminalInstances, clearMockTerminalInstances } from '@/test/mocks/xterm'
 import { mockResizeObserverInstances } from '@/test/setup'
 import TerminalPane from './TerminalPane'
 
@@ -241,6 +241,64 @@ describe('TerminalPane', () => {
     })
 
     expect(mockTerminalInstances[0]).toBe(firstTerm)
+  })
+
+  it('opens the terminal-history find bar with Ctrl+F', async () => {
+    const tabId = 'tab-find'
+    act(() => {
+      seedStores(tabId, 'connected')
+    })
+
+    const socket = createMockSocket()
+    render(
+      <TerminalPane
+        tabId={tabId}
+        isActive={true}
+        focused={true}
+        socket={socket as unknown as import('socket.io-client').Socket}
+      />
+    )
+
+    await waitFor(() => {
+      expect(mockTerminalInstances.length).toBeGreaterThan(0)
+    })
+
+    const term = mockTerminalInstances[mockTerminalInstances.length - 1]
+    act(() => {
+      expect(term.simulateKey({ key: 'f', ctrlKey: true })).toBe(false)
+    })
+    expect(term.lastKeyEvent?.defaultPrevented).toBe(true)
+
+    const input = await screen.findByRole('textbox', { name: 'Find in terminal' })
+    fireEvent.change(input, { target: { value: 'deploy complete' } })
+    expect(input).toHaveValue('deploy complete')
+    expect(mockSearchAddonInstances[mockSearchAddonInstances.length - 1]?.findNext).toHaveBeenCalledWith('deploy complete', { incremental: true })
+    expect(screen.getByRole('button', { name: 'Next match' })).toBeInTheDocument()
+  })
+
+  it('opens terminal find when Ctrl+F is captured before xterm receives focus', async () => {
+    const tabId = 'tab-global-find'
+    act(() => {
+      seedStores(tabId, 'connected')
+    })
+
+    const socket = createMockSocket()
+    render(
+      <TerminalPane
+        tabId={tabId}
+        isActive={true}
+        focused={true}
+        socket={socket as unknown as import('socket.io-client').Socket}
+      />
+    )
+
+    await waitFor(() => {
+      expect(mockTerminalInstances.length).toBeGreaterThan(0)
+    })
+
+    const handled = fireEvent.keyDown(window, { key: 'f', ctrlKey: true })
+    expect(handled).toBe(false)
+    expect(await screen.findByRole('textbox', { name: 'Find in terminal' })).toBeInTheDocument()
   })
 
   it('sends plain Ctrl+C without a selection as a terminal interrupt', async () => {
@@ -512,6 +570,117 @@ describe('TerminalPane', () => {
     })
 
     expect(term.write).toHaveBeenCalledWith('\x1b[H\x1b[2Jprompt$ ')
+  })
+
+  it('moves visible rows into scrollback before readline erases the viewport on Ctrl+L', async () => {
+    const tabId = 'tab-readline-clear'
+    act(() => {
+      seedStores(tabId, 'connected')
+    })
+
+    const socket = createMockSocket()
+    render(
+      <TerminalPane
+        tabId={tabId}
+        isActive={true}
+        focused={true}
+        socket={socket as unknown as import('socket.io-client').Socket}
+      />
+    )
+
+    await waitFor(() => {
+      expect(mockTerminalInstances.length).toBeGreaterThan(0)
+    })
+
+    const term = mockTerminalInstances[mockTerminalInstances.length - 1]
+    term.buffer.active.cursorY = 5
+
+    act(() => {
+      term.simulateKey({ key: 'l', ctrlKey: true })
+      socket._trigger('ssh:output', {
+        tab_id: tabId,
+        data: '\x1b[2;1H\x1b[J\x1b[H\x1b[Kprompt$ ',
+      })
+    })
+
+    expect(term.scrollToBottom).toHaveBeenCalledOnce()
+    expect(term.write).toHaveBeenCalledWith(
+      `\x1b[s\x1b[24;1H${'\x1bD'.repeat(6)}\x1b[u`,
+      expect.any(Function),
+    )
+    expect(socket.emit).toHaveBeenCalledWith('ssh:input', {
+      session_id: 'test-session',
+      tab_id: tabId,
+      data: '\x0c',
+    })
+    expect(term.write).toHaveBeenCalledWith('\x1b[2;1H\x1b[J\x1b[H\x1b[Kprompt$ ')
+  })
+
+  it('preserves scrollback when Ctrl+L clear output arrives after a delay', async () => {
+    const tabId = 'tab-delayed-clear'
+    act(() => {
+      seedStores(tabId, 'connected')
+    })
+
+    const socket = createMockSocket()
+    render(
+      <TerminalPane
+        tabId={tabId}
+        isActive={true}
+        focused={true}
+        socket={socket as unknown as import('socket.io-client').Socket}
+      />
+    )
+
+    await waitFor(() => {
+      expect(mockTerminalInstances.length).toBeGreaterThan(0)
+    })
+
+    const term = mockTerminalInstances[mockTerminalInstances.length - 1]
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000)
+    try {
+      act(() => {
+        term.simulateKey({ key: 'l', ctrlKey: true })
+        now.mockReturnValue(2_001)
+        socket._trigger('ssh:output', { tab_id: tabId, data: '\x1b[H\x1b[2J\x1b[3Jprompt$ ' })
+      })
+
+      expect(term.write).toHaveBeenCalledWith('\x1b[H\x1b[2Jprompt$ ')
+    } finally {
+      now.mockRestore()
+    }
+  })
+
+  it('preserves scrollback when the Ctrl+L clear sequence is split across output chunks', async () => {
+    const tabId = 'tab-split-clear'
+    act(() => {
+      seedStores(tabId, 'connected')
+    })
+
+    const socket = createMockSocket()
+    render(
+      <TerminalPane
+        tabId={tabId}
+        isActive={true}
+        focused={true}
+        socket={socket as unknown as import('socket.io-client').Socket}
+      />
+    )
+
+    await waitFor(() => {
+      expect(mockTerminalInstances.length).toBeGreaterThan(0)
+    })
+
+    const term = mockTerminalInstances[mockTerminalInstances.length - 1]
+    act(() => {
+      term.simulateKey({ key: 'l', ctrlKey: true })
+      socket._trigger('ssh:output', { tab_id: tabId, data: '\x1b[H\x1b[2J\x1b[' })
+      socket._trigger('ssh:output', { tab_id: tabId, data: '3Jprompt$ ' })
+    })
+
+    expect(term.write).toHaveBeenCalledWith('\x1b[H\x1b[2J')
+    expect(term.write).toHaveBeenCalledWith('prompt$ ')
+    expect(term.write).not.toHaveBeenCalledWith(expect.stringContaining('\x1b[3J'))
   })
 
   it('allows clear-scrollback output when it was not triggered by Ctrl+L', async () => {

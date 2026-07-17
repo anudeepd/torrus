@@ -9,7 +9,7 @@ interface SettingsState extends TerminalSettings {
 
 const DEFAULTS: TerminalSettings = {
   scrollbackLines: 10_000,
-  fontSize: 14,
+  fontSize: 16,
 }
 
 export const useSettingsStore = create<SettingsState>()(

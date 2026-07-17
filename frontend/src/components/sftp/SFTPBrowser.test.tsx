@@ -342,6 +342,26 @@ describe('SFTPBrowser', () => {
     expect(row).toHaveAttribute('aria-selected', 'false')
   })
 
+  it('uses the standard modal title typography for delete confirmation', () => {
+    const socket = createMockSocket()
+    render(<SFTPBrowser tabId={tabId} sourceTabId="terminal-tab" socket={socket as unknown as Socket} />)
+
+    act(() => {
+      socket._trigger('sftp:open:result', {
+        tab_id: tabId,
+        ok: true,
+        path: '/var/log',
+        entries: [{ name: 'app.log', path: '/var/log/app.log', type: 'file', size: 2, mtime: 1 }],
+      })
+    })
+
+    fireEvent.click(screen.getByRole('option', { name: /app\.log/i }))
+    fireEvent.click(screen.getByTitle('Delete selection (Delete)'))
+
+    const title = screen.getByRole('heading', { name: 'Delete item?' })
+    expect(title).toHaveClass('text-sm', 'font-semibold')
+  })
+
   it('clears selected files from the footer button', () => {
     const socket = createMockSocket()
     render(<SFTPBrowser tabId={tabId} sourceTabId="terminal-tab" socket={socket as unknown as Socket} />)

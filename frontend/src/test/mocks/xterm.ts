@@ -1,6 +1,7 @@
 import { vi } from 'vitest'
 
 export const mockTerminalInstances: MockTerminal[] = []
+export const mockSearchAddonInstances: MockSearchAddon[] = []
 
 export class MockTerminal {
   cols = 80
@@ -10,7 +11,7 @@ export class MockTerminal {
   options: Record<string, unknown> = {}
   lastKeyEvent: KeyboardEvent | null = null
   selection = false
-  buffer = { active: { viewportY: 0, baseY: 0 } }
+  buffer = { active: { viewportY: 0, baseY: 0, cursorY: 0 } }
   scrollToBottom = vi.fn()
   private _dataHandler: ((data: string) => void) | null = null
   private _keyHandler: ((event: KeyboardEvent) => boolean) | null = null
@@ -29,7 +30,7 @@ export class MockTerminal {
   fit() {}
   focus() {}
   dispose() {}
-  write = vi.fn()
+  write = vi.fn((_data: string | Uint8Array, callback?: () => void) => callback?.())
   hasSelection() { return this.selection }
   attachCustomKeyEventHandler(handler: (event: KeyboardEvent) => boolean) {
     this._keyHandler = handler
@@ -60,6 +61,7 @@ export class MockTerminal {
 
 export function clearMockTerminalInstances() {
   mockTerminalInstances.length = 0
+  mockSearchAddonInstances.length = 0
 }
 
 export class MockFitAddon {
@@ -67,6 +69,16 @@ export class MockFitAddon {
 }
 
 export class MockWebLinksAddon {}
+
+export class MockSearchAddon {
+  findNext = vi.fn(() => true)
+  findPrevious = vi.fn(() => true)
+  clearDecorations = vi.fn()
+
+  constructor() {
+    mockSearchAddonInstances.push(this)
+  }
+}
 
 vi.mock('@xterm/xterm', () => ({
   Terminal: MockTerminal,
@@ -78,4 +90,8 @@ vi.mock('@xterm/addon-fit', () => ({
 
 vi.mock('@xterm/addon-web-links', () => ({
   WebLinksAddon: MockWebLinksAddon,
+}))
+
+vi.mock('@xterm/addon-search', () => ({
+  SearchAddon: MockSearchAddon,
 }))

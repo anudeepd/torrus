@@ -21,7 +21,9 @@ async function renderAppLayout({ strict = false }: { strict?: boolean } = {}) {
     redirectToLdapLoginNow: vi.fn(),
   }))
   vi.doMock('./TabBar', () => ({
-    default: () => <div data-testid="tabbar" />,
+    default: ({ onCloseAllTabs }: { onCloseAllTabs: () => void }) => (
+      <button type="button" data-testid="tabbar" onClick={onCloseAllTabs}>Close All</button>
+    ),
   }))
   vi.doMock('./SessionSidebar', () => ({
     default: () => <aside data-testid="sidebar" />,
@@ -158,5 +160,53 @@ describe('AppLayout LDAP auth handling', () => {
       tab_id: 'sftp-tab',
     })
     expect(socket.emit).not.toHaveBeenCalledWith('ssh:disconnect', expect.anything())
+  })
+
+  it('uses the internal warning before closing all active tabs', async () => {
+    useTerminalStore.setState({
+      sessionId: 'test-session',
+      tabs: [
+        {
+          id: 'terminal-tab',
+          type: 'terminal',
+          host: 'localhost',
+          port: 22,
+          username: 'alice',
+          label: null,
+          status: 'connected',
+          sessionKey: 'test-session:terminal-tab',
+        },
+        {
+          id: 'sftp-tab',
+          type: 'sftp',
+          host: 'localhost',
+          port: 22,
+          username: 'alice',
+          label: 'SFTP alice@localhost',
+          status: 'connected',
+          sessionKey: 'test-session:sftp-tab',
+          sourceTabId: 'terminal-tab',
+        },
+      ],
+      activeTabId: 'terminal-tab',
+    })
+    const { socket } = await renderAppLayout()
+
+    fireEvent.click(screen.getByTestId('tabbar'))
+
+    expect(screen.getByRole('dialog', { name: 'Close all tabs' })).toBeInTheDocument()
+    expect(screen.getByText('Closing all tabs will disconnect SSH sessions and close SFTP browsers.')).toBeInTheDocument()
+    expect(useTerminalStore.getState().tabs).toHaveLength(2)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close all tabs' }))
+
+    expect(socket.emit).toHaveBeenCalledWith('ssh:disconnect', {
+      session_id: 'test-session',
+      tab_id: 'terminal-tab',
+    })
+    expect(socket.emit).toHaveBeenCalledWith('sftp:close', {
+      session_id: 'test-session',
+      tab_id: 'sftp-tab',
+    })
   })
 })

@@ -1239,7 +1239,7 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-sm" onMouseDown={event => { if (event.target === event.currentTarget) setDeletePaths(null) }}>
           <div ref={deleteDialogRef} role="dialog" aria-modal="true" aria-labelledby="delete-title" tabIndex={-1} className="flex w-full max-w-xs flex-col gap-4 rounded-xl border border-surface-700 bg-surface-900/95 p-5 shadow-2xl">
             <div>
-              <h2 id="delete-title" className="text-xs font-medium text-slate-200">Delete {deletePaths.length === 1 ? 'item' : `${deletePaths.length} items`}?</h2>
+              <h2 id="delete-title" className="text-sm font-semibold text-slate-200">Delete {deletePaths.length === 1 ? 'item' : `${deletePaths.length} items`}?</h2>
               <p className="mt-2 text-xs leading-relaxed text-slate-400">
                 {deletePaths.length === 1
                   ? `Permanently remove "${deletePaths[0].split('/').pop()}" from the remote server.`

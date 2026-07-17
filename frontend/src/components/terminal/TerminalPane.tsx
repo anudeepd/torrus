@@ -2,6 +2,8 @@ import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
+import { SearchAddon } from '@xterm/addon-search'
+import { ChevronDown, ChevronUp, X } from 'lucide-react'
 import '@xterm/xterm/css/xterm.css'
 import type { Socket } from 'socket.io-client'
 import type { ConnectFormValues } from '@/types'
@@ -39,6 +41,31 @@ function stripScrollbackClearSequences(data: string): string {
   return data.replace(SCROLLBACK_CLEAR_SEQUENCE, '')
 }
 
+function trailingScrollbackClearPrefix(data: string): string {
+  for (const prefix of [`${ANSI_ESCAPE}[?3`, `${ANSI_ESCAPE}[3`, `${ANSI_ESCAPE}[?`, `${ANSI_ESCAPE}[`, ANSI_ESCAPE]) {
+    if (data.endsWith(prefix)) return prefix
+  }
+  return ''
+}
+
+function preserveVisibleRows(term: Terminal, onPreserved: () => void): void {
+  const visibleLines = Math.min(term.rows, term.buffer.active.cursorY + 1)
+  if (visibleLines <= 0) {
+    onPreserved()
+    return
+  }
+
+  // Readline clears the viewport in place with CSI J, so those rows never
+  // enter xterm's scrollback naturally. Scroll only the used rows off-screen
+  // before forwarding Ctrl+L. Save/restore the cursor and wait for xterm to
+  // finish parsing this sequence so the shell and renderer cannot race.
+  term.scrollToBottom()
+  term.write(
+    `${ANSI_ESCAPE}[s${ANSI_ESCAPE}[${term.rows};1H${`${ANSI_ESCAPE}D`.repeat(visibleLines)}${ANSI_ESCAPE}[u`,
+    onPreserved,
+  )
+}
+
 function isTerminalReplyOnly(data: string): boolean {
   if (!data.includes(ANSI_ESCAPE)) return false
   return data.replace(TERMINAL_REPLY_SEQUENCE, '') === ''
@@ -51,6 +78,7 @@ function isVisibleTerminalContainer(el: HTMLElement | null): el is HTMLElement {
 interface CachedTerminal {
   term: Terminal
   fitAddon: FitAddon
+  searchAddon: SearchAddon
   container: HTMLDivElement
 }
 
@@ -76,13 +104,21 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
   const broadcastExcluded = useBroadcastStore(s => s.excludedTabIds)
 
   const containerRef = useRef<HTMLDivElement>(null)
+  const findInputRef = useRef<HTMLInputElement>(null)
   const termRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
   const errorRef = useRef<string>('')
   const lastResizeRef = useRef<{ cols: number; rows: number } | null>(null)
   const resizeFrameRef = useRef<number | null>(null)
-  const protectScrollbackUntilRef = useRef(0)
+  // Ctrl+L clears the visible screen, not the user's history. Some shells
+  // emit CSI 3 J asynchronously, so suppress exactly the next such sequence
+  // rather than relying on an arbitrary timing window.
+  const suppressNextScrollbackClearRef = useRef(false)
+  const pendingScrollbackClearPrefixRef = useRef('')
   const [connectionError, setConnectionError] = useState('')
+  const [findOpen, setFindOpen] = useState(false)
+  const [findQuery, setFindQuery] = useState('')
+  const [findResult, setFindResult] = useState<boolean | null>(null)
   // Suppress xterm onData during session restore to prevent terminal query
   // responses (OSC 11, DSR, DA) from being echoed back to the remote shell
   const suppressInputRef = useRef(true)
@@ -120,6 +156,14 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
   const emitInput = useCallback((data: string) => {
     if (suppressInputRef.current) return
     if (isTerminalReplyOnly(data)) return
+
+    if (suppressNextScrollbackClearRef.current && data !== '\x0c') {
+      if (pendingScrollbackClearPrefixRef.current) {
+        termRef.current?.write(pendingScrollbackClearPrefixRef.current)
+        pendingScrollbackClearPrefixRef.current = ''
+      }
+      suppressNextScrollbackClearRef.current = false
+    }
 
     const currentTab = useTerminalStore.getState().tabs.find(t => t.id === tabId)
     if (currentTab?.status !== 'connected') return
@@ -209,14 +253,20 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
       }
       if (mod && (key === 'w' || key === 't' || key === ',')) return false
       if (e.ctrlKey && key === 'tab') return false
-      if (mod && key === 'f') return false
+      if (mod && key === 'f') {
+        e.preventDefault()
+        setFindOpen(true)
+        return false
+      }
       if (e.ctrlKey && !e.metaKey && !e.shiftKey && key === 'c') {
         if (term.hasSelection()) return false
         emitInput('\x03')
         return false
       }
       if (e.ctrlKey && !e.metaKey && !e.shiftKey && key === 'l') {
-        protectScrollbackUntilRef.current = Date.now() + 1000
+        suppressNextScrollbackClearRef.current = true
+        preserveVisibleRows(term, () => emitInput('\x0c'))
+        return false
       }
       if ((e.metaKey || (e.ctrlKey && e.shiftKey)) && key === 'c' && term.hasSelection()) return false
       if (mod && key === 'v') return false
@@ -332,6 +382,7 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
         })
 
         const fitAddon = new FitAddon()
+        const searchAddon = new SearchAddon()
         const webLinksAddon = new WebLinksAddon((event: MouseEvent, uri: string) => {
           if (uri.startsWith('javascript:') || uri.startsWith('data:') || uri.startsWith('vbscript:')) {
             event.preventDefault()
@@ -340,6 +391,7 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
           window.open(uri, '_blank', 'noopener,noreferrer')
         })
         term.loadAddon(fitAddon)
+        term.loadAddon(searchAddon)
         term.loadAddon(webLinksAddon)
 
         installCustomKeyHandler(term)
@@ -353,7 +405,7 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
 
         termRef.current = term
         fitRef.current = fitAddon
-        terminalCache.set(tabId, { term, fitAddon, container: termContainer })
+        terminalCache.set(tabId, { term, fitAddon, searchAddon, container: termContainer })
 
         const currentTab = useTerminalStore.getState().tabs.find(t => t.id === tabId)
         if (currentTab?.status === 'connected') {
@@ -437,6 +489,52 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
     }
   }, [tabId, emitInput, emitResize, fitAndEmitResize, scheduleFitAndEmitResize, installCustomKeyHandler, handleFocus, handleBlur])
 
+  const getSearchAddon = useCallback(() => terminalCache.get(tabId)?.searchAddon, [tabId])
+
+  const search = useCallback((direction: 'next' | 'previous', query = findQuery) => {
+    if (!query) {
+      setFindResult(null)
+      return
+    }
+    const searchAddon = getSearchAddon()
+    const found = direction === 'next'
+      ? searchAddon?.findNext(query, { incremental: true })
+      : searchAddon?.findPrevious(query)
+    setFindResult(found ?? false)
+  }, [findQuery, getSearchAddon])
+
+  useEffect(() => {
+    if (!findOpen) return
+    const frame = requestAnimationFrame(() => {
+      findInputRef.current?.focus()
+      findInputRef.current?.select()
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [findOpen])
+
+  const closeFind = useCallback(() => {
+    getSearchAddon()?.clearDecorations()
+    setFindOpen(false)
+    setFindQuery('')
+    setFindResult(null)
+    termRef.current?.focus()
+  }, [getSearchAddon])
+
+  // Browser Find can win before xterm receives a key event, especially after
+  // the terminal loses its hidden textarea focus. Capture it at the window so
+  // the focused pane always searches the complete xterm scrollback buffer.
+  useEffect(() => {
+    if (!isActive || focused === false || tab?.status !== 'connected') return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === 'f') {
+        event.preventDefault()
+        setFindOpen(true)
+      }
+    }
+    window.addEventListener('keydown', onKeyDown, true)
+    return () => window.removeEventListener('keydown', onKeyDown, true)
+  }, [isActive, focused, tab?.status])
+
   // Apply settings changes to live terminal
   useEffect(() => {
     const term = termRef.current
@@ -462,20 +560,33 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
   useEffect(() => {
     const onOutput = ({ tab_id, data }: { tab_id: string; data: unknown }) => {
       if (tab_id !== tabId || !termRef.current) return
+      const stripCtrlLClear = (output: string): string | undefined => {
+        if (!suppressNextScrollbackClearRef.current) return undefined
+        const pendingPrefix = pendingScrollbackClearPrefixRef.current
+        const combined = pendingPrefix + output
+        pendingScrollbackClearPrefixRef.current = ''
+        const preserved = stripScrollbackClearSequences(combined)
+        if (preserved !== combined) {
+          suppressNextScrollbackClearRef.current = false
+          return preserved
+        }
+        const trailingPrefix = trailingScrollbackClearPrefix(combined)
+        if (trailingPrefix) {
+          pendingScrollbackClearPrefixRef.current = trailingPrefix
+          return combined.slice(0, -trailingPrefix.length)
+        }
+        // A partial escape sequence from the preceding socket frame did not
+        // become a scrollback-clear command. Write the complete sequence.
+        return pendingPrefix ? combined : undefined
+      }
       if (ArrayBuffer.isView(data)) {
         const bytes = new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
-        termRef.current.write(protectScrollbackUntilRef.current > Date.now()
-          ? stripScrollbackClearSequences(new TextDecoder().decode(bytes))
-          : bytes
-        )
+        termRef.current.write(stripCtrlLClear(new TextDecoder().decode(bytes)) ?? bytes)
       } else if (data instanceof ArrayBuffer) {
         const bytes = new Uint8Array(data)
-        termRef.current.write(protectScrollbackUntilRef.current > Date.now()
-          ? stripScrollbackClearSequences(new TextDecoder().decode(bytes))
-          : bytes
-        )
+        termRef.current.write(stripCtrlLClear(new TextDecoder().decode(bytes)) ?? bytes)
       } else if (typeof data === 'string') {
-        termRef.current.write(protectScrollbackUntilRef.current > Date.now() ? stripScrollbackClearSequences(data) : data)
+        termRef.current.write(stripCtrlLClear(data) ?? data)
       } else {
         console.warn('Received unexpected data type from ssh:output:', typeof data)
       }
@@ -592,6 +703,40 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
         className="absolute inset-0"
         style={{ display: showForm ? 'none' : 'block' }}
       />
+
+      {findOpen && (
+        <div className="absolute right-3 top-3 z-20 flex items-center gap-1 rounded-lg border border-surface-700 bg-surface-900/95 p-1.5 shadow-xl backdrop-blur" role="search" aria-label="Find in terminal">
+          <input
+            ref={findInputRef}
+            value={findQuery}
+            onChange={event => {
+              const query = event.target.value
+              setFindQuery(query)
+              search('next', query)
+            }}
+            onKeyDown={event => {
+              if (event.key === 'Escape') closeFind()
+              if (event.key === 'Enter') {
+                event.preventDefault()
+                search(event.shiftKey ? 'previous' : 'next')
+              }
+            }}
+            placeholder="Find in terminal"
+            aria-label="Find in terminal"
+            className="h-7 w-44 rounded bg-surface-950 px-2 text-xs text-slate-200 outline-none placeholder:text-slate-500 focus:ring-1 focus:ring-brand-500"
+          />
+          {findQuery && findResult === false && <span className="px-1 text-[10px] text-amber-400">No match</span>}
+          <button type="button" onClick={() => search('previous')} title="Previous match" aria-label="Previous match" className="rounded p-1 text-slate-400 hover:bg-surface-800 hover:text-slate-200">
+            <ChevronUp className="h-3.5 w-3.5" />
+          </button>
+          <button type="button" onClick={() => search('next')} title="Next match" aria-label="Next match" className="rounded p-1 text-slate-400 hover:bg-surface-800 hover:text-slate-200">
+            <ChevronDown className="h-3.5 w-3.5" />
+          </button>
+          <button type="button" onClick={closeFind} title="Close find" aria-label="Close find" className="rounded p-1 text-slate-400 hover:bg-surface-800 hover:text-slate-200">
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      )}
 
       {/* Connection form overlay */}
       {showForm && (

@@ -323,8 +323,11 @@ export default function SessionSidebar({ isOpen, onToggle, onLoadSession }: Sess
   // ── Full sidebar ─────────────────────────────────────────────────────────────
   return (
     <>
-      <div style={{ width: sidebarWidth }} className="flex-shrink-0 flex min-h-0">
-        <div className="flex-1 min-w-0 flex flex-col bg-surface-900 border-r border-surface-800 select-none">
+      <div
+        style={{ width: sidebarWidth }}
+        className="relative flex min-h-0 flex-shrink-0 border-r border-surface-800"
+      >
+        <div className="flex-1 min-w-0 flex flex-col bg-surface-900 select-none">
           {/* Header */}
           <div className="px-3 py-2 border-b border-surface-800 flex items-center gap-2">
             <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider flex-1">Sessions</span>
@@ -470,9 +473,12 @@ export default function SessionSidebar({ isOpen, onToggle, onLoadSession }: Sess
         <div
           onMouseDown={handleResizeMouseDown}
           title="Resize sessions sidebar"
-          className="group w-2 flex-shrink-0 cursor-col-resize bg-surface-900 hover:bg-surface-800 transition-colors flex items-stretch justify-center"
+          role="separator"
+          aria-label="Resize sessions sidebar"
+          aria-orientation="vertical"
+          className="group absolute inset-y-0 right-0 z-10 w-2 translate-x-1/2 cursor-col-resize"
         >
-          <div className="w-px bg-surface-700 group-hover:bg-brand-500 transition-colors" />
+          <div className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-transparent transition-colors group-hover:bg-brand-500" />
         </div>
       </div>
 

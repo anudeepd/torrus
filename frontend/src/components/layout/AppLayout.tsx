@@ -22,6 +22,8 @@ import type { SavedServer, Tab } from '@/types'
 type PendingClose = {
   kind: 'tab' | 'pane'
   tabId: string
+} | {
+  kind: 'all'
 } | null
 
 type AuthErrorPayload = {
@@ -224,6 +226,19 @@ export default function AppLayout() {
     closeTab(id)
   }, [closeRemoteTab, closeTab, closePane, exitSplitMode, setActiveTab])
 
+  const closeAllTabsNow = useCallback(() => {
+    const currentTabs = useTerminalStore.getState().tabs
+    for (const tab of currentTabs.filter(t => t.type === 'terminal')) {
+      socket.emit('ssh:disconnect', { session_id: sessionId, tab_id: tab.id })
+    }
+    for (const tab of currentTabs.filter(t => t.type === 'sftp')) {
+      socket.emit('sftp:close', { session_id: sessionId, tab_id: tab.id })
+    }
+    exitSplitMode()
+    disableBroadcast()
+    closeAllTabs()
+  }, [socket, sessionId, closeAllTabs, exitSplitMode, disableBroadcast])
+
   const handleClosePane = useCallback((tabId: string) => {
     if (shouldWarnBeforeClosingTab(tabId)) {
       setPendingClose({ kind: 'pane', tabId })
@@ -280,13 +295,12 @@ export default function AppLayout() {
     const terminalTabs = currentTabs.filter(t => t.type === 'terminal')
     const sftpTabs = currentTabs.filter(t => t.type === 'sftp')
     const hasActive = terminalTabs.some(t => t.status === 'connected') || sftpTabs.length > 0
-    if (hasActive && !confirm('Close all tabs? SSH sessions and SFTP browsers will be closed.')) return
-    for (const tab of terminalTabs) socket.emit('ssh:disconnect', { session_id: sessionId, tab_id: tab.id })
-    for (const tab of sftpTabs) socket.emit('sftp:close', { session_id: sessionId, tab_id: tab.id })
-    exitSplitMode()
-    disableBroadcast()
-    closeAllTabs()
-  }, [socket, sessionId, closeAllTabs, exitSplitMode, disableBroadcast])
+    if (hasActive) {
+      setPendingClose({ kind: 'all' })
+      return
+    }
+    closeAllTabsNow()
+  }, [closeAllTabsNow])
 
   const handleDuplicateTab = useCallback((sourceTabId: string) => {
     const sourceTab = useTerminalStore.getState().tabs.find(t => t.id === sourceTabId)
@@ -403,20 +417,24 @@ export default function AppLayout() {
     [layoutRoot, activeTabId]
   )
   const pendingCloseTab = useMemo(
-    () => pendingClose ? tabs.find(t => t.id === pendingClose.tabId) : undefined,
+    () => pendingClose && pendingClose.kind !== 'all' ? tabs.find(t => t.id === pendingClose.tabId) : undefined,
     [pendingClose, tabs]
   )
 
   const handleConfirmPendingClose = useCallback(() => {
     if (!pendingClose) return
-    const { kind, tabId } = pendingClose
     setPendingClose(null)
+    if (pendingClose.kind === 'all') {
+      closeAllTabsNow()
+      return
+    }
+    const { kind, tabId } = pendingClose
     if (kind === 'pane') {
       closePaneNow(tabId)
     } else {
       closeTabNow(tabId)
     }
-  }, [pendingClose, closePaneNow, closeTabNow])
+  }, [pendingClose, closePaneNow, closeTabNow, closeAllTabsNow])
 
   return (
     <div className="flex h-full bg-surface-950">
@@ -502,11 +520,13 @@ export default function AppLayout() {
           className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center"
           onMouseDown={e => { if (e.target === e.currentTarget) dismissPendingClose() }}
         >
-          <div ref={pendingCloseDialogRef} role="dialog" aria-modal="true" aria-label="Close tab" tabIndex={-1} className="w-80 bg-surface-900 border border-surface-700 rounded-xl shadow-2xl p-5 flex flex-col gap-4">
+          <div ref={pendingCloseDialogRef} role="dialog" aria-modal="true" aria-label={pendingClose.kind === 'all' ? 'Close all tabs' : 'Close tab'} tabIndex={-1} className="w-80 bg-surface-900 border border-surface-700 rounded-xl shadow-2xl p-5 flex flex-col gap-4">
             <div>
-              <h2 className="text-sm font-semibold text-slate-200">{getCloseTitle(pendingCloseTab)}</h2>
+              <h2 className="text-sm font-semibold text-slate-200">{pendingClose.kind === 'all' ? 'Close all tabs?' : getCloseTitle(pendingCloseTab)}</h2>
               <p className="mt-2 text-xs text-slate-400 leading-relaxed">
-                {getCloseMessage(pendingCloseTab)}
+                {pendingClose.kind === 'all'
+                  ? 'Closing all tabs will disconnect SSH sessions and close SFTP browsers.'
+                  : getCloseMessage(pendingCloseTab)}
               </p>
             </div>
             <div className="flex gap-2">
@@ -523,7 +543,7 @@ export default function AppLayout() {
                 onClick={handleConfirmPendingClose}
                 className="flex-1 px-3 py-2 rounded-md text-sm font-medium text-white bg-red-600 hover:bg-red-500 transition-colors"
               >
-                Close tab
+                {pendingClose.kind === 'all' ? 'Close all tabs' : 'Close tab'}
               </button>
             </div>
           </div>

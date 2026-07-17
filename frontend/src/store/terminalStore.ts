@@ -88,10 +88,14 @@ export const useTerminalStore = create<TerminalState>()(
 
       closeTab: (id) => {
         set(s => {
+          const closingTab = s.tabs.find(t => t.id === id)
           const tabs = s.tabs.filter(t => t.id !== id)
           let activeTabId = s.activeTabId
           if (activeTabId === id) {
-            activeTabId = tabs.length > 0 ? tabs[tabs.length - 1].id : null
+            const sourceTabStillOpen = closingTab?.type === 'sftp'
+              ? tabs.find(t => t.id === closingTab.sourceTabId)
+              : undefined
+            activeTabId = sourceTabStillOpen?.id ?? (tabs.length > 0 ? tabs[tabs.length - 1].id : null)
           }
           return { tabs, activeTabId }
         })

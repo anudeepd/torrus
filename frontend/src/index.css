@@ -36,6 +36,7 @@
     height: 100%;
     overflow: hidden;
     overscroll-behavior: none;
+    color-scheme: dark;
     margin: 0;
     padding: 0;
   }
@@ -67,19 +68,24 @@
 }
 .xterm-viewport {
   background-color: #020617;
-  overflow-y: scroll !important;
-  scrollbar-color: #334155 #020617;
+  overflow-y: auto !important;
+  scrollbar-width: thin;
+  scrollbar-color: #64748b #0f172a;
+}
+
+.xterm-viewport::-webkit-scrollbar {
+  width: 8px;
 }
 
 .xterm-viewport::-webkit-scrollbar-track {
-  background: #020617;
+  background: #0f172a;
 }
 .xterm-viewport::-webkit-scrollbar-thumb {
-  background: #334155;
-  border-radius: 3px;
+  background: #64748b;
+  border-radius: 4px;
 }
 .xterm-viewport::-webkit-scrollbar-thumb:hover {
-  background: #475569;
+  background: #94a3b8;
 }
 
 .xterm-selection {
