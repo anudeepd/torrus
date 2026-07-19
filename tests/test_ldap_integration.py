@@ -53,8 +53,19 @@ def test_login_template_uses_nonce_for_inline_assets():
     assert '<style nonce="{{ csrf_nonce }}">' in template
     assert '<script nonce="{{ csrf_nonce }}">' in template
     assert '<input type="hidden" name="csrf_token" value="{{ csrf_token }}">' in template
-    assert 'id="password-toggle" aria-label="Show password"' in template
-    assert "password.type = visible ? 'password' : 'text';" in template
+    assert "torrus-card-in" in template
+    assert "torrus-error-up" in template
+    assert "torrus:login:username" in template
+    assert "Signing in" in template
+    assert "Secured by" in template
+    assert "security-lock" in template
+    assert "max-width: 380px;" in template
+    assert "min-height: 40px;" in template
+    assert "line-height: 1.25rem;" in template
+    assert ".submit-label { min-width: 4.75rem; }" in template
+    assert "appearance: none;" in template
+    assert "-webkit-appearance: none;" in template
+    assert 'id="password-toggle"' not in template
     assert 'style="' not in template
     assert "meta http-equiv=\"Content-Security-Policy\"" not in template
 
