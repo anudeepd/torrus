@@ -2,6 +2,38 @@
 @tailwind components;
 @tailwind utilities;
 
+.torrus-connect-container {
+  container-type: inline-size;
+}
+
+@container (min-width: 280px) {
+  .torrus-connect-card {
+    padding: 1.5rem;
+  }
+
+  .torrus-connect-title {
+    font-size: 0.875rem;
+    line-height: 1.25rem;
+  }
+
+  .torrus-connect-endpoint {
+    flex-direction: row;
+  }
+
+  .torrus-connect-port {
+    width: 6rem;
+  }
+}
+
+:root {
+  --motion-duration-instant: 100ms;
+  --motion-duration-micro: 180ms;
+  --motion-duration-surface: 280ms;
+  --motion-duration-spatial: 380ms;
+  --motion-ease-move: cubic-bezier(0.16, 1, 0.3, 1);
+  --motion-ease-exit: cubic-bezier(0.4, 0, 1, 1);
+}
+
 /* JetBrains Mono — inlined as base64 data URIs to survive corporate wheel filters */
 @font-face {
   font-family: 'JetBrains Mono';
@@ -9,6 +41,25 @@
   font-weight: 400;
   font-style: normal;
   font-display: block;
+}
+
+@layer utilities {
+  .motion-press {
+    transition: transform var(--motion-duration-micro) var(--motion-ease-move),
+      color var(--motion-duration-micro) var(--motion-ease-move),
+      background-color var(--motion-duration-micro) var(--motion-ease-move);
+  }
+  .motion-press:active:not(:disabled) { transform: scale(0.96); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: var(--motion-duration-instant) !important;
+  }
+  .motion-press:active:not(:disabled) { transform: none; }
 }
 @font-face {
   font-family: 'JetBrains Mono';

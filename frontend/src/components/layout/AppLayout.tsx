@@ -14,10 +14,14 @@ import SFTPBrowser from '@/components/sftp/SFTPBrowser'
 import SettingsDialog from '@/components/settings/SettingsDialog'
 import Logo from '@/components/ui/Logo'
 import AuthRedirectOverlay from '@/components/ui/AuthRedirectOverlay'
+import CommandPalette from '@/components/ui/CommandPalette'
 import { useModalFocus } from '@/hooks/useModalFocus'
 import { AUTH_REDIRECT_EVENT, redirectToLdapLogin } from '@/utils/authRedirect'
 import type { PaneNode } from '@/store/layoutStore'
 import type { SavedServer, Tab } from '@/types'
+import { AnimatePresence } from 'motion/react'
+import * as m from 'motion/react-m'
+import { fade, surface, surfaceSpring } from '@/motion/tokens'
 
 type PendingClose = {
   kind: 'tab' | 'pane'
@@ -67,10 +71,31 @@ export default function AppLayout() {
   const setSFTPDisconnected = useSFTPStore(s => s.setDisconnected)
   const socket = getSocket()
 
-  const [sidebarOpen, setSidebarOpen] = useState(true)
+  const [isCompactViewport, setIsCompactViewport] = useState(() => window.matchMedia('(max-width: 720px)').matches)
+  const [sidebarOpen, setSidebarOpen] = useState(() => !window.matchMedia('(max-width: 720px)').matches)
+
+  useEffect(() => {
+    const compactViewport = window.matchMedia('(max-width: 720px)')
+    const handleCompactViewport = (event: MediaQueryListEvent) => {
+      setIsCompactViewport(event.matches)
+      if (event.matches) setSidebarOpen(false)
+    }
+    compactViewport.addEventListener('change', handleCompactViewport)
+    return () => compactViewport.removeEventListener('change', handleCompactViewport)
+  }, [])
+
+  useEffect(() => {
+    if (!isCompactViewport || !sidebarOpen) return
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setSidebarOpen(false)
+    }
+    window.addEventListener('keydown', closeOnEscape)
+    return () => window.removeEventListener('keydown', closeOnEscape)
+  }, [isCompactViewport, sidebarOpen])
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [splitPickerOpen, setSplitPickerOpen] = useState(false)
   const [broadcastPickerOpen, setBroadcastPickerOpen] = useState(false)
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
   // true when split was initiated by broadcast — exiting broadcast exits split too
   const [splitOwnedByBroadcast, setSplitOwnedByBroadcast] = useState(false)
   const [pendingClose, setPendingClose] = useState<PendingClose>(null)
@@ -389,6 +414,10 @@ export default function AppLayout() {
         e.preventDefault()
         setSettingsOpen(o => !o)
       }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault()
+        setCommandPaletteOpen(open => !open)
+      }
       if (e.ctrlKey && e.key === 'Tab') {
         e.preventDefault()
         const store = useTerminalStore.getState()
@@ -439,14 +468,27 @@ export default function AppLayout() {
   return (
     <div className="flex h-full bg-surface-950">
       <AuthRedirectOverlay />
-      <SessionSidebar
-        isOpen={sidebarOpen}
-        onToggle={() => setSidebarOpen(o => !o)}
-        onLoadSession={handleLoadSession}
-      />
+      <AnimatePresence initial={false}>
+        {(!isCompactViewport || sidebarOpen) && (
+          <SessionSidebar
+            key={isCompactViewport ? 'compact-sidebar' : 'desktop-sidebar'}
+            isOpen={sidebarOpen}
+            compact={isCompactViewport}
+            onToggle={() => setSidebarOpen(o => !o)}
+            onLoadSession={(server) => {
+              handleLoadSession(server)
+              if (isCompactViewport) setSidebarOpen(false)
+            }}
+          />
+        )}
+      </AnimatePresence>
 
       <div className="flex flex-col flex-1 min-w-0">
         <TabBar
+          compactSidebar={isCompactViewport}
+          sidebarOpen={sidebarOpen}
+          onToggleSidebar={() => setSidebarOpen(o => !o)}
+          onOpenCommandPalette={() => setCommandPaletteOpen(true)}
           onAddTab={handleAddTab}
           onCloseTab={handleCloseTab}
           onCloneTab={handleCloneTab}
@@ -463,10 +505,10 @@ export default function AppLayout() {
 
         <div className="flex-1 relative overflow-hidden min-h-0">
           {tabs.length === 0 ? (
-            <div className="flex h-full flex-col items-center justify-center gap-4 text-slate-500">
+            <m.div {...fade} className="flex h-full flex-col items-center justify-center gap-4 text-slate-500">
               <Logo size="lg" showText={false} className="opacity-40" />
-              <p className="text-sm">Open a terminal tab or select a saved session from the sidebar</p>
-            </div>
+              <p className="max-w-sm px-6 text-center text-sm leading-relaxed text-balance">Open a terminal tab or select a saved session from the sidebar</p>
+            </m.div>
           ) : layoutRoot && activeTabInLayout ? (
             <div className="absolute inset-0">
               <SplitPane
@@ -494,8 +536,30 @@ export default function AppLayout() {
         </div>
       </div>
 
-      {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
+      <AnimatePresence>
+      {commandPaletteOpen && (
+        <CommandPalette
+          tabs={tabs}
+          activeTabId={activeTabId}
+          canSplit={tabs.length >= 2}
+          canBroadcast={connectedTabs.length >= 2}
+          inSplitMode={!!layoutRoot}
+          onAddTab={handleAddTab}
+          onSelectTab={handleSetActiveTab}
+          onOpenSettings={() => setSettingsOpen(true)}
+          onOpenSplitPicker={() => setSplitPickerOpen(true)}
+          onOpenBroadcastPicker={() => setBroadcastPickerOpen(true)}
+          onExitSplit={() => { exitSplitMode(); setSplitOwnedByBroadcast(false) }}
+          onClose={() => setCommandPaletteOpen(false)}
+        />
+      )}
+      </AnimatePresence>
 
+      <AnimatePresence>
+      {settingsOpen && <SettingsDialog key="settings" onClose={() => setSettingsOpen(false)} />}
+      </AnimatePresence>
+
+      <AnimatePresence>
       {splitPickerOpen && (
         <LayoutPickerModal
           tabs={tabs}
@@ -503,7 +567,9 @@ export default function AppLayout() {
           onClose={() => setSplitPickerOpen(false)}
         />
       )}
+      </AnimatePresence>
 
+      <AnimatePresence>
       {broadcastPickerOpen && (
         <BroadcastPickerModal
           connectedTabs={connectedTabs}
@@ -514,13 +580,14 @@ export default function AppLayout() {
           onClose={() => setBroadcastPickerOpen(false)}
         />
       )}
+      </AnimatePresence>
 
       {pendingClose && (
-        <div
+        <m.div {...fade}
           className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center"
           onMouseDown={e => { if (e.target === e.currentTarget) dismissPendingClose() }}
         >
-          <div ref={pendingCloseDialogRef} role="dialog" aria-modal="true" aria-label={pendingClose.kind === 'all' ? 'Close all tabs' : 'Close tab'} tabIndex={-1} className="w-80 bg-surface-900 border border-surface-700 rounded-xl shadow-2xl p-5 flex flex-col gap-4">
+          <m.div {...surface} transition={surfaceSpring} ref={pendingCloseDialogRef} role="dialog" aria-modal="true" aria-label={pendingClose.kind === 'all' ? 'Close all tabs' : 'Close tab'} tabIndex={-1} className="w-80 bg-surface-900 border border-surface-700 rounded-xl shadow-2xl p-5 flex flex-col gap-4">
             <div>
               <h2 className="text-sm font-semibold text-slate-200">{pendingClose.kind === 'all' ? 'Close all tabs?' : getCloseTitle(pendingCloseTab)}</h2>
               <p className="mt-2 text-xs text-slate-400 leading-relaxed">
@@ -546,8 +613,8 @@ export default function AppLayout() {
                 {pendingClose.kind === 'all' ? 'Close all tabs' : 'Close tab'}
               </button>
             </div>
-          </div>
-        </div>
+          </m.div>
+        </m.div>
       )}
     </div>
   )

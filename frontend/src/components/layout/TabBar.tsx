@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback, useMemo, type FormEvent } from 'react'
-import { Plus, X, Pencil, Bookmark, Copy, Folder, GitFork, Settings, LogOut, PanelLeftClose, Radio, Columns2 } from 'lucide-react'
+import { Plus, X, Pencil, Bookmark, Copy, Folder, GitFork, Settings, LogOut, Menu, PanelLeftClose, Radio, Columns2, Command } from 'lucide-react'
 import clsx from 'clsx'
 import { useTerminalStore } from '@/store/terminalStore'
 import { useSavedServerStore } from '@/store/savedServerStore'
@@ -10,6 +10,9 @@ import type { Tab } from '@/types'
 import { modKey } from '@/utils/platform'
 import { submitLdapLogout } from '@/utils/authRedirect'
 import { useModalFocus } from '@/hooks/useModalFocus'
+import { AnimatePresence } from 'motion/react'
+import * as m from 'motion/react-m'
+import { anchoredSurface, exitTransition, surfaceSpring } from '@/motion/tokens'
 
 interface TabBarProps {
   onAddTab: () => void
@@ -24,6 +27,10 @@ interface TabBarProps {
   onExitSplit: () => void
   onSetActiveTab: (id: string) => void
   inSplitMode: boolean
+  compactSidebar?: boolean
+  sidebarOpen?: boolean
+  onToggleSidebar?: () => void
+  onOpenCommandPalette?: () => void
 }
 
 function submitLogout() {
@@ -143,7 +150,7 @@ function SaveSessionDialog({ state, onSave, onClose }: {
   )
 }
 
-export default function TabBar({ onAddTab, onCloseTab, onCloneTab, onOpenSftpTab, onDuplicateTab, onCloseAllTabs, onOpenSettings, onOpenSplitPicker, onOpenBroadcastPicker, onExitSplit, onSetActiveTab, inSplitMode }: TabBarProps) {
+export default function TabBar({ onAddTab, onCloseTab, onCloneTab, onOpenSftpTab, onDuplicateTab, onCloseAllTabs, onOpenSettings, onOpenSplitPicker, onOpenBroadcastPicker, onExitSplit, onSetActiveTab, inSplitMode, compactSidebar = false, sidebarOpen = false, onToggleSidebar, onOpenCommandPalette }: TabBarProps) {
   const { tabs, activeTabId, renameTab } = useTerminalStore()
   const addServer = useSavedServerStore(s => s.addServer)
   const ldapEnabled = useServerConfigStore(s => s.ldapEnabled)
@@ -155,7 +162,7 @@ export default function TabBar({ onAddTab, onCloseTab, onCloneTab, onOpenSftpTab
   const [saveDialog, setSaveDialog] = useState<SaveDialogState | null>(null)
   const editInputRef = useRef<HTMLInputElement>(null)
   const contextMenuRef = useRef<HTMLDivElement>(null)
-  const tabRefs = useRef<Record<string, HTMLDivElement | null>>({})
+  const tabRefs = useRef<Record<string, HTMLButtonElement | null>>({})
 
   useEffect(() => {
     if (!activeTabId) return
@@ -230,30 +237,50 @@ export default function TabBar({ onAddTab, onCloseTab, onCloneTab, onOpenSftpTab
 
   return (
     <>
-    <div className="h-[46px] flex-shrink-0 flex items-center bg-surface-900 border-b border-surface-800">
+    <div className={clsx('flex-shrink-0 bg-surface-900 border-b border-surface-800', compactSidebar ? 'grid h-[92px] grid-cols-[40px_minmax(0,1fr)_40px] grid-rows-[46px_46px]' : 'h-[46px] flex items-center')}>
+      {compactSidebar && (
+        <button
+          type="button"
+          onClick={onToggleSidebar}
+          title={sidebarOpen ? 'Hide sessions' : 'Show sessions'}
+          aria-label={sidebarOpen ? 'Hide sessions' : 'Show sessions'}
+          aria-expanded={sidebarOpen}
+          className="col-start-1 row-start-1 h-[46px] w-10 flex-shrink-0 flex items-center justify-center text-slate-400 transition-colors hover:bg-surface-800 hover:text-slate-200"
+        >
+          <Menu className="h-4 w-4" />
+        </button>
+      )}
       {/* Logo branding */}
-      <div className="h-10 flex-shrink-0 flex items-center px-3 border-r border-surface-800">
+      <div className={clsx('h-10 flex-shrink-0 flex items-center px-3 border-r border-surface-800', compactSidebar ? 'col-start-2 row-start-1 self-center border-r-0 px-2 [&>div>span]:inline' : 'max-[800px]:w-10 max-[800px]:justify-center max-[800px]:px-2 max-[800px]:[&>div>span]:hidden')}>
         <Logo size="sm" showText={true} />
       </div>
+
+      {compactSidebar && (
+        <button type="button" onClick={onOpenCommandPalette} title={`Command palette (${modKey}+K)`} aria-label="Open command palette" className="col-start-3 row-start-1 flex h-[46px] w-10 justify-self-end items-center justify-center text-slate-400 transition-colors hover:bg-surface-800 hover:text-slate-200">
+          <Command className="h-4 w-4" />
+        </button>
+      )}
 
       {/* New tab button */}
       <button
         onClick={onAddTab}
         title={`New tab (${modKey}+T)`}
-        className="h-10 flex-shrink-0 w-10 flex items-center justify-center text-slate-500 hover:text-slate-300 hover:bg-surface-800 transition-colors border-r border-surface-800"
+        className={clsx('h-10 flex-shrink-0 w-10 flex items-center justify-center text-slate-500 hover:text-slate-300 hover:bg-surface-800 transition-colors border-r border-surface-800', compactSidebar && 'col-start-1 row-start-2 self-center')}
       >
         <Plus className="w-4 h-4" />
       </button>
 
       {/* Tab buttons */}
-      <div className="flex-1 h-full min-w-0 overflow-hidden">
+      <div className={clsx('flex-1 h-full min-w-0 overflow-hidden', compactSidebar && 'col-start-2 row-start-2', compactSidebar && inSplitMode && 'col-end-4')}>
         <div className="torrus-tab-strip flex h-full items-center flex-nowrap overflow-x-scroll overflow-y-hidden" role="tablist" aria-label="Sessions">
+          <AnimatePresence initial={false}>
           {tabs.map(tab => (
-            <div
+            <m.div
+              initial={{ opacity: 0, x: 14 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -14 }}
+              transition={surfaceSpring}
               key={tab.id}
-              ref={(element) => {
-                tabRefs.current[tab.id] = element
-              }}
               onMouseDown={(e) => {
                 if (e.button === 2) e.preventDefault()
               }}
@@ -262,12 +289,15 @@ export default function TabBar({ onAddTab, onCloseTab, onCloneTab, onOpenSftpTab
                 setContextMenu({ tabId: tab.id, x: e.clientX, y: e.clientY })
               }}
               className={clsx(
-                'group h-[40px] flex flex-shrink-0 select-none items-center min-w-32 max-w-48 border-r border-surface-800 whitespace-nowrap transition-colors text-xs font-mono',
+                'relative group h-[40px] flex flex-shrink-0 select-none items-center min-w-32 max-w-48 border-r border-surface-800 whitespace-nowrap transition-colors text-xs font-mono max-[600px]:min-w-28 max-[600px]:max-w-36',
                 activeTabId === tab.id
-                  ? 'bg-surface-950 text-slate-200 border-t-2 border-t-brand-500'
+                  ? 'bg-surface-950 text-slate-200'
                   : 'text-slate-500 hover:text-slate-300 hover:bg-surface-800'
               )}
             >
+              {activeTabId === tab.id && (
+                <m.span initial={{ opacity: 0, scaleX: 0.65 }} animate={{ opacity: 1, scaleX: 1 }} exit={{ opacity: 0 }} className="pointer-events-none absolute inset-x-0 top-0 h-0.5 origin-center bg-brand-500" />
+              )}
               {editingTabId === tab.id ? (
                 <input
                   ref={editInputRef}
@@ -283,6 +313,7 @@ export default function TabBar({ onAddTab, onCloseTab, onCloneTab, onOpenSftpTab
                 />
               ) : (
                 <button
+                  ref={(element) => { tabRefs.current[tab.id] = element }}
                   type="button"
                   role="tab"
                   aria-selected={activeTabId === tab.id}
@@ -307,70 +338,71 @@ export default function TabBar({ onAddTab, onCloseTab, onCloneTab, onOpenSftpTab
               <button
                 type="button"
                 onClick={(e) => { e.stopPropagation(); onCloseTab(tab.id) }}
-                className="mr-2 flex h-6 w-6 flex-shrink-0 items-center justify-center rounded opacity-0 transition-opacity hover:text-red-400 focus:opacity-100 group-hover:opacity-100"
+                className="mr-2 flex h-6 w-6 flex-shrink-0 items-center justify-center rounded opacity-0 transition-opacity hover:text-red-400 focus:opacity-100 group-hover:opacity-100 max-[600px]:opacity-100"
                 title={`Close ${getTabDisplayName(tab)}`}
               >
                 <X className="w-3 h-3" />
               </button>
-            </div>
+            </m.div>
           ))}
+          </AnimatePresence>
         </div>
       </div>
 
       {/* Spacer + Broadcast toggle + Close All + Settings + Logout */}
-      <div className="h-10 flex-shrink-0 flex items-center">
-      {inSplitMode && (
+      <div className={clsx('h-10 flex-shrink-0 flex items-center', compactSidebar && 'col-start-3 row-start-2 justify-self-end')}>
+      {inSplitMode && !compactSidebar && (
         <button
           onClick={onExitSplit}
           title="Exit split mode"
-          className="h-10 flex-shrink-0 flex items-center gap-1.5 px-3 text-xs text-brand-400 bg-brand-500/10 hover:bg-brand-500/20 transition-colors border-l border-surface-800"
+          className="h-10 flex-shrink-0 flex items-center justify-center gap-1.5 px-3 text-xs text-brand-400 bg-brand-500/10 hover:bg-brand-500/20 transition-colors border-l border-surface-800 max-[900px]:w-10 max-[900px]:px-0"
         >
           <X className="w-3.5 h-3.5" />
-          Exit split
+          <span className="max-[900px]:hidden">Exit split</span>
         </button>
       )}
-      {tabs.length >= 2 && (
+      {tabs.length >= 2 && (!compactSidebar || !inSplitMode) && (
         <button
           onClick={onOpenSplitPicker}
           title="Split layout"
-          className="h-10 flex-shrink-0 flex items-center gap-1.5 px-3 text-xs text-slate-500 hover:text-slate-300 hover:bg-surface-800 transition-colors border-l border-surface-800"
+          className="h-10 flex-shrink-0 flex items-center justify-center gap-1.5 px-3 text-xs text-slate-500 hover:text-slate-300 hover:bg-surface-800 transition-colors border-l border-surface-800 max-[900px]:w-10 max-[900px]:px-0"
         >
           <Columns2 className="w-3.5 h-3.5" />
-          Split
+          <span className="max-[900px]:hidden">Split</span>
         </button>
       )}
-      {connectedCount >= 2 && (
+      {connectedCount >= 2 && !compactSidebar && (
         <button
           onClick={onOpenBroadcastPicker}
           title={broadcastEnabled ? 'Broadcast active — click to manage' : 'Broadcast input to multiple terminals'}
           className={clsx(
-            'h-10 flex-shrink-0 flex items-center gap-1.5 px-3 text-xs border-l border-surface-800 transition-colors',
+            'h-10 flex-shrink-0 flex items-center justify-center gap-1.5 px-3 text-xs border-l border-surface-800 transition-colors max-[900px]:w-10 max-[900px]:px-0',
             broadcastEnabled
               ? 'text-amber-400 bg-amber-400/10 hover:bg-amber-400/20'
               : 'text-slate-500 hover:text-slate-300 hover:bg-surface-800'
           )}
         >
           <Radio className="w-3.5 h-3.5" />
-          Broadcast
+          <span className="max-[900px]:hidden">Broadcast</span>
         </button>
       )}
-      {tabs.length > 0 && (
+      {tabs.length > 0 && !compactSidebar && (
         <button
           onClick={onCloseAllTabs}
           title="Close all tabs"
-          className="h-10 flex-shrink-0 flex items-center gap-1 px-3 text-xs text-slate-500 hover:text-red-400 hover:bg-surface-800 transition-colors border-l border-surface-800"
+          className="h-10 flex-shrink-0 flex items-center justify-center gap-1 px-3 text-xs text-slate-500 hover:text-red-400 hover:bg-surface-800 transition-colors border-l border-surface-800 max-[900px]:w-10 max-[900px]:px-0"
         >
           <PanelLeftClose className="w-3.5 h-3.5" />
-          Close All
+          <span className="max-[900px]:hidden">Close All</span>
         </button>
       )}
-      <button
+      {!compactSidebar && <button
         onClick={onOpenSettings}
         title={`Settings (${modKey}+,)`}
         className="h-10 flex-shrink-0 w-10 flex items-center justify-center text-slate-500 hover:text-slate-300 hover:bg-surface-800 transition-colors border-l border-surface-800"
       >
         <Settings className="w-3.5 h-3.5" />
-      </button>
+      </button>}
       {ldapEnabled && (
         <button
           onClick={submitLogout}
@@ -383,11 +415,14 @@ export default function TabBar({ onAddTab, onCloseTab, onCloneTab, onOpenSftpTab
       </div>
 
       {/* Context menu */}
+      <AnimatePresence>
       {contextMenu && (() => {
         const tab = tabs.find(t => t.id === contextMenu.tabId)
         if (!tab) return null
         return (
-          <div
+          <m.div
+            {...anchoredSurface}
+            transition={{ ...exitTransition }}
             ref={contextMenuRef}
             className="fixed z-50 bg-surface-800 border border-surface-700 rounded-lg shadow-xl py-1 min-w-36"
             style={{ left: contextMenu.x, top: contextMenu.y }}
@@ -449,9 +484,10 @@ export default function TabBar({ onAddTab, onCloseTab, onCloneTab, onOpenSftpTab
               <X className="w-3 h-3" />
               Close
             </button>
-          </div>
+          </m.div>
         )
       })()}
+      </AnimatePresence>
 
     </div>
 

@@ -3,6 +3,9 @@ import { Eye, EyeOff, Terminal } from 'lucide-react'
 import Button from '@/components/ui/Button'
 import Input from '@/components/ui/Input'
 import type { ConnectFormValues } from '@/types'
+import { AnimatePresence } from 'motion/react'
+import * as m from 'motion/react-m'
+import { fade, surface, surfaceSpring } from '@/motion/tokens'
 
 interface ConnectFormProps {
   initialHost?: string
@@ -43,16 +46,16 @@ export default function ConnectForm({
   const displayError = localError || error
 
   return (
-    <div className="flex items-center justify-center h-full bg-surface-950">
-      <div className="w-80 bg-surface-900 border border-surface-700 rounded-xl p-6 flex flex-col gap-4 shadow-2xl">
+    <m.div {...fade} className="torrus-connect-container flex h-full items-center justify-center bg-surface-950">
+      <m.div {...surface} transition={surfaceSpring} className="torrus-connect-card flex w-80 max-w-[calc(100%-1.5rem)] flex-col gap-4 rounded-xl border border-surface-700 bg-surface-900 p-4 shadow-2xl">
         <div className="flex items-center gap-2">
           <Terminal className="w-5 h-5 text-brand-400" />
-          <h2 className="text-sm font-semibold text-slate-200">SSH Connection</h2>
+          <h2 className="torrus-connect-title whitespace-nowrap text-xs font-semibold text-slate-200">SSH Connection</h2>
         </div>
 
         <form onSubmit={handleSubmit} className="flex flex-col gap-3">
-          <div className="flex gap-2">
-            <div className="flex-1">
+          <div className="torrus-connect-endpoint flex flex-col gap-2">
+            <div className="min-w-0 flex-1">
               <Input
                 label="Host"
                 placeholder="hostname or IP"
@@ -63,7 +66,7 @@ export default function ConnectForm({
                 data-testid="host-input"
               />
             </div>
-            <div className="w-24">
+            <div className="torrus-connect-port w-full">
               <Input
                 label="Port"
                 type="number"
@@ -108,15 +111,17 @@ export default function ConnectForm({
             </button>
           </div>
 
-          {displayError && (
-            <p className="text-xs text-red-400 text-center">{displayError}</p>
-          )}
+          <AnimatePresence initial={false}>
+            {displayError && (
+              <m.p initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="text-xs text-red-400 text-center">{displayError}</m.p>
+            )}
+          </AnimatePresence>
 
           <Button type="submit" variant="primary" size="lg" className="w-full mt-1">
             Connect
           </Button>
         </form>
-      </div>
-    </div>
+      </m.div>
+    </m.div>
   )
 }

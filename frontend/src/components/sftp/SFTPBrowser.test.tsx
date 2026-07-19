@@ -93,8 +93,8 @@ describe('SFTPBrowser', () => {
     })
 
     expect(screen.queryByRole('button', { name: '~' })).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: '/' })).toHaveClass('text-slate-600')
-    expect(screen.getByText('/', { selector: 'span' })).toHaveClass('font-mono')
+    expect(screen.getByRole('button', { name: '/' })).toHaveClass('text-slate-600', 'text-xs')
+    expect(screen.getByText('/', { selector: 'span' })).toHaveClass('font-mono', 'text-xs')
     expect(screen.getByRole('button', { name: 'tmp' })).toHaveAttribute('title', '/tmp')
     expect(screen.getByRole('button', { name: 'anudeep' })).toHaveAttribute('title', '/tmp/anudeep')
   })

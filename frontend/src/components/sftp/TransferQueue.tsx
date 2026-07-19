@@ -1,7 +1,10 @@
 import { useState } from 'react'
 import clsx from 'clsx'
-import { Check, ChevronDown, ChevronUp, Download, RotateCcw, Upload, X, XCircle } from 'lucide-react'
+import { Check, ChevronDown, Download, RotateCcw, Upload, X, XCircle } from 'lucide-react'
 import type { TransferItem } from '@/store/sftpStore'
+import { AnimatePresence } from 'motion/react'
+import * as m from 'motion/react-m'
+import { exitTransition, motionDuration, progressTransition, surfaceSpring, surfaceTransition } from '@/motion/tokens'
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
@@ -33,7 +36,7 @@ export default function TransferQueue({ transfers, onDismiss, onRetry, onClearCo
   const completedCount = transfers.length - activeCount
 
   return (
-    <div className="flex-shrink-0 border-t border-surface-800 bg-surface-950" aria-live="polite">
+    <m.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 6 }} transition={surfaceSpring} className="flex-shrink-0 border-t border-surface-800 bg-surface-950" aria-live="polite">
       <div className="flex h-8 items-center gap-2 border-b border-surface-900 px-2 text-xs">
         <button
           type="button"
@@ -41,7 +44,9 @@ export default function TransferQueue({ transfers, onDismiss, onRetry, onClearCo
           className="flex h-6 min-w-0 flex-1 items-center gap-2 text-left text-slate-400 hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
           aria-expanded={!collapsed}
         >
-          {collapsed ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+          <m.span animate={{ rotate: collapsed ? 180 : 0 }} transition={{ duration: motionDuration.micro }} className="flex-shrink-0">
+            <ChevronDown className="h-3.5 w-3.5" />
+          </m.span>
           <span className="truncate">
             Transfers
             {activeCount > 0 ? ` (${activeCount} active)` : ''}
@@ -58,10 +63,13 @@ export default function TransferQueue({ transfers, onDismiss, onRetry, onClearCo
           </button>
         )}
       </div>
+      <AnimatePresence initial={false}>
       {!collapsed && (
-        <div className="max-h-28 overflow-y-auto">
+        <m.div key="transfer-list" initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto', transition: surfaceTransition }} exit={{ opacity: 0, height: 0, transition: exitTransition }} className="overflow-hidden">
+          <div className="max-h-28 overflow-y-auto">
+          <AnimatePresence initial={false}>
           {visibleTransfers.map(item => (
-            <div key={item.id} className="border-b border-surface-900 px-2 py-1.5">
+            <m.div key={item.id} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, x: 14 }} transition={surfaceSpring} className="border-b border-surface-900 px-2 py-1.5">
               <div className="flex items-center gap-2 text-xs">
                 {item.direction === 'upload'
                   ? <Upload className="h-3.5 w-3.5 text-slate-500" />
@@ -92,7 +100,7 @@ export default function TransferQueue({ transfers, onDismiss, onRetry, onClearCo
                 )}
               </div>
               <div className="mt-1 h-1 bg-surface-800" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={item.progress}>
-                <div
+                <m.div
                   className={clsx('h-full', {
                     'animate-pulse bg-brand-500': item.status === 'active',
                     'bg-brand-500': item.status === 'done',
@@ -100,16 +108,20 @@ export default function TransferQueue({ transfers, onDismiss, onRetry, onClearCo
                     'bg-slate-500': item.status === 'queued',
                   })}
                   style={{ width: `${item.progress}%` }}
+                  transition={progressTransition}
                 />
               </div>
               <div className="mt-1 flex justify-between font-mono text-xs text-slate-500">
                 <span>{item.error ?? `${formatBytes(item.bytes)} / ${formatBytes(item.total)}`}</span>
                 <span>{item.progress}%</span>
               </div>
-            </div>
+            </m.div>
           ))}
-        </div>
+          </AnimatePresence>
+          </div>
+        </m.div>
       )}
-    </div>
+      </AnimatePresence>
+    </m.div>
   )
 }

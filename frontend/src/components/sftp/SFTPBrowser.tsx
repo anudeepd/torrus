@@ -28,6 +28,9 @@ import { useSFTP } from '@/hooks/useSFTP'
 import { useModalFocus } from '@/hooks/useModalFocus'
 import { useSFTPStore } from '@/store/sftpStore'
 import type { SFTPEntry } from '@/types'
+import { completedTransferRetentionMs, fade, exitTransition, surfaceTransition } from '@/motion/tokens'
+import * as m from 'motion/react-m'
+import { AnimatePresence } from 'motion/react'
 
 interface SFTPBrowserProps {
   tabId: string
@@ -300,9 +303,10 @@ function Breadcrumbs({ path, list, onEdit }: BreadcrumbsProps) {
         if (event.target === event.currentTarget) onEdit()
       }}
     >
+      <AnimatePresence initial={false}>
       {visible.map((segment, index) => (
-        <span key={`${segment.path}-${index}`} className="flex min-w-0 items-center">
-          {index > 0 && !(index === 1 && visible[0]?.path === '/') && <span className="px-1 font-mono text-slate-600">/</span>}
+        <m.span initial={{ opacity: 0, maxWidth: 0 }} animate={{ opacity: 1, maxWidth: 160, transition: surfaceTransition }} exit={{ opacity: 0, maxWidth: 0, transition: exitTransition }} key={`${segment.path}-${index}`} className="flex min-w-0 items-center overflow-hidden">
+          {index > 0 && !(index === 1 && visible[0]?.path === '/') && <span className="px-1 font-mono text-xs text-slate-600">/</span>}
           {index === 1 && hiddenCount > 0 && (
             <>
               <button
@@ -313,8 +317,11 @@ function Breadcrumbs({ path, list, onEdit }: BreadcrumbsProps) {
               >
                 ...
               </button>
-              <span className="px-1 font-mono text-slate-600">/</span>
+              <span className="px-1 font-mono text-xs text-slate-600">/</span>
             </>
+          )}
+          {index === 1 && expanded && segments.length > 4 && (
+            <button type="button" onClick={() => setExpanded(false)} className="px-1 text-xs text-slate-500 hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500" title="Collapse path" aria-label="Collapse path">…</button>
           )}
           <button
             type="button"
@@ -327,8 +334,9 @@ function Breadcrumbs({ path, list, onEdit }: BreadcrumbsProps) {
           >
             {segment.label}
           </button>
-        </span>
+        </m.span>
       ))}
+      </AnimatePresence>
       <button
         type="button"
         onClick={onEdit}
@@ -518,6 +526,7 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
   const newFolderDialogRef = useModalFocus(newFolderOpen, closeNewFolder, folderInputRef)
   const chmodDialogRef = useModalFocus(Boolean(chmodDialog), closePermissions)
   const deleteDialogRef = useModalFocus(Boolean(deletePaths), closeDelete, deleteCancelRef)
+  const completedTransferTimersRef = useRef(new Map<string, number>())
 
   useEffect(() => {
     if (!editingPath) return
@@ -548,11 +557,26 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
   }, [clearNotice, notice])
 
   useEffect(() => {
-    const timers = transfers
-      .filter(transfer => transfer.status === 'done')
-      .map(transfer => window.setTimeout(() => removeTransfer(transfer.id), 5000))
-    return () => timers.forEach(timer => window.clearTimeout(timer))
+    const completedIds = new Set(transfers.filter(transfer => transfer.status === 'done').map(transfer => transfer.id))
+    completedIds.forEach(id => {
+      if (completedTransferTimersRef.current.has(id)) return
+      const timer = window.setTimeout(() => {
+        completedTransferTimersRef.current.delete(id)
+        removeTransfer(id)
+      }, completedTransferRetentionMs)
+      completedTransferTimersRef.current.set(id, timer)
+    })
+    completedTransferTimersRef.current.forEach((timer, id) => {
+      if (completedIds.has(id)) return
+      window.clearTimeout(timer)
+      completedTransferTimersRef.current.delete(id)
+    })
   }, [removeTransfer, transfers])
+
+  useEffect(() => () => {
+    completedTransferTimersRef.current.forEach(timer => window.clearTimeout(timer))
+    completedTransferTimersRef.current.clear()
+  }, [])
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -925,7 +949,7 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
           'pointer-events-none opacity-50': disconnected,
         })}
       >
-        {loading && (
+        {loading && entries.length === 0 && (
           <div className="p-2">
             {[0, 1, 2].map(row => (
               <div key={row} className="mb-2 grid h-8 animate-pulse grid-cols-[24px_minmax(0,1fr)_96px_104px_112px_144px] items-center gap-2 opacity-50 max-[600px]:grid-cols-[24px_minmax(0,1fr)]">
@@ -944,8 +968,8 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
           <div className="flex h-full items-center justify-center text-xs text-slate-500">This folder is empty</div>
         )}
 
-        {!loading && entries.length > 0 && (
-          <div>
+        {entries.length > 0 && (
+          <m.div key={path} {...fade} transition={exitTransition} className={clsx({ 'pointer-events-none opacity-60': loading })} aria-busy={loading}>
             <div className="sticky top-0 z-10 grid h-8 grid-cols-[24px_minmax(0,1fr)_96px_104px_112px_144px] items-center gap-2 border-b border-surface-800 bg-surface-950 px-2 font-mono text-[11px] font-medium text-slate-500 max-[600px]:grid-cols-[24px_minmax(0,1fr)]">
               <button type="button" className="col-span-2 flex h-full min-w-0 items-center gap-1 pl-[32px] text-left hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 max-[600px]:pl-0" onClick={() => toggleSort('name')} title="Sort by name">
                 <span>name</span><SortIndicator rules={sortRules} sortKey="name" />
@@ -1015,7 +1039,13 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
                 </div>
               )
             })}
-          </div>
+          </m.div>
+        )}
+
+        {loading && entries.length > 0 && (
+          <m.div {...fade} role="status" className="pointer-events-none absolute inset-x-0 top-0 z-20 flex h-8 items-center justify-center border-b border-surface-800 bg-surface-950/75 text-[11px] text-slate-400 backdrop-blur-sm">
+            <LoaderCircle className="mr-2 h-3.5 w-3.5 animate-spin motion-reduce:animate-none" /> Loading folder…
+          </m.div>
         )}
 
         {dragging && (

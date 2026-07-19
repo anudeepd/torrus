@@ -22,6 +22,12 @@ export default {
       fontFamily: {
         mono: ['"JetBrains Mono"', '"Cascadia Code"', '"Fira Code"', 'ui-monospace', 'monospace'],
       },
+      transitionDuration: {
+        DEFAULT: 'var(--motion-duration-micro)',
+      },
+      transitionTimingFunction: {
+        DEFAULT: 'var(--motion-ease-move)',
+      },
     },
   },
   plugins: [],

@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.2.10] - 2026-07-19
+
+### Added
+
+- Add a shared, reduced-motion-aware animation system for workspace surfaces, tabs, dialogs, saved sessions, connection states, SFTP navigation, and transfers.
+- Preserve terminal ownership while adding continuity cues around normal and split layouts.
+- Add a compact command palette for searchable tab switching and workspace actions, available from the header or with Ctrl/Cmd+K.
+- Add a Lagun-style compact sessions drawer with an animated overlay, scrim, Escape dismissal, and full-width workspace when closed.
+
+### Changed
+
+- Keep the current SFTP directory visible and inert while newer directory contents load.
+- Ignore stale SFTP directory responses and coalesce repeated refreshes of the same pending path.
+- Key completed-transfer retention timers by transfer ID so unrelated progress cannot postpone removal.
+- Improve SFTP breadcrumb separator sizing.
+- Adapt the tab bar for compact viewports with a dedicated two-row header, stable command placement, touch-accessible tabs, and overflow-free contextual actions.
+- Move compact split controls into the command palette while preserving visible desktop split actions.
+- Make SSH connection forms respond to their pane width so fields remain usable in compact split layouts.
+- Center and constrain compact empty-state copy, and smooth SSH connecting, disconnecting, split-layout, broadcast, settings, and confirmation transitions.
+
 ## [0.2.2] - 2026-07-13
 
 ### Added

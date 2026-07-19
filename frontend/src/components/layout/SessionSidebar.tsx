@@ -5,10 +5,14 @@ import { useSavedServerStore } from '@/store/savedServerStore'
 import { useTerminalStore } from '@/store/terminalStore'
 import { uuid } from '@/utils/uuid'
 import type { SavedServer } from '@/types'
-import { useModalFocus } from '@/hooks/useModalFocus'
+import { useDialogPresence } from '@/hooks/useDialogPresence'
+import { AnimatePresence } from 'motion/react'
+import * as m from 'motion/react-m'
+import { anchoredSurface, exitTransition, fade, spatialTransition, surface, surfaceSpring } from '@/motion/tokens'
 
 interface SessionSidebarProps {
   isOpen: boolean
+  compact: boolean
   onToggle: () => void
   onLoadSession: (server: SavedServer) => void
 }
@@ -65,7 +69,7 @@ function EditModal({ server, onSave, onClose }: EditModalProps) {
   const [username, setUsername] = useState(server.username)
   const [error, setError] = useState('')
 
-  const dialogRef = useModalFocus(true, onClose)
+  const { ref: dialogRef, presenceProps } = useDialogPresence(onClose)
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault()
@@ -92,11 +96,11 @@ function EditModal({ server, onSave, onClose }: EditModalProps) {
   const labelCls = 'text-xs text-slate-400 font-medium'
 
   return (
-    <div
+    <m.div {...fade}
       className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center"
       onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}
     >
-      <div ref={dialogRef} role="dialog" aria-modal="true" aria-label="Edit Session" tabIndex={-1} className="bg-surface-900 border border-surface-700 rounded-xl p-6 w-80 shadow-2xl flex flex-col gap-4">
+      <m.div {...surface} {...presenceProps} transition={surfaceSpring} ref={dialogRef} role="dialog" aria-modal="true" aria-label="Edit Session" tabIndex={-1} className="bg-surface-900 border border-surface-700 rounded-xl p-6 w-80 shadow-2xl flex flex-col gap-4">
         <div className="flex items-center gap-2">
           <Pencil className="w-4 h-4 text-brand-400" />
           <h2 className="text-sm font-semibold text-slate-200">Edit Session</h2>
@@ -170,14 +174,14 @@ function EditModal({ server, onSave, onClose }: EditModalProps) {
             </button>
           </div>
         </form>
-      </div>
-    </div>
+      </m.div>
+    </m.div>
   )
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-export default function SessionSidebar({ isOpen, onToggle, onLoadSession }: SessionSidebarProps) {
+export default function SessionSidebar({ isOpen, compact, onToggle, onLoadSession }: SessionSidebarProps) {
   const { servers, removeServer, updateServer, importServers } = useSavedServerStore()
   const tabs = useTerminalStore(s => s.tabs)
 
@@ -186,6 +190,7 @@ export default function SessionSidebar({ isOpen, onToggle, onLoadSession }: Sess
   const [editingServer, setEditingServer] = useState<SavedServer | null>(null)
   const [importError, setImportError] = useState('')
   const [importSuccess, setImportSuccess] = useState(false)
+  const [isResizing, setIsResizing] = useState(false)
   const contextMenuRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const resizeStartRef = useRef<{ x: number; width: number } | null>(null)
@@ -235,6 +240,7 @@ export default function SessionSidebar({ isOpen, onToggle, onLoadSession }: Sess
 
   const handleResizeMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault()
+    setIsResizing(true)
     resizeStartRef.current = { x: e.clientX, width: sidebarWidth }
     const onMove = (event: MouseEvent) => {
       if (!resizeStartRef.current) return
@@ -247,6 +253,7 @@ export default function SessionSidebar({ isOpen, onToggle, onLoadSession }: Sess
     }
     const onUp = () => {
       resizeStartRef.current = null
+      setIsResizing(false)
       document.removeEventListener('mousemove', onMove)
       document.removeEventListener('mouseup', onUp)
     }
@@ -307,25 +314,50 @@ export default function SessionSidebar({ isOpen, onToggle, onLoadSession }: Sess
 
   // ── Collapsed state ──────────────────────────────────────────────────────────
   if (!isOpen) {
+    if (compact) return null
     return (
-      <div className="w-8 flex-shrink-0 flex flex-col items-center bg-surface-900 border-r border-surface-800 select-none">
+      <m.div
+        initial={{ width: sidebarWidth, opacity: 1 }}
+        animate={{ width: 32, opacity: 1 }}
+        transition={spatialTransition}
+        className="flex-shrink-0 overflow-hidden flex flex-col items-center bg-surface-900 border-r border-surface-800 select-none"
+      >
         <button
           onClick={onToggle}
           title="Show sessions"
-          className="w-full h-9 flex items-center justify-center text-slate-500 hover:text-slate-300 hover:bg-surface-800 transition-colors border-b border-surface-800"
+          className="w-8 h-9 flex-shrink-0 flex items-center justify-center text-slate-500 hover:text-slate-300 hover:bg-surface-800 transition-colors border-b border-surface-800"
         >
           <PanelLeftOpen className="w-4 h-4" />
         </button>
-      </div>
+      </m.div>
     )
   }
 
   // ── Full sidebar ─────────────────────────────────────────────────────────────
   return (
     <>
-      <div
-        style={{ width: sidebarWidth }}
-        className="relative flex min-h-0 flex-shrink-0 border-r border-surface-800"
+      {compact && (
+        <m.button
+          type="button"
+          aria-label="Close sessions drawer"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={exitTransition}
+          onClick={onToggle}
+          className="fixed inset-0 z-30 bg-black/60 backdrop-blur-[1px]"
+        />
+      )}
+      <m.div
+        initial={compact ? { x: -Math.min(288, window.innerWidth - 48), opacity: 0 } : { width: 32, opacity: 1 }}
+        animate={compact ? { x: 0, opacity: 1 } : { width: sidebarWidth, opacity: 1 }}
+        exit={compact ? { x: -Math.min(288, window.innerWidth - 48), opacity: 0 } : undefined}
+        transition={isResizing ? { duration: 0 } : spatialTransition}
+        style={compact ? { width: Math.min(288, window.innerWidth - 48) } : undefined}
+        className={clsx(
+          'flex min-h-0 flex-shrink-0 overflow-hidden border-r border-surface-800',
+          compact ? 'fixed inset-y-0 left-0 z-40 shadow-2xl' : 'relative'
+        )}
       >
         <div className="flex-1 min-w-0 flex flex-col bg-surface-900 select-none">
           {/* Header */}
@@ -470,7 +502,7 @@ export default function SessionSidebar({ isOpen, onToggle, onLoadSession }: Sess
             {importSuccess && <p className="text-xs text-green-400 text-center">Sessions imported.</p>}
           </div>
         </div>
-        <div
+        {!compact && <div
           onMouseDown={handleResizeMouseDown}
           title="Resize sessions sidebar"
           role="separator"
@@ -479,15 +511,16 @@ export default function SessionSidebar({ isOpen, onToggle, onLoadSession }: Sess
           className="group absolute inset-y-0 right-0 z-10 w-2 translate-x-1/2 cursor-col-resize"
         >
           <div className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-transparent transition-colors group-hover:bg-brand-500" />
-        </div>
-      </div>
+        </div>}
+      </m.div>
 
       {/* Right-click context menu */}
+      <AnimatePresence>
       {contextMenu && (() => {
         const server = servers.find(s => s.id === contextMenu.serverId)
         if (!server) return null
         return (
-          <div
+          <m.div {...anchoredSurface} transition={exitTransition}
             ref={contextMenuRef}
             className="fixed z-50 bg-surface-800 border border-surface-700 rounded-lg shadow-xl py-1 min-w-40"
             style={{ left: contextMenu.x, top: contextMenu.y }}
@@ -514,11 +547,13 @@ export default function SessionSidebar({ isOpen, onToggle, onLoadSession }: Sess
               <Trash2 className="w-3 h-3" />
               Delete
             </button>
-          </div>
+          </m.div>
         )
       })()}
+      </AnimatePresence>
 
       {/* Edit modal */}
+      <AnimatePresence>
       {editingServer && (
         <EditModal
           server={editingServer}
@@ -526,6 +561,7 @@ export default function SessionSidebar({ isOpen, onToggle, onLoadSession }: Sess
           onClose={() => setEditingServer(null)}
         />
       )}
+      </AnimatePresence>
     </>
   )
 }

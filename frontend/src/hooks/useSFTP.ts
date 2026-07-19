@@ -150,6 +150,8 @@ export function useSFTP(tabId: string, sourceTabId: string | undefined, socket: 
   const [groups, setGroups] = useState<SFTPGroup[]>([])
   const openedRef = useRef(false)
   const pendingUploadsRef = useRef(new Map<string, PendingUpload>())
+  const pendingListingPathRef = useRef<string | null>(null)
+  const queuedSamePathRefreshRef = useRef(false)
   const sessionId = useTerminalStore(s => s.sessionId)
   const addTab = useTerminalStore(s => s.addTab)
   const setActiveTab = useTerminalStore(s => s.setActiveTab)
@@ -184,6 +186,12 @@ export function useSFTP(tabId: string, sourceTabId: string | undefined, socket: 
 
   const list = useCallback((path?: string) => {
     const targetPath = path ?? useSFTPStore.getState().tabs[tabId]?.path ?? '.'
+    if (pendingListingPathRef.current === targetPath) {
+      queuedSamePathRefreshRef.current = true
+      return
+    }
+    pendingListingPathRef.current = targetPath
+    queuedSamePathRefreshRef.current = false
     ensureTab(tabId)
     setLoading(tabId, true)
     socket.emit('sftp:list', { session_id: sessionId, tab_id: tabId, path: targetPath })
@@ -275,11 +283,18 @@ export function useSFTP(tabId: string, sourceTabId: string | undefined, socket: 
   useEffect(() => {
     const onListing = (payload: ListingPayload) => {
       if (payload.tab_id !== tabId) return
+      const requestedPath = pendingListingPathRef.current
+      if (requestedPath !== null && payload.path !== undefined && payload.path !== requestedPath) return
       if (payload.ok === false) {
+        pendingListingPathRef.current = null
         setError(tabId, payload.message ?? payload.code ?? 'Unable to list directory.')
         if (payload.code === 'CONNECTION_CLOSED') {
           setDisconnected(tabId, true)
           setTabStatus(tabId, 'dead')
+        }
+        if (queuedSamePathRefreshRef.current) {
+          queuedSamePathRefreshRef.current = false
+          list(requestedPath ?? payload.path ?? '.')
         }
         return
       }
@@ -287,6 +302,11 @@ export function useSFTP(tabId: string, sourceTabId: string | undefined, socket: 
       if (payload.is_root !== undefined) setIsRoot(tabId, payload.is_root)
       setListing(tabId, payload.path ?? '.', payload.entries ?? [])
       setTabStatus(tabId, 'connected')
+      pendingListingPathRef.current = null
+      if (queuedSamePathRefreshRef.current) {
+        queuedSamePathRefreshRef.current = false
+        list(payload.path ?? requestedPath ?? '.')
+      }
     }
     const onError = (payload: SFTPErrorPayload) => {
       if (payload.tab_id !== tabId) return
@@ -378,7 +398,7 @@ export function useSFTP(tabId: string, sourceTabId: string | undefined, socket: 
       socket.off('sftp:download:result', onDownload)
       socket.off('sftp:accounts:result', onAccounts)
     }
-  }, [socket, tabId, refreshCurrentDirectory, setTabStatus, setError, setNotice, setListing, setUsername, setIsRoot, setDisconnected])
+  }, [socket, tabId, list, refreshCurrentDirectory, setTabStatus, setError, setNotice, setListing, setUsername, setIsRoot, setDisconnected])
 
   const resumeUpload = useCallback(async (transferId: string) => {
     const pending = pendingUploadsRef.current.get(transferId)

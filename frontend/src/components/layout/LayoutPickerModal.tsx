@@ -1,10 +1,13 @@
 import { useState, useEffect } from 'react'
 import { X } from 'lucide-react'
 import clsx from 'clsx'
-import { useModalFocus } from '@/hooks/useModalFocus'
+import { useDialogPresence } from '@/hooks/useDialogPresence'
 import type { PaneNode } from '@/store/layoutStore'
 import { makeSplitId } from '@/store/layoutStore'
 import type { Tab } from '@/types'
+import * as m from 'motion/react-m'
+import { AnimatePresence } from 'motion/react'
+import { fade, spatialTransition, surface, surfaceSpring } from '@/motion/tokens'
 
 // ─── Preset layout builders ────────────────────────────────────────────────
 
@@ -146,7 +149,7 @@ export default function LayoutPickerModal({ tabs, onApply, onClose }: Props) {
     })
   }, [selected, tabs])
 
-  const dialogRef = useModalFocus(true, onClose)
+  const { ref: dialogRef, presenceProps } = useDialogPresence(onClose)
 
   const allFilled = slotTabIds.length === selected.slots && slotTabIds.every(Boolean)
 
@@ -156,11 +159,11 @@ export default function LayoutPickerModal({ tabs, onApply, onClose }: Props) {
   }
 
   return (
-    <div
+    <m.div {...fade}
       className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center"
       onMouseDown={e => { if (e.target === e.currentTarget) onClose() }}
     >
-      <div ref={dialogRef} role="dialog" aria-modal="true" aria-label="Split layout" tabIndex={-1} className="bg-surface-900 border border-surface-700 rounded-xl shadow-2xl w-[520px] flex flex-col">
+      <m.div {...surface} {...presenceProps} transition={surfaceSpring} ref={dialogRef} role="dialog" aria-modal="true" aria-label="Split layout" tabIndex={-1} className="bg-surface-900 border border-surface-700 rounded-xl shadow-2xl w-[520px] flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-surface-800">
           <h2 className="text-sm font-semibold text-slate-200">Split layout</h2>
@@ -173,42 +176,62 @@ export default function LayoutPickerModal({ tabs, onApply, onClose }: Props) {
           {/* Preset grid */}
           <div className="grid grid-cols-3 gap-3">
             {PRESETS.map(preset => (
-              <button
+              <m.button
                 key={preset.id}
                 onClick={() => setSelected(preset)}
+                whileTap={{ scale: 0.97 }}
+                layout
                 className={clsx(
-                  'flex flex-col gap-2 p-3 rounded-lg border transition-colors',
+                  'relative flex flex-col gap-2 p-3 rounded-lg border transition-colors',
                   selected.id === preset.id
                     ? 'border-brand-500 bg-brand-500/10'
                     : 'border-surface-700 hover:border-surface-500 bg-surface-800'
                 )}
               >
+                {selected.id === preset.id && (
+                  <m.span
+                    layoutId="selected-layout-preset"
+                    className="pointer-events-none absolute -inset-px rounded-lg border-2 border-brand-400/70"
+                    transition={surfaceSpring}
+                  />
+                )}
                 <div className="w-full h-14">{preset.thumb}</div>
                 <span className="text-xs text-slate-400 text-center">{preset.name}</span>
-              </button>
+              </m.button>
             ))}
           </div>
 
           {/* Slot assignments */}
-          <div className="flex flex-col gap-2">
+          <m.div layout transition={spatialTransition} className="flex flex-col gap-2">
             <span className="text-xs font-medium text-slate-400">Assign tabs to slots</span>
-            {Array.from({ length: selected.slots }, (_, i) => (
-              <SlotPicker
-                key={i}
-                slotIndex={i}
-                tabIds={slotTabIds}
-                tabs={tabs}
-                onChange={(idx, tabId) => setSlotTabIds(prev => {
-                  const next = [...prev]
-                  // If tabId already in another slot, swap
-                  const clash = next.findIndex((id, j) => j !== idx && id === tabId)
-                  if (clash >= 0) next[clash] = next[idx] ?? ''
-                  next[idx] = tabId
-                  return next
-                })}
-              />
-            ))}
-          </div>
+            <AnimatePresence initial={false} mode="popLayout">
+              {Array.from({ length: selected.slots }, (_, i) => (
+                <m.div
+                  key={`slot-${i}`}
+                  layout
+                  initial={{ opacity: 0, height: 0, y: -6 }}
+                  animate={{ opacity: 1, height: 'auto', y: 0 }}
+                  exit={{ opacity: 0, height: 0, y: -6 }}
+                  transition={spatialTransition}
+                  className="overflow-hidden"
+                >
+                  <SlotPicker
+                    slotIndex={i}
+                    tabIds={slotTabIds}
+                    tabs={tabs}
+                    onChange={(idx, tabId) => setSlotTabIds(prev => {
+                      const next = [...prev]
+                      // If tabId already in another slot, swap
+                      const clash = next.findIndex((id, j) => j !== idx && id === tabId)
+                      if (clash >= 0) next[clash] = next[idx] ?? ''
+                      next[idx] = tabId
+                      return next
+                    })}
+                  />
+                </m.div>
+              ))}
+            </AnimatePresence>
+          </m.div>
         </div>
 
         {/* Footer */}
@@ -227,7 +250,7 @@ export default function LayoutPickerModal({ tabs, onApply, onClose }: Props) {
             Apply layout
           </button>
         </div>
-      </div>
-    </div>
+      </m.div>
+    </m.div>
   )
 }

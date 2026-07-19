@@ -211,6 +211,37 @@ describe('useSFTP', () => {
     })
   })
 
+  it('ignores stale directory responses after navigating to a newer path', () => {
+    const socket = createMockSocket()
+    const { result } = renderHook(() => useSFTP(tabId, 'terminal-tab', socket as unknown as Socket))
+
+    act(() => {
+      result.current.list('/older')
+      result.current.list('/newer')
+      socket._trigger('sftp:list:result', { tab_id: tabId, ok: true, path: '/older', entries: [{ name: 'stale', path: '/older/stale', type: 'file', size: 1, mode: 0, mtime: 0 }] })
+    })
+    expect(useSFTPStore.getState().tabs[tabId]?.path).not.toBe('/older')
+
+    act(() => socket._trigger('sftp:list:result', { tab_id: tabId, ok: true, path: '/newer', entries: [] }))
+    expect(useSFTPStore.getState().tabs[tabId]?.path).toBe('/newer')
+  })
+
+  it('coalesces concurrent refreshes of the same path into one queued request', () => {
+    const socket = createMockSocket()
+    const { result } = renderHook(() => useSFTP(tabId, 'terminal-tab', socket as unknown as Socket))
+    socket.emit.mockClear()
+
+    act(() => {
+      result.current.list('/root')
+      result.current.list('/root')
+      result.current.list('/root')
+    })
+    expect(socket.emit.mock.calls.filter(call => call[0] === 'sftp:list')).toHaveLength(1)
+
+    act(() => socket._trigger('sftp:list:result', { tab_id: tabId, ok: true, path: '/root', entries: [] }))
+    expect(socket.emit.mock.calls.filter(call => call[0] === 'sftp:list')).toHaveLength(2)
+  })
+
   it('uploads through the resumable chunk endpoint and reports byte progress', async () => {
     const socket = createMockSocket()
     const fetchMock = vi.fn().mockResolvedValue({

@@ -1,10 +1,13 @@
 import { useState } from 'react'
 import { Radio, X } from 'lucide-react'
 import clsx from 'clsx'
-import { useModalFocus } from '@/hooks/useModalFocus'
+import { useDialogPresence } from '@/hooks/useDialogPresence'
 import type { PaneNode } from '@/store/layoutStore'
 import { makeSplitId } from '@/store/layoutStore'
 import type { Tab } from '@/types'
+import * as m from 'motion/react-m'
+import { AnimatePresence } from 'motion/react'
+import { exitTransition, fade, surface, surfaceSpring, surfaceTransition } from '@/motion/tokens'
 
 // ─── Auto-layout for N terminals ───────────────────────────────────────────
 
@@ -46,7 +49,7 @@ export default function BroadcastPickerModal({ connectedTabs, initialIncluded, b
       : new Set(connectedTabs.map(t => t.id))
   )
 
-  const dialogRef = useModalFocus(true, onClose)
+  const { ref: dialogRef, presenceProps } = useDialogPresence(onClose)
 
   const toggle = (id: string) => setChecked(prev => {
     const next = new Set(prev)
@@ -63,11 +66,11 @@ export default function BroadcastPickerModal({ connectedTabs, initialIncluded, b
   }
 
   return (
-    <div
+    <m.div {...fade}
       className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center"
       onMouseDown={e => { if (e.target === e.currentTarget) onClose() }}
     >
-      <div ref={dialogRef} role="dialog" aria-modal="true" aria-label="Broadcast input" tabIndex={-1} className="bg-surface-900 border border-surface-700 rounded-xl shadow-2xl w-80 flex flex-col">
+      <m.div {...surface} {...presenceProps} transition={surfaceSpring} ref={dialogRef} role="dialog" aria-modal="true" aria-label="Broadcast input" tabIndex={-1} className="bg-surface-900 border border-surface-700 rounded-xl shadow-2xl w-80 flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-surface-800">
           <div className="flex items-center gap-2">
@@ -90,8 +93,12 @@ export default function BroadcastPickerModal({ connectedTabs, initialIncluded, b
               const label = tab.label ?? (tab.host && tab.username ? `${tab.username}@${tab.host}` : 'Connection')
               const isChecked = checked.has(tab.id)
               return (
-                <label
+                <m.label
                   key={tab.id}
+                  layout
+                  animate={{ scale: isChecked ? 1 : 0.985 }}
+                  whileTap={{ scale: 0.975 }}
+                  transition={surfaceTransition}
                   className={clsx(
                     'flex items-center gap-3 px-3 py-2 rounded-lg cursor-pointer transition-colors',
                     isChecked ? 'bg-amber-400/10 border border-amber-400/30' : 'bg-surface-800 border border-surface-700'
@@ -104,19 +111,21 @@ export default function BroadcastPickerModal({ connectedTabs, initialIncluded, b
                     className="accent-amber-400"
                   />
                   <span className="text-xs text-slate-200 font-mono truncate">{label}</span>
-                </label>
+                </m.label>
               )
             })}
           </div>
 
-          {selectedIds.length >= 2 && (
-            <p className="text-xs text-slate-500">
-              {selectedIds.length} terminals selected — will auto-arrange in split view.
-            </p>
-          )}
-          {selectedIds.length === 1 && (
-            <p className="text-xs text-amber-400/80">Select at least 2 terminals to broadcast.</p>
-          )}
+          <AnimatePresence initial={false} mode="wait">
+            {selectedIds.length >= 2 && (
+              <m.p key={`ready-${selectedIds.length}`} {...fade} transition={surfaceTransition} className="text-xs text-slate-500">
+                {selectedIds.length} terminals selected — will auto-arrange in split view.
+              </m.p>
+            )}
+            {selectedIds.length === 1 && (
+              <m.p key="needs-more" {...fade} transition={surfaceTransition} className="text-xs text-amber-400/80">Select at least 2 terminals to broadcast.</m.p>
+            )}
+          </AnimatePresence>
         </div>
 
         {/* Footer */}
@@ -128,14 +137,20 @@ export default function BroadcastPickerModal({ connectedTabs, initialIncluded, b
           >
             Start broadcast
           </button>
-          {broadcastEnabled && (
-            <button
-              onClick={onDisable}
-              className="w-full px-3 py-2 rounded-md text-sm text-slate-400 bg-surface-800 hover:bg-surface-700 hover:text-red-400 transition-colors"
-            >
-              Disable broadcast
-            </button>
-          )}
+          <AnimatePresence initial={false}>
+            {broadcastEnabled && (
+              <m.button
+                initial={{ opacity: 0, height: 0 }}
+                animate={{ opacity: 1, height: 'auto' }}
+                exit={{ opacity: 0, height: 0, transition: exitTransition }}
+                transition={surfaceTransition}
+                onClick={onDisable}
+                className="w-full overflow-hidden px-3 py-2 rounded-md text-sm text-slate-400 bg-surface-800 hover:bg-surface-700 hover:text-red-400 transition-colors"
+              >
+                Disable broadcast
+              </m.button>
+            )}
+          </AnimatePresence>
           <button
             onClick={onClose}
             className="w-full px-3 py-2 rounded-md text-sm text-slate-500 hover:text-slate-300 transition-colors"
@@ -143,7 +158,7 @@ export default function BroadcastPickerModal({ connectedTabs, initialIncluded, b
             Cancel
           </button>
         </div>
-      </div>
-    </div>
+      </m.div>
+    </m.div>
   )
 }

@@ -1,6 +1,8 @@
 import { Settings, RotateCcw } from 'lucide-react'
-import { useModalFocus } from '@/hooks/useModalFocus'
+import { useDialogPresence } from '@/hooks/useDialogPresence'
 import { useSettingsStore } from '@/store/settingsStore'
+import * as m from 'motion/react-m'
+import { fade, surface, surfaceSpring } from '@/motion/tokens'
 
 interface SettingsDialogProps {
   onClose: () => void
@@ -13,14 +15,14 @@ const FONT_SIZE_OPTIONS = [10, 11, 12, 13, 14, 15, 16, 18, 20]
 export default function SettingsDialog({ onClose }: SettingsDialogProps) {
   const { scrollbackLines, fontSize, update, reset } = useSettingsStore()
 
-  const dialogRef = useModalFocus(true, onClose)
+  const { ref: dialogRef, presenceProps } = useDialogPresence(onClose)
 
   return (
-    <div
+    <m.div {...fade}
       className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center"
       onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}
     >
-      <div ref={dialogRef} role="dialog" aria-modal="true" aria-label="Terminal Settings" tabIndex={-1} className="bg-surface-900 border border-surface-700 rounded-xl p-5 w-80 shadow-2xl flex flex-col gap-4">
+      <m.div {...surface} {...presenceProps} transition={surfaceSpring} ref={dialogRef} role="dialog" aria-modal="true" aria-label="Terminal Settings" tabIndex={-1} className="bg-surface-900 border border-surface-700 rounded-xl p-5 w-80 shadow-2xl flex flex-col gap-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Settings className="w-4 h-4 text-brand-400" />
@@ -75,7 +77,7 @@ export default function SettingsDialog({ onClose }: SettingsDialogProps) {
         >
           Close
         </button>
-      </div>
-    </div>
+      </m.div>
+    </m.div>
   )
 }

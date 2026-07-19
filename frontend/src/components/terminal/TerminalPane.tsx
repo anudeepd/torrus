@@ -3,7 +3,10 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { SearchAddon } from '@xterm/addon-search'
-import { ChevronDown, ChevronUp, X } from 'lucide-react'
+import { ChevronDown, ChevronUp, LoaderCircle, X } from 'lucide-react'
+import { AnimatePresence } from 'motion/react'
+import * as m from 'motion/react-m'
+import { anchoredSurface, exitTransition, fade, surfaceSpring, surfaceTransition } from '@/motion/tokens'
 import '@xterm/xterm/css/xterm.css'
 import type { Socket } from 'socket.io-client'
 import type { ConnectFormValues } from '@/types'
@@ -694,6 +697,7 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
   }, [socket, sessionId, tabId, setTabStatus, setTabConnection])
 
   const showForm = !tab || tab.status === 'disconnected' || tab.status === 'dead'
+  const isConnecting = tab?.status === 'connecting'
 
   return (
     <div className="relative w-full h-full">
@@ -704,8 +708,33 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
         style={{ display: showForm ? 'none' : 'block' }}
       />
 
+      <AnimatePresence initial={false}>
+        {isConnecting && (
+          <m.div
+            key="connecting"
+            {...fade}
+            transition={surfaceTransition}
+            className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-surface-950/80 backdrop-blur-sm"
+            role="status"
+            aria-live="polite"
+          >
+            <m.div
+              initial={{ opacity: 0, y: 8, scale: 0.98 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: -4, transition: exitTransition }}
+              transition={surfaceSpring}
+              className="flex items-center gap-3 rounded-xl border border-surface-700 bg-surface-900/95 px-5 py-4 text-sm text-slate-300 shadow-2xl"
+            >
+              <LoaderCircle className="h-4 w-4 animate-spin text-brand-400" />
+              <span>Connecting to {tab?.host || 'host'}…</span>
+            </m.div>
+          </m.div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
       {findOpen && (
-        <div className="absolute right-3 top-3 z-20 flex items-center gap-1 rounded-lg border border-surface-700 bg-surface-900/95 p-1.5 shadow-xl backdrop-blur" role="search" aria-label="Find in terminal">
+        <m.div {...anchoredSurface} transition={surfaceSpring} className="absolute right-3 top-3 z-20 flex items-center gap-1 rounded-lg border border-surface-700 bg-surface-900/95 p-1.5 shadow-xl backdrop-blur" role="search" aria-label="Find in terminal">
           <input
             ref={findInputRef}
             value={findQuery}
@@ -735,19 +764,31 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
           <button type="button" onClick={closeFind} title="Close find" aria-label="Close find" className="rounded p-1 text-slate-400 hover:bg-surface-800 hover:text-slate-200">
             <X className="h-3.5 w-3.5" />
           </button>
-        </div>
+        </m.div>
       )}
+      </AnimatePresence>
 
       {/* Connection form overlay */}
-      {showForm && (
-        <ConnectForm
-          initialHost={tab?.host ?? undefined}
-          initialPort={tab?.port ?? undefined}
-          initialUsername={tab?.username ?? undefined}
-          error={tab?.status === 'dead' ? (connectionError || 'Connection closed.') : undefined}
-          onConnect={handleConnect}
-        />
-      )}
+      <AnimatePresence initial={false}>
+        {showForm && (
+          <m.div
+            key="connection-form"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0, transition: exitTransition }}
+            transition={surfaceTransition}
+            className="absolute inset-0 z-10"
+          >
+            <ConnectForm
+              initialHost={tab?.host ?? undefined}
+              initialPort={tab?.port ?? undefined}
+              initialUsername={tab?.username ?? undefined}
+              error={tab?.status === 'dead' ? (connectionError || 'Connection closed.') : undefined}
+              onConnect={handleConnect}
+            />
+          </m.div>
+        )}
+      </AnimatePresence>
     </div>
   )
 }
