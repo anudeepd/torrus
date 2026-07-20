@@ -284,7 +284,10 @@ export function useSFTP(tabId: string, sourceTabId: string | undefined, socket: 
     const onListing = (payload: ListingPayload) => {
       if (payload.tab_id !== tabId) return
       const requestedPath = pendingListingPathRef.current
-      if (requestedPath !== null && payload.path !== undefined && payload.path !== requestedPath) return
+      if (
+        requestedPath !== null && payload.path !== undefined && payload.path !== requestedPath
+        && requestedPath.startsWith('/') && !requestedPath.startsWith('~/')
+      ) return
       if (payload.ok === false) {
         pendingListingPathRef.current = null
         setError(tabId, payload.message ?? payload.code ?? 'Unable to list directory.')
