@@ -117,7 +117,7 @@ export default function ConnectForm({
             )}
           </AnimatePresence>
 
-          <Button type="submit" variant="primary" size="lg" className="w-full mt-1">
+          <Button type="submit" variant="primary" size="md" className="w-full mt-1">
             Connect
           </Button>
         </form>

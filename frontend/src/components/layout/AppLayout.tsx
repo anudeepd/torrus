@@ -522,7 +522,7 @@ export default function AppLayout() {
             tabs.map(tab => (
               <div
                 key={tab.id}
-                className="absolute inset-0"
+                className={`absolute inset-0 motion-safe:animate-[torrus-tab-content-in_var(--motion-duration-surface)_var(--motion-ease-move)]`}
                 style={{ display: tab.id === activeTabId ? 'flex' : 'none', flexDirection: 'column' }}
               >
                 {tab.type === 'sftp' ? (

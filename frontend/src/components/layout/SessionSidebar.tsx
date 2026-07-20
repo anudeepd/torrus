@@ -312,31 +312,13 @@ export default function SessionSidebar({ isOpen, compact, onToggle, onLoadSessio
 
   const selected = servers.find(s => s.id === selectedId)
 
-  // ── Collapsed state ──────────────────────────────────────────────────────────
-  if (!isOpen) {
-    if (compact) return null
-    return (
-      <m.div
-        initial={{ width: sidebarWidth, opacity: 1 }}
-        animate={{ width: 32, opacity: 1 }}
-        transition={spatialTransition}
-        className="flex-shrink-0 overflow-hidden flex flex-col items-center bg-surface-900 border-r border-surface-800 select-none"
-      >
-        <button
-          onClick={onToggle}
-          title="Show sessions"
-          className="w-8 h-9 flex-shrink-0 flex items-center justify-center text-slate-500 hover:text-slate-300 hover:bg-surface-800 transition-colors border-b border-surface-800"
-        >
-          <PanelLeftOpen className="w-4 h-4" />
-        </button>
-      </m.div>
-    )
-  }
+  // ── Compact collapsed ────────────────────────────────────────────────────────
+  if (!isOpen && compact) return null
 
-  // ── Full sidebar ─────────────────────────────────────────────────────────────
-  return (
-    <>
-      {compact && (
+  // ── Compact full (overlay) ──────────────────────────────────────────────────
+  if (compact) {
+    return (
+      <>
         <m.button
           type="button"
           aria-label="Close sessions drawer"
@@ -347,221 +329,192 @@ export default function SessionSidebar({ isOpen, compact, onToggle, onLoadSessio
           onClick={onToggle}
           className="fixed inset-0 z-30 bg-black/60 backdrop-blur-[1px]"
         />
-      )}
-      <m.div
-        initial={compact ? { x: -Math.min(288, window.innerWidth - 48), opacity: 0 } : { width: 32, opacity: 1 }}
-        animate={compact ? { x: 0, opacity: 1 } : { width: sidebarWidth, opacity: 1 }}
-        exit={compact ? { x: -Math.min(288, window.innerWidth - 48), opacity: 0 } : undefined}
-        transition={isResizing ? { duration: 0 } : spatialTransition}
-        style={compact ? { width: Math.min(288, window.innerWidth - 48) } : undefined}
-        className={clsx(
-          'flex min-h-0 flex-shrink-0 overflow-hidden border-r border-surface-800',
-          compact ? 'fixed inset-y-0 left-0 z-40 shadow-2xl' : 'relative'
-        )}
-      >
-        <div className="flex-1 min-w-0 flex flex-col bg-surface-900 select-none">
-          {/* Header */}
-          <div className="px-3 py-2 border-b border-surface-800 flex items-center gap-2">
-            <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider flex-1">Sessions</span>
-            <button
-              onClick={onToggle}
-              title="Hide sessions"
-              className="text-slate-600 hover:text-slate-400 transition-colors p-0.5"
-            >
-              <PanelLeftClose className="w-3.5 h-3.5" />
-            </button>
-          </div>
-
-          {/* Session list */}
-          <div className="flex-1 overflow-y-auto py-1 relative">
-
-            {/* Watermark */}
-            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-              <svg
-                viewBox="0 0 128 128"
-                xmlns="http://www.w3.org/2000/svg"
-                className="w-28 h-28 opacity-[0.04]"
-              >
-                <circle cx="64" cy="64" r="54" fill="none" stroke="#16a34a" strokeWidth="3.6" />
-                <circle cx="64" cy="64" r="38" fill="none" stroke="#0d9488" strokeWidth="3.2" />
-                <circle cx="64" cy="64" r="22" fill="none" stroke="#10b981" strokeWidth="2.8" />
-                <polyline fill="none" stroke="#0d9488" strokeWidth="3.2" strokeLinecap="round" strokeLinejoin="round"
-                  points="52,56 64,64 52,72" />
-                <rect x="70" y="58" width="8" height="12" rx="1.5" fill="#10b981" />
-              </svg>
-            </div>
-            {servers.length === 0 ? (
-              <p className="px-3 py-4 text-xs text-slate-600 text-center leading-relaxed">
-                No saved sessions.<br />
-                Connect and click the bookmark icon to save one.
-              </p>
-            ) : (
-              servers.map(server => (
-                <div
-                  key={server.id}
-                  onClick={() => setSelectedId(server.id)}
-                  onDoubleClick={() => { setSelectedId(server.id); onLoadSession(server) }}
-                  onContextMenu={(e) => {
-                    e.preventDefault()
-                    setSelectedId(server.id)
-                    setContextMenu({ serverId: server.id, x: e.clientX, y: e.clientY })
-                  }}
-                  className={clsx(
-                    'group flex flex-col px-3 py-2 cursor-pointer transition-colors border-l-2',
-                    selectedId === server.id
-                      ? 'bg-surface-800 border-l-brand-500'
-                      : 'border-l-transparent hover:bg-surface-800/50'
-                  )}
-                >
-                  <div className="flex items-center gap-1.5 min-w-0">
-                    <span className={clsx('w-1.5 h-1.5 rounded-full flex-shrink-0', {
-                      'bg-green-400': isActive(server),
-                      'bg-slate-600': !isActive(server),
-                    })} />
-                    <span className="text-xs font-medium text-slate-200 truncate flex-1">
-                      {server.name}
-                    </span>
-                  </div>
-                  <span className="text-xs text-slate-500 truncate pl-3 mt-0.5">
-                    {server.username}@{server.host}{server.port !== 22 ? `:${server.port}` : ''}
-                  </span>
-                </div>
-              ))
-            )}
-          </div>
-
-          {/* Action buttons */}
-          <div className="flex flex-col gap-2 px-3 py-3 border-t border-surface-800">
-            <div className="flex gap-1.5">
-              <button
-                onClick={handleOpen}
-                disabled={!selected}
-                className={clsx(
-                  'flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 rounded text-xs font-medium transition-colors',
-                  selected
-                    ? 'bg-brand-600 hover:bg-brand-500 text-white'
-                    : 'bg-surface-800 text-slate-600 cursor-not-allowed'
-                )}
-              >
-                <LogIn className="w-3 h-3" />
-                Open
-              </button>
-              <button
-                onClick={() => { if (selected) setEditingServer(selected) }}
-                disabled={!selected}
-                className={clsx(
-                  'flex items-center justify-center px-2 py-1.5 rounded text-xs transition-colors',
-                  selected
-                    ? 'bg-surface-800 hover:bg-surface-700 text-slate-400 hover:text-slate-200'
-                    : 'bg-surface-800 text-slate-700 cursor-not-allowed'
-                )}
-                title="Edit session"
-              >
-                <Pencil className="w-3.5 h-3.5" />
-              </button>
-              <button
-                onClick={handleDelete}
-                disabled={!selected}
-                className={clsx(
-                  'flex items-center justify-center px-2 py-1.5 rounded text-xs transition-colors',
-                  selected
-                    ? 'bg-surface-800 hover:bg-red-900/40 text-slate-400 hover:text-red-400'
-                    : 'bg-surface-800 text-slate-700 cursor-not-allowed'
-                )}
-                title="Delete session"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-              </button>
-            </div>
-
-            <div className="flex gap-1.5">
-              <button
-                onClick={handleExport}
-                disabled={servers.length === 0}
-                className={clsx(
-                  'flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 rounded text-xs font-medium border transition-colors',
-                  servers.length > 0
-                    ? 'border-surface-700 text-slate-400 hover:text-slate-200 hover:border-surface-600 hover:bg-surface-800'
-                    : 'border-surface-800 text-slate-700 cursor-not-allowed'
-                )}
-              >
-                <Download className="w-3 h-3" />
-                Export
-              </button>
-              <button
-                onClick={() => { setImportError(''); fileInputRef.current?.click() }}
-                className="flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 rounded text-xs font-medium border border-surface-700 text-slate-400 hover:text-slate-200 hover:border-surface-600 hover:bg-surface-800 transition-colors"
-              >
-                <Upload className="w-3 h-3" />
-                Import
-              </button>
-              <input ref={fileInputRef} type="file" accept=".json" className="hidden" onChange={handleImport} />
-            </div>
-
-            {importError && <p className="text-xs text-red-400 text-center leading-tight">{importError}</p>}
-            {importSuccess && <p className="text-xs text-green-400 text-center">Sessions imported.</p>}
-          </div>
-        </div>
-        {!compact && <div
-          onMouseDown={handleResizeMouseDown}
-          title="Resize sessions sidebar"
-          role="separator"
-          aria-label="Resize sessions sidebar"
-          aria-orientation="vertical"
-          className="group absolute inset-y-0 right-0 z-10 w-2 translate-x-1/2 cursor-col-resize"
+        <m.div
+          initial={{ x: -Math.min(288, window.innerWidth - 48), opacity: 0 }}
+          animate={{ x: 0, opacity: 1 }}
+          exit={{ x: -Math.min(288, window.innerWidth - 48), opacity: 0 }}
+          transition={spatialTransition}
+          style={{ width: Math.min(288, window.innerWidth - 48) }}
+          className="flex min-h-0 flex-shrink-0 overflow-hidden border-r border-surface-800 fixed inset-y-0 left-0 z-40 shadow-2xl"
         >
-          <div className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-transparent transition-colors group-hover:bg-brand-500" />
-        </div>}
-      </m.div>
+          <SidebarInner onToggle={onToggle} servers={servers} selectedId={selectedId} setSelectedId={setSelectedId} selected={selected} isActive={isActive} handleOpen={handleOpen} handleDelete={handleDelete} handleExport={handleExport} handleImport={handleImport} setEditingServer={setEditingServer} setImportError={setImportError} importError={importError} importSuccess={importSuccess} fileInputRef={fileInputRef} contextMenu={contextMenu} setContextMenu={setContextMenu} contextMenuRef={contextMenuRef} onLoadSession={onLoadSession} removeServer={removeServer} />
+        </m.div>
+        <AnimatePresence>
+        {contextMenu && (() => {
+          const server = servers.find(s => s.id === contextMenu.serverId)
+          if (!server) return null
+          return (
+            <m.div key="ctx" {...anchoredSurface} transition={exitTransition}
+              ref={contextMenuRef}
+              className="fixed z-50 bg-surface-800 border border-surface-700 rounded-lg shadow-xl py-1 min-w-40"
+              style={{ left: contextMenu.x, top: contextMenu.y }}
+            >
+              <button className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-300 hover:bg-surface-700 transition-colors" onClick={() => { setContextMenu(null); onLoadSession(server) }}><LogIn className="w-3 h-3" /> Open</button>
+              <button className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-300 hover:bg-surface-700 transition-colors" onClick={() => { setContextMenu(null); setEditingServer(server) }}><Pencil className="w-3 h-3" /> Edit</button>
+              <div className="my-1 border-t border-surface-700" />
+              <button className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-red-400 hover:bg-surface-700 transition-colors" onClick={() => { setContextMenu(null); removeServer(server.id); setSelectedId(null) }}><Trash2 className="w-3 h-3" /> Delete</button>
+            </m.div>
+          )
+        })()}
+        </AnimatePresence>
+        <AnimatePresence>
+        {editingServer && <EditModal key="edit" server={editingServer} onSave={(updates) => updateServer(editingServer.id, updates)} onClose={() => setEditingServer(null)} />}
+        </AnimatePresence>
+      </>
+    )
+  }
 
-      {/* Right-click context menu */}
+  // ── Desktop — single animated div (collapsed ↔ full) ────────────────────────
+  return (
+    <>
+      <m.div
+        initial={{ width: sidebarWidth, opacity: 1 }}
+        animate={{ width: isOpen ? sidebarWidth : 32, opacity: 1 }}
+        transition={isResizing ? { duration: 0 } : spatialTransition}
+        className="flex-shrink-0 overflow-hidden flex flex-col bg-surface-900 border-r border-surface-800 select-none relative"
+      >
+        {isOpen ? (
+          <SidebarInner onToggle={onToggle} servers={servers} selectedId={selectedId} setSelectedId={setSelectedId} selected={selected} isActive={isActive} handleOpen={handleOpen} handleDelete={handleDelete} handleExport={handleExport} handleImport={handleImport} setEditingServer={setEditingServer} setImportError={setImportError} importError={importError} importSuccess={importSuccess} fileInputRef={fileInputRef} contextMenu={contextMenu} setContextMenu={setContextMenu} contextMenuRef={contextMenuRef} onLoadSession={onLoadSession} removeServer={removeServer} />
+        ) : (
+          <button
+            onClick={onToggle}
+            title="Show sessions"
+            className="w-8 h-9 flex-shrink-0 flex items-center justify-center text-slate-500 hover:text-slate-300 hover:bg-surface-800 transition-colors border-b border-surface-800"
+          >
+            <PanelLeftOpen className="w-4 h-4" />
+          </button>
+        )}
+      </m.div>
+      {!isOpen && <div
+        onMouseDown={handleResizeMouseDown}
+        title="Resize sessions sidebar"
+        role="separator"
+        aria-label="Resize sessions sidebar"
+        aria-orientation="vertical"
+        className="group absolute inset-y-0 right-0 z-10 w-2 translate-x-1/2 cursor-col-resize"
+      >
+        <div className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-transparent transition-colors group-hover:bg-brand-500" />
+      </div>}
       <AnimatePresence>
       {contextMenu && (() => {
         const server = servers.find(s => s.id === contextMenu.serverId)
         if (!server) return null
         return (
-          <m.div {...anchoredSurface} transition={exitTransition}
+          <m.div key="ctx" {...anchoredSurface} transition={exitTransition}
             ref={contextMenuRef}
             className="fixed z-50 bg-surface-800 border border-surface-700 rounded-lg shadow-xl py-1 min-w-40"
             style={{ left: contextMenu.x, top: contextMenu.y }}
           >
-            <button
-              className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-300 hover:bg-surface-700 transition-colors"
-              onClick={() => { setContextMenu(null); onLoadSession(server) }}
-            >
-              <LogIn className="w-3 h-3" />
-              Open
-            </button>
-            <button
-              className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-300 hover:bg-surface-700 transition-colors"
-              onClick={() => { setContextMenu(null); setEditingServer(server) }}
-            >
-              <Pencil className="w-3 h-3" />
-              Edit
-            </button>
+            <button className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-300 hover:bg-surface-700 transition-colors" onClick={() => { setContextMenu(null); onLoadSession(server) }}><LogIn className="w-3 h-3" /> Open</button>
+            <button className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-300 hover:bg-surface-700 transition-colors" onClick={() => { setContextMenu(null); setEditingServer(server) }}><Pencil className="w-3 h-3" /> Edit</button>
             <div className="my-1 border-t border-surface-700" />
-            <button
-              className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-red-400 hover:bg-surface-700 transition-colors"
-              onClick={() => { setContextMenu(null); removeServer(server.id); setSelectedId(null) }}
-            >
-              <Trash2 className="w-3 h-3" />
-              Delete
-            </button>
+            <button className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-red-400 hover:bg-surface-700 transition-colors" onClick={() => { setContextMenu(null); removeServer(server.id); setSelectedId(null) }}><Trash2 className="w-3 h-3" /> Delete</button>
           </m.div>
         )
       })()}
       </AnimatePresence>
-
-      {/* Edit modal */}
       <AnimatePresence>
-      {editingServer && (
-        <EditModal
-          server={editingServer}
-          onSave={(updates) => updateServer(editingServer.id, updates)}
-          onClose={() => setEditingServer(null)}
-        />
-      )}
+      {editingServer && <EditModal key="edit" server={editingServer} onSave={(updates) => updateServer(editingServer.id, updates)} onClose={() => setEditingServer(null)} />}
       </AnimatePresence>
     </>
+  )
+}
+
+// ── Sidebar inner content (shared between desktop and compact) ────────────────
+
+interface SidebarInnerProps {
+  onToggle: () => void
+  servers: SavedServer[]
+  selectedId: string | null
+  setSelectedId: (id: string | null) => void
+  selected: SavedServer | undefined
+  isActive: (server: SavedServer) => boolean
+  handleOpen: () => void
+  handleDelete: () => void
+  handleExport: () => void
+  handleImport: (e: React.ChangeEvent<HTMLInputElement>) => void
+  setEditingServer: (s: SavedServer | null) => void
+  setImportError: (s: string) => void
+  importError: string
+  importSuccess: boolean
+  fileInputRef: React.RefObject<HTMLInputElement>
+  contextMenu: ContextMenuState | null
+  setContextMenu: (s: ContextMenuState | null) => void
+  contextMenuRef: React.RefObject<HTMLDivElement>
+  onLoadSession: (server: SavedServer) => void
+  removeServer: (id: string) => void
+}
+
+function SidebarInner({ onToggle, servers, selectedId, setSelectedId, selected, isActive, handleOpen, handleDelete, handleExport, handleImport, setEditingServer, setImportError, importError, importSuccess, fileInputRef, onLoadSession }: SidebarInnerProps) {
+  return (
+    <div className="flex-1 min-w-0 flex flex-col bg-surface-900 select-none">
+      {/* Header */}
+      <div className="px-3 py-2 border-b border-surface-800 flex items-center gap-2">
+        <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider flex-1">Sessions</span>
+        <button onClick={onToggle} title="Hide sessions" className="text-slate-600 hover:text-slate-400 transition-colors p-0.5">
+          <PanelLeftClose className="w-3.5 h-3.5" />
+        </button>
+      </div>
+
+      {/* Session list */}
+      <div className="flex-1 overflow-y-auto py-1 relative">
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+          <svg viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg" className="w-28 h-28 opacity-[0.04]">
+            <circle cx="64" cy="64" r="54" fill="none" stroke="#16a34a" strokeWidth="3.6" />
+            <circle cx="64" cy="64" r="38" fill="none" stroke="#0d9488" strokeWidth="3.2" />
+            <circle cx="64" cy="64" r="22" fill="none" stroke="#10b981" strokeWidth="2.8" />
+            <polyline fill="none" stroke="#0d9488" strokeWidth="3.2" strokeLinecap="round" strokeLinejoin="round" points="52,56 64,64 52,72" />
+            <rect x="70" y="58" width="8" height="12" rx="1.5" fill="#10b981" />
+          </svg>
+        </div>
+        {servers.length === 0 ? (
+          <p className="px-3 py-4 text-xs text-slate-600 text-center leading-relaxed">No saved sessions.<br />Connect and click the bookmark icon to save one.</p>
+        ) : (
+          servers.map(server => (
+            <div
+              key={server.id}
+              onClick={() => setSelectedId(server.id)}
+              onDoubleClick={() => { setSelectedId(server.id); onLoadSession(server) }}
+              className={clsx(
+                'group flex flex-col px-3 py-2 cursor-pointer transition-colors border-l-2',
+                selectedId === server.id ? 'bg-surface-800 border-l-brand-500' : 'border-l-transparent hover:bg-surface-800/50'
+              )}
+            >
+              <div className="flex items-center gap-1.5 min-w-0">
+                <span className={clsx('w-1.5 h-1.5 rounded-full flex-shrink-0', { 'bg-green-400': isActive(server), 'bg-slate-600': !isActive(server) })} />
+                <span className="text-xs font-medium text-slate-200 truncate flex-1">{server.name}</span>
+              </div>
+              <span className="text-xs text-slate-500 truncate pl-3 mt-0.5">{server.username}@{server.host}{server.port !== 22 ? `:${server.port}` : ''}</span>
+            </div>
+          ))
+        )}
+      </div>
+
+      {/* Action buttons */}
+      <div className="flex flex-col gap-2 px-3 py-3 border-t border-surface-800">
+        <div className="flex gap-1.5">
+          <button onClick={handleOpen} disabled={!selected} className={clsx('flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 rounded text-xs font-medium transition-colors', selected ? 'bg-brand-600 hover:bg-brand-500 text-white' : 'bg-surface-800 text-slate-600 cursor-not-allowed')}>
+            <LogIn className="w-3 h-3" /> Open
+          </button>
+          <button onClick={() => { if (selected) setEditingServer(selected) }} disabled={!selected} className={clsx('flex items-center justify-center px-2 py-1.5 rounded text-xs transition-colors', selected ? 'bg-surface-800 hover:bg-surface-700 text-slate-400 hover:text-slate-200' : 'bg-surface-800 text-slate-700 cursor-not-allowed')} title="Edit session">
+            <Pencil className="w-3.5 h-3.5" />
+          </button>
+          <button onClick={handleDelete} disabled={!selected} className={clsx('flex items-center justify-center px-2 py-1.5 rounded text-xs transition-colors', selected ? 'bg-surface-800 hover:bg-red-900/40 text-slate-400 hover:text-red-400' : 'bg-surface-800 text-slate-700 cursor-not-allowed')} title="Delete session">
+            <Trash2 className="w-3.5 h-3.5" />
+          </button>
+        </div>
+        <div className="flex gap-1.5">
+          <button onClick={handleExport} disabled={servers.length === 0} className={clsx('flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 rounded text-xs font-medium border transition-colors', servers.length > 0 ? 'border-surface-700 text-slate-400 hover:text-slate-200 hover:border-surface-600 hover:bg-surface-800' : 'border-surface-800 text-slate-700 cursor-not-allowed')}>
+            <Download className="w-3 h-3" /> Export
+          </button>
+          <button onClick={() => { setImportError(''); fileInputRef.current?.click() }} className="flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 rounded text-xs font-medium border border-surface-700 text-slate-400 hover:text-slate-200 hover:border-surface-600 hover:bg-surface-800 transition-colors">
+            <Upload className="w-3 h-3" /> Import
+          </button>
+          <input ref={fileInputRef} type="file" accept=".json" className="hidden" onChange={handleImport} />
+        </div>
+        {importError && <p className="text-xs text-red-400 text-center leading-tight">{importError}</p>}
+        {importSuccess && <p className="text-xs text-green-400 text-center">Sessions imported.</p>}
+      </div>
+    </div>
   )
 }
