@@ -226,6 +226,18 @@ describe('useSFTP', () => {
     expect(useSFTPStore.getState().tabs[tabId]?.path).toBe('/newer')
   })
 
+  it('accepts server-normalized paths that differ only by trailing slash or dots', () => {
+    const socket = createMockSocket()
+    const { result } = renderHook(() => useSFTP(tabId, 'terminal-tab', socket as unknown as Socket))
+
+    act(() => result.current.list('/foo/bar/'))
+    expect(useSFTPStore.getState().tabs[tabId]?.loading).toBe(true)
+
+    act(() => socket._trigger('sftp:list:result', { tab_id: tabId, ok: true, path: '/foo/bar', entries: [{ name: 'file.txt', path: '/foo/bar/file.txt', type: 'file', size: 1, mode: 0, mtime: 0 }] }))
+    expect(useSFTPStore.getState().tabs[tabId]?.path).toBe('/foo/bar')
+    expect(useSFTPStore.getState().tabs[tabId]?.loading).toBe(false)
+  })
+
   it('coalesces concurrent refreshes of the same path into one queued request', () => {
     const socket = createMockSocket()
     const { result } = renderHook(() => useSFTP(tabId, 'terminal-tab', socket as unknown as Socket))

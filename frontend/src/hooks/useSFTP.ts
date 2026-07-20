@@ -68,6 +68,26 @@ function parentPath(path: string): string {
   return clean.slice(0, idx)
 }
 
+function normalizePath(path: string): string {
+  if (!path) return '.'
+  if (path === '/') return '/'
+  const isAbsolute = path.startsWith('/')
+  const parts = path.split('/').filter(part => part !== '' && part !== '.')
+  const resolved: string[] = []
+  for (const part of parts) {
+    if (part === '..') {
+      if (resolved.length > 0) resolved.pop()
+    } else {
+      resolved.push(part)
+    }
+  }
+  const joined = resolved.join('/')
+  if (isAbsolute) {
+    return joined ? '/' + joined : '/'
+  }
+  return joined || '.'
+}
+
 function itemLabel(path?: string): string {
   if (!path) return 'item'
   const parts = path.split('/').filter(Boolean)
@@ -186,11 +206,12 @@ export function useSFTP(tabId: string, sourceTabId: string | undefined, socket: 
 
   const list = useCallback((path?: string) => {
     const targetPath = path ?? useSFTPStore.getState().tabs[tabId]?.path ?? '.'
-    if (pendingListingPathRef.current === targetPath) {
+    const normalized = normalizePath(targetPath)
+    if (pendingListingPathRef.current === normalized) {
       queuedSamePathRefreshRef.current = true
       return
     }
-    pendingListingPathRef.current = targetPath
+    pendingListingPathRef.current = normalized
     queuedSamePathRefreshRef.current = false
     ensureTab(tabId)
     setLoading(tabId, true)
@@ -284,8 +305,9 @@ export function useSFTP(tabId: string, sourceTabId: string | undefined, socket: 
     const onListing = (payload: ListingPayload) => {
       if (payload.tab_id !== tabId) return
       const requestedPath = pendingListingPathRef.current
+      const responsePath = payload.path === undefined ? undefined : normalizePath(payload.path)
       if (
-        requestedPath !== null && payload.path !== undefined && payload.path !== requestedPath
+        requestedPath !== null && responsePath !== undefined && responsePath !== requestedPath
         && requestedPath.startsWith('/') && !requestedPath.startsWith('~/')
       ) return
       if (payload.ok === false) {
