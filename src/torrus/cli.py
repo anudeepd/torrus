@@ -30,9 +30,7 @@ def main():
               help="SSL certificate file for HTTPS")
 @click.option("--log-file", type=click.Path(dir_okay=False, path_type=Path), default=None,
               help="Append application logs to this file.")
-@click.option("--known-hosts", type=click.Path(dir_okay=False, path_type=Path), default=None,
-              help="SSH known-hosts file for TOFU host-key verification.")
-def serve(host, port, no_browser, reload, ldap_config, ssl_keyfile, ssl_certfile, log_file, known_hosts):
+def serve(host, port, no_browser, reload, ldap_config, ssl_keyfile, ssl_certfile, log_file):
     """Start the torrus SSH web terminal."""
     if ldap_config:
         os.environ["TORRUS_LDAP_CONFIG"] = ldap_config
@@ -41,9 +39,6 @@ def serve(host, port, no_browser, reload, ldap_config, ssl_keyfile, ssl_certfile
     configure_logging(log_file)
     if log_file:
         os.environ["TORRUS_LOG_FILE"] = str(log_file)
-    if known_hosts:
-        os.environ["TORRUS_KNOWN_HOSTS"] = str(known_hosts)
-
     use_ssl = ssl_keyfile and ssl_certfile
     if not no_browser:
         browse_host = "127.0.0.1" if host == "0.0.0.0" else host

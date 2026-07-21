@@ -7,7 +7,6 @@ import concurrent.futures
 import logging
 import shlex
 import socket
-import threading
 import time
 import os
 from dataclasses import dataclass, field
@@ -25,31 +24,22 @@ CLEANUP_INTERVAL = 300         # 5 minutes
 CHANNEL_READ_TIMEOUT = 0.1     # seconds — blocking read timeout to avoid busy-wait
 
 
-class HostKeyConfirmation:
-    """Pending user decision for a previously unknown SSH host key."""
-
-    def __init__(self, hostname: str, key: paramiko.PKey):
-        self.hostname = hostname
-        self.key = key
-        self.fingerprint = key.get_fingerprint().hex(":")
-        self.accepted: bool | None = None
-        self.event = threading.Event()
-
-
 class _WarnThenAddPolicy(paramiko.MissingHostKeyPolicy):
-    """Require explicit Socket.IO confirmation before trusting new host key."""
+    """Warn on first encounter, then add the host key to known_hosts."""
 
-    def __init__(self, known_hosts: paramiko.HostKeys | None, request_confirmation):
+    def __init__(self, known_hosts: paramiko.HostKeys | None = None):
         self._known_hosts = known_hosts
-        self._request_confirmation = request_confirmation
 
     def missing_host_key(self, client, hostname, key):
-        pending = HostKeyConfirmation(hostname, key)
-        if not self._request_confirmation(pending):
-            raise paramiko.SSHException("Host key confirmation rejected or timed out")
-        if self._known_hosts is not None and pending.accepted:
+        fingerprint = key.get_fingerprint().hex(":")
+        if self._known_hosts is not None:
             self._known_hosts.add(hostname, key.get_name(), key)
-            logger.info("Added confirmed host key for %s (%s): %s", hostname, key.get_name(), pending.fingerprint)
+        logger.warning(
+            "Adding new host key for %s (%s): %s",
+            hostname,
+            key.get_name(),
+            fingerprint,
+        )
 
 
 @dataclass
@@ -81,7 +71,6 @@ class SSHManager:
         self,
         sio,
         on_disconnect: Callable[[str], Awaitable[None]] | None = None,
-        known_hosts_path: str | None = None,
         max_workers: int | None = None,
     ):
         self.sio = sio
@@ -99,54 +88,6 @@ class SSHManager:
         self._ssh_executor = concurrent.futures.ThreadPoolExecutor(
             max_workers=workers, thread_name_prefix="ssh"
         )
-        self._known_hosts_path = known_hosts_path
-        self._known_hosts = paramiko.HostKeys()
-        if known_hosts_path:
-            try:
-                self._known_hosts.load(known_hosts_path)
-            except IOError:
-                logger.info("Known-hosts file does not exist yet: %s", known_hosts_path)
-        self._pending_host_keys: dict[tuple[str, str], HostKeyConfirmation] = {}
-        self._pending_host_keys_lock = threading.Lock()
-        self._loop: asyncio.AbstractEventLoop | None = None
-
-    def confirm_host_key(self, sid: str, tab_id: str, fingerprint: str, accepted: bool) -> bool:
-        """Resolve pending TOFU decision if fingerprint matches emitted prompt."""
-        with self._pending_host_keys_lock:
-            pending = self._pending_host_keys.get((sid, tab_id))
-            if pending is None or pending.fingerprint != fingerprint:
-                return False
-            pending.accepted = accepted
-            pending.event.set()
-            return True
-
-    def _request_host_key_confirmation(self, sid: str, tab_id: str, pending: HostKeyConfirmation) -> bool:
-        key = (sid, tab_id)
-        with self._pending_host_keys_lock:
-            self._pending_host_keys[key] = pending
-        try:
-            if self._loop is None:
-                return False
-            future = asyncio.run_coroutine_threadsafe(
-                self.sio.emit(
-                    "ssh:hostkey",
-                    {
-                        "tab_id": tab_id,
-                        "hostname": pending.hostname,
-                        "key_type": pending.key.get_name(),
-                        "fingerprint": pending.fingerprint,
-                        "message": "Verify this fingerprint before trusting host key.",
-                    },
-                    to=sid,
-                ),
-                self._loop,
-            )
-            future.result(timeout=5)
-            pending.event.wait(timeout=60)
-            return pending.accepted is True
-        finally:
-            with self._pending_host_keys_lock:
-                self._pending_host_keys.pop(key, None)
 
     def start_background_tasks(self):
         self._tasks.append(asyncio.create_task(self._keepalive_loop()))
@@ -207,14 +148,7 @@ class SSHManager:
         connection_succeeded = False
         try:
             client = paramiko.SSHClient()
-            client._host_keys = self._known_hosts
-            client.set_missing_host_key_policy(
-                _WarnThenAddPolicy(
-                    self._known_hosts,
-                    lambda pending: self._request_host_key_confirmation(sid, tab_id, pending),
-                )
-            )
-            self._loop = asyncio.get_running_loop()
+            client.set_missing_host_key_policy(_WarnThenAddPolicy())
 
             loop = asyncio.get_running_loop()
             target = f"{username}@{host}:{port}"
@@ -324,11 +258,6 @@ class SSHManager:
                     client.close()
                 except Exception:
                     pass
-            if connection_succeeded and self._known_hosts_path:
-                try:
-                    self._known_hosts.save(self._known_hosts_path)
-                except OSError:
-                    logger.warning("Could not save known-hosts file", exc_info=True)
 
     async def restore_session(self, sid: str, session_id: str, tab_id: str) -> str:
         """Re-attach a socket to an existing SSH session. Returns 'active' or 'dead'."""

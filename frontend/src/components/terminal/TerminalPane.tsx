@@ -654,19 +654,6 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
     socket.on('ssh:error', onError)
     socket.on('ssh:closed', onClosed)
 
-    const onHostKey = (event: { tab_id?: string; hostname?: string; fingerprint?: string }) => {
-      if (event.tab_id !== tabId || !event.fingerprint) return
-      const accepted = window.confirm(
-        `Verify SSH host key for ${event.hostname ?? 'remote host'}:\n\n${event.fingerprint}\n\nTrust this key?`,
-      )
-      socket.emit('ssh:hostkey:confirm', {
-        tab_id: event.tab_id,
-        fingerprint: event.fingerprint,
-        accepted,
-      })
-    }
-    socket.on('ssh:hostkey', onHostKey)
-
     return () => {
       mounted = false
       if (suppressInputTimerRef.current) {
@@ -677,7 +664,6 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
       socket.off('ssh:connected', onConnected)
       socket.off('ssh:error', onError)
       socket.off('ssh:closed', onClosed)
-      socket.off('ssh:hostkey', onHostKey)
     }
   }, [socket, tabId, setTabStatus, fitAndEmitResize, suppressRestoreInputBriefly])
 

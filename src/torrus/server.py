@@ -161,7 +161,6 @@ sftp_manager = SFTPManager(max_workers=max(16, min(64, (os.cpu_count() or 4) * 4
 ssh_manager = SSHManager(
     sio,
     on_disconnect=sftp_manager.on_ssh_disconnect,
-    known_hosts_path=os.getenv("TORRUS_KNOWN_HOSTS"),
     max_workers=_IO_WORKERS,
 )
 
@@ -606,17 +605,6 @@ async def _check_rate_limit(sid: str, tab_id: str) -> bool:
     attempts.append(now)
     _connection_attempts[client_ip] = attempts
     return True
-
-
-@sio.on("ssh:hostkey:confirm")
-async def on_hostkey_confirm(sid, data):
-    tab_id = data.get("tab_id", "")
-    fingerprint = data.get("fingerprint", "")
-    accepted = data.get("accepted") is True
-    if not isinstance(tab_id, str) or not isinstance(fingerprint, str):
-        return
-    if not ssh_manager.confirm_host_key(sid, tab_id, fingerprint, accepted):
-        logger.warning("Rejected stale or invalid host-key confirmation for sid=%s", sid)
 
 
 @sio.on("ssh:connect")
