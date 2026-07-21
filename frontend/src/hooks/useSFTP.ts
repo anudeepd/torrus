@@ -4,7 +4,9 @@ import { useSFTPStore } from '@/store/sftpStore'
 import { useTerminalStore } from '@/store/terminalStore'
 import type { SFTPEntry, SFTPGroup, SFTPUser } from '@/types'
 
-const LARGE_UPLOAD_THRESHOLD = 25 * 1024 * 1024
+// Keep inline Socket.IO downloads below server memory/message limits. Larger
+// files automatically use streaming HTTP; users do not need to choose a path.
+const LARGE_UPLOAD_THRESHOLD = 5 * 1024 * 1024
 const MIN_UPLOAD_CHUNK_BYTES = 8 * 1024 * 1024
 const MAX_UPLOAD_CHUNK_BYTES = 32 * 1024 * 1024
 const TARGET_UPLOAD_CHUNKS = 128

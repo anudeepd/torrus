@@ -129,6 +129,35 @@ class TestSessionLifecycle:
             await _cleanup_manager(manager)
 
     @pytest.mark.asyncio
+    async def test_clone_opens_shared_transport_channel_and_emits_connected(self, mock_sio, mock_paramiko_client):
+        from torrus.ssh_manager import SSHManager
+
+        manager = SSHManager(mock_sio)
+        manager.start_background_tasks()
+        try:
+            with patch("torrus.ssh_manager.paramiko.SSHClient") as MockClient:
+                MockClient.return_value = mock_paramiko_client
+                await manager.connect("sid-1", "sess1", "tab1", "example.com", 22, "user", "pass")
+                mock_paramiko_client.invoke_shell = MagicMock(return_value=mock_paramiko_client.invoke_shell())
+                await manager.clone("sid-1", "sess1", "tab1", "tab2", 120, 40)
+
+            assert ("sess1", "tab2") in manager._sessions
+            assert manager._sessions[("sess1", "tab2")].client is mock_paramiko_client
+            mock_paramiko_client.invoke_shell.assert_called_once()
+            assert any(call.args[0] == "ssh:connected" for call in mock_sio.emit.await_args_list)
+        finally:
+            await _cleanup_manager(manager)
+
+    @pytest.mark.asyncio
+    async def test_clone_rejects_missing_source(self, mock_sio):
+        from torrus.ssh_manager import SSHManager
+
+        manager = SSHManager(mock_sio)
+        await manager.clone("sid-1", "sess1", "missing", "tab2")
+        assert mock_sio.emit.await_args[0][0] == "ssh:error"
+        assert mock_sio.emit.await_args[0][1]["code"] == "clone_failed"
+
+    @pytest.mark.asyncio
     async def test_sid_session_count(self, mock_sio, mock_paramiko_client):
         from torrus.ssh_manager import SSHManager
 

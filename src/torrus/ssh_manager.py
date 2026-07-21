@@ -7,7 +7,9 @@ import concurrent.futures
 import logging
 import shlex
 import socket
+import threading
 import time
+import os
 from dataclasses import dataclass, field
 from collections.abc import Awaitable, Callable
 from typing import Optional
@@ -23,31 +25,31 @@ CLEANUP_INTERVAL = 300         # 5 minutes
 CHANNEL_READ_TIMEOUT = 0.1     # seconds — blocking read timeout to avoid busy-wait
 
 
+class HostKeyConfirmation:
+    """Pending user decision for a previously unknown SSH host key."""
+
+    def __init__(self, hostname: str, key: paramiko.PKey):
+        self.hostname = hostname
+        self.key = key
+        self.fingerprint = key.get_fingerprint().hex(":")
+        self.accepted: bool | None = None
+        self.event = threading.Event()
+
+
 class _WarnThenAddPolicy(paramiko.MissingHostKeyPolicy):
-    """Warn on first encounter, then add the host key to known_hosts.
+    """Require explicit Socket.IO confirmation before trusting new host key."""
 
-    This is safer than blindly trusting every key (_LoggingHostKeyPolicy) while
-    still allowing the app to work without a pre-seeded known_hosts file. The
-    first connection to a new host is logged; subsequent connections verify the
-    stored key.
-
-    For production hardening, point ``SSHManager`` at a persistent
-    ``known_hosts`` file and use ``paramiko.RejectPolicy`` instead.
-    """
-
-    def __init__(self, known_hosts: paramiko.HostKeys | None = None):
+    def __init__(self, known_hosts: paramiko.HostKeys | None, request_confirmation):
         self._known_hosts = known_hosts
+        self._request_confirmation = request_confirmation
 
     def missing_host_key(self, client, hostname, key):
-        fingerprint = key.get_fingerprint().hex(":")
-        if self._known_hosts is not None:
+        pending = HostKeyConfirmation(hostname, key)
+        if not self._request_confirmation(pending):
+            raise paramiko.SSHException("Host key confirmation rejected or timed out")
+        if self._known_hosts is not None and pending.accepted:
             self._known_hosts.add(hostname, key.get_name(), key)
-        logger.warning(
-            "Adding new host key for %s (%s): %s",
-            hostname,
-            key.get_name(),
-            fingerprint,
-        )
+            logger.info("Added confirmed host key for %s (%s): %s", hostname, key.get_name(), pending.fingerprint)
 
 
 @dataclass
@@ -79,6 +81,8 @@ class SSHManager:
         self,
         sio,
         on_disconnect: Callable[[str], Awaitable[None]] | None = None,
+        known_hosts_path: str | None = None,
+        max_workers: int | None = None,
     ):
         self.sio = sio
         self._on_disconnect = on_disconnect
@@ -91,9 +95,58 @@ class SSHManager:
         # Prevent concurrent connect() calls for the same (session_id, tab_id)
         self._pending_keys: set[tuple[str, str]] = set()
         # Dedicated thread pool for SSH blocking I/O — isolates from default executor
+        workers = max_workers or max(32, min(128, (os.cpu_count() or 4) * 8))
         self._ssh_executor = concurrent.futures.ThreadPoolExecutor(
-            max_workers=20, thread_name_prefix="ssh"
+            max_workers=workers, thread_name_prefix="ssh"
         )
+        self._known_hosts_path = known_hosts_path
+        self._known_hosts = paramiko.HostKeys()
+        if known_hosts_path:
+            try:
+                self._known_hosts.load(known_hosts_path)
+            except IOError:
+                logger.info("Known-hosts file does not exist yet: %s", known_hosts_path)
+        self._pending_host_keys: dict[tuple[str, str], HostKeyConfirmation] = {}
+        self._pending_host_keys_lock = threading.Lock()
+        self._loop: asyncio.AbstractEventLoop | None = None
+
+    def confirm_host_key(self, sid: str, tab_id: str, fingerprint: str, accepted: bool) -> bool:
+        """Resolve pending TOFU decision if fingerprint matches emitted prompt."""
+        with self._pending_host_keys_lock:
+            pending = self._pending_host_keys.get((sid, tab_id))
+            if pending is None or pending.fingerprint != fingerprint:
+                return False
+            pending.accepted = accepted
+            pending.event.set()
+            return True
+
+    def _request_host_key_confirmation(self, sid: str, tab_id: str, pending: HostKeyConfirmation) -> bool:
+        key = (sid, tab_id)
+        with self._pending_host_keys_lock:
+            self._pending_host_keys[key] = pending
+        try:
+            if self._loop is None:
+                return False
+            future = asyncio.run_coroutine_threadsafe(
+                self.sio.emit(
+                    "ssh:hostkey",
+                    {
+                        "tab_id": tab_id,
+                        "hostname": pending.hostname,
+                        "key_type": pending.key.get_name(),
+                        "fingerprint": pending.fingerprint,
+                        "message": "Verify this fingerprint before trusting host key.",
+                    },
+                    to=sid,
+                ),
+                self._loop,
+            )
+            future.result(timeout=5)
+            pending.event.wait(timeout=60)
+            return pending.accepted is True
+        finally:
+            with self._pending_host_keys_lock:
+                self._pending_host_keys.pop(key, None)
 
     def start_background_tasks(self):
         self._tasks.append(asyncio.create_task(self._keepalive_loop()))
@@ -128,10 +181,11 @@ class SSHManager:
         host: str,
         port: int,
         username: str,
-        password: str,
+        password: str | bytearray,
         cols: int = 220,
         rows: int = 50,
     ) -> None:
+        password_buffer = password if isinstance(password, bytearray) else bytearray(password, "utf-8")
         key = (session_id, tab_id)
         room = _room(session_id, tab_id)
 
@@ -153,7 +207,14 @@ class SSHManager:
         connection_succeeded = False
         try:
             client = paramiko.SSHClient()
-            client.set_missing_host_key_policy(_WarnThenAddPolicy())
+            client._host_keys = self._known_hosts
+            client.set_missing_host_key_policy(
+                _WarnThenAddPolicy(
+                    self._known_hosts,
+                    lambda pending: self._request_host_key_confirmation(sid, tab_id, pending),
+                )
+            )
+            self._loop = asyncio.get_running_loop()
 
             loop = asyncio.get_running_loop()
             target = f"{username}@{host}:{port}"
@@ -162,7 +223,7 @@ class SSHManager:
             try:
                 has_tmux, is_root = await loop.run_in_executor(
                     self._ssh_executor,
-                    lambda: _connect_and_check_tmux(client, host, port, username, password),
+                    lambda: _connect_and_check_tmux(client, host, port, username, password_buffer),
                 )
             except paramiko.AuthenticationException:
                 logger.warning("Auth failed for %s", target)
@@ -255,6 +316,7 @@ class SSHManager:
             )
             connection_succeeded = True
         finally:
+            password_buffer[:] = b"\x00" * len(password_buffer)
             async with self._lock:
                 self._pending_keys.discard(key)
             if not connection_succeeded and client is not None:
@@ -262,6 +324,11 @@ class SSHManager:
                     client.close()
                 except Exception:
                     pass
+            if connection_succeeded and self._known_hosts_path:
+                try:
+                    self._known_hosts.save(self._known_hosts_path)
+                except OSError:
+                    logger.warning("Could not save known-hosts file", exc_info=True)
 
     async def restore_session(self, sid: str, session_id: str, tab_id: str) -> str:
         """Re-attach a socket to an existing SSH session. Returns 'active' or 'dead'."""
@@ -537,7 +604,7 @@ class SSHManager:
                 await loop.run_in_executor(self._ssh_executor, _blocking_send_all, session.channel, data)
                 session.last_activity = time.time()
             except Exception:
-                logger.warning("Write error for %s/%s", session.session_id, session.session_id, exc_info=True)
+                logger.warning("Write error for %s/%s", session.session_id, session.tab_id, exc_info=True)
                 if session.read_task and not session.read_task.done():
                     session.read_task.cancel()
                 break
@@ -605,12 +672,12 @@ class SSHManager:
             async with self._lock:
                 sessions = list(self._sessions.values())
             for session in sessions:
-                try:
-                    transport = session.channel.get_transport()
-                    if transport and transport.is_active():
-                        transport.send_ignore()
-                except Exception:
-                    pass
+                pass
+            loop = asyncio.get_running_loop()
+            await asyncio.gather(*(
+                loop.run_in_executor(self._ssh_executor, _send_keepalive, session)
+                for session in sessions
+            ), return_exceptions=True)
 
     async def _cleanup_loop(self) -> None:
         while True:
@@ -654,13 +721,15 @@ def _connect_and_check_tmux(
     host: str,
     port: int,
     username: str,
-    password: str,
+    password: bytearray,
 ) -> tuple[bool, bool]:
     client.connect(
         hostname=host,
         port=port,
         username=username,
-        password=password,
+        # Convert only at boundary; caller wipes mutable password immediately
+        # after executor returns. Python/Paramiko may still retain transient copies.
+        password=bytes(password) if isinstance(password, (bytes, bytearray)) else password,
         timeout=15,
         banner_timeout=15,
         auth_timeout=15,
@@ -744,7 +813,8 @@ def _sanitize_replay_buffer(buf: bytes) -> bytes:
         elif depth > 0:
             depth -= 1
         else:
-            # Unmatched exit — everything before was alt-screen garbage
+            # Keep latest unmatched exit: it removes every earlier orphaned
+            # alt-screen segment from a truncated replay buffer.
             trim_to = pos + length
 
     return buf[trim_to:] if trim_to else buf
@@ -752,6 +822,15 @@ def _sanitize_replay_buffer(buf: bytes) -> bytes:
 
 def _room(session_id: str, tab_id: str) -> str:
     return f"session:{session_id}:{tab_id}"
+
+
+def _send_keepalive(session: SSHSession) -> None:
+    try:
+        transport = session.channel.get_transport()
+        if transport and transport.is_active():
+            transport.send_ignore()
+    except Exception:
+        pass
 
 
 def _blocking_read(channel: paramiko.Channel) -> bytes:

@@ -17,6 +17,8 @@ async def test_terminal_input_audit_roundtrip(monkeypatch, tmp_path):
     assert events[0]["input_data"] == b"ls -la\r"
     assert (events[0]["ssh_host"], events[0]["ssh_port"], events[0]["ssh_username"]) == ("example.com", 22, "root")
     assert audit_store.purge_terminal_input_events(0) == 1
+    with audit_store._connect() as db:
+        assert db.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"
 
 
 @pytest.mark.asyncio

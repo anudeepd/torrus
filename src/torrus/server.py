@@ -143,6 +143,8 @@ _ldap_session_manager = None
 _RATE_LIMIT_WINDOW_SEC = 60
 _RATE_LIMIT_MAX = 10
 _connection_attempts: dict[str, list[float]] = {}
+_SFTP_INLINE_TRANSFER_MAX = int(os.getenv("TORRUS_SFTP_INLINE_MAX_BYTES", str(5 * 1024 * 1024)))
+_sid_client_ips: dict[str, str] = {}
 
 # Per-socket/session/tab input buffers for command-level audit. A reconnect gets
 # a new socket id, so it cannot complete an unfinished command from another
@@ -154,8 +156,14 @@ _MAX_INPUT_BUFFER = 1_048_576
 # Combined ASGI app — uvicorn runs this
 app = socketio.ASGIApp(sio, other_asgi_app=fastapi_app)
 
-sftp_manager = SFTPManager()
-ssh_manager = SSHManager(sio, on_disconnect=sftp_manager.on_ssh_disconnect)
+_IO_WORKERS = max(32, min(128, (os.cpu_count() or 4) * 8))
+sftp_manager = SFTPManager(max_workers=max(16, min(64, (os.cpu_count() or 4) * 4)))
+ssh_manager = SSHManager(
+    sio,
+    on_disconnect=sftp_manager.on_ssh_disconnect,
+    known_hosts_path=os.getenv("TORRUS_KNOWN_HOSTS"),
+    max_workers=_IO_WORKERS,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -490,6 +498,7 @@ async def on_connect(sid, environ):
     if forwarded:
         remote = forwarded.split(",")[0].strip()
     logger.info("Client connected: %s (from %s)", sid, remote)
+    _sid_client_ips[sid] = remote
     if _ldap_enabled:
         try:
             username = _verify_ldap_socket_session(environ)
@@ -511,6 +520,7 @@ async def on_disconnect(sid):
     async with _input_buffer_lock:
         for key in [key for key in _input_buffers if key[0] == sid]:
             del _input_buffers[key]
+    _sid_client_ips.pop(sid, None)
     logger.info("Client disconnected: %s", sid)
 
 
@@ -576,7 +586,15 @@ def _is_private_host(host: str) -> bool:
 
 async def _check_rate_limit(sid: str, tab_id: str) -> bool:
     now = time.time()
-    attempts = _connection_attempts.get(sid, [])
+    # Sweep expired IP buckets so reconnect churn cannot grow this map forever.
+    for ip, timestamps in list(_connection_attempts.items()):
+        retained = [t for t in timestamps if now - t < _RATE_LIMIT_WINDOW_SEC]
+        if retained:
+            _connection_attempts[ip] = retained
+        else:
+            del _connection_attempts[ip]
+    client_ip = _sid_client_ips.get(sid, "unknown")
+    attempts = _connection_attempts.get(client_ip, [])
     attempts = [t for t in attempts if now - t < _RATE_LIMIT_WINDOW_SEC]
     if len(attempts) >= _RATE_LIMIT_MAX:
         await sio.emit(
@@ -586,8 +604,19 @@ async def _check_rate_limit(sid: str, tab_id: str) -> bool:
         )
         return False
     attempts.append(now)
-    _connection_attempts[sid] = attempts
+    _connection_attempts[client_ip] = attempts
     return True
+
+
+@sio.on("ssh:hostkey:confirm")
+async def on_hostkey_confirm(sid, data):
+    tab_id = data.get("tab_id", "")
+    fingerprint = data.get("fingerprint", "")
+    accepted = data.get("accepted") is True
+    if not isinstance(tab_id, str) or not isinstance(fingerprint, str):
+        return
+    if not ssh_manager.confirm_host_key(sid, tab_id, fingerprint, accepted):
+        logger.warning("Rejected stale or invalid host-key confirmation for sid=%s", sid)
 
 
 @sio.on("ssh:connect")
@@ -595,7 +624,9 @@ async def on_ssh_connect(sid, data):
     host = data.get("host", "").strip()
     port = _safe_int(data.get("port", 22), 22)
     username = data.get("username", "").strip()
-    password = data.get("password", "")
+    # Password starts as immutable Socket.IO JSON text. Remove it from payload
+    # immediately, then hand mutable bytes to SSHManager for best-effort wiping.
+    password = data.pop("password", "")
     session_id = data.get("session_id", "")
     tab_id = data.get("tab_id", "")
     cols = _safe_int(data.get("cols", 220), 220)
@@ -637,7 +668,7 @@ async def on_ssh_connect(sid, data):
         host=host,
         port=port,
         username=username,
-        password=password,
+        password=bytearray(password, "utf-8") if isinstance(password, str) else bytearray(password),
         cols=cols,
         rows=rows,
     )
@@ -890,6 +921,11 @@ async def on_sftp_upload(sid, data):
         return
     try:
         raw = base64.b64decode(data.get("data", ""), validate=True)
+        if len(raw) >= _SFTP_INLINE_TRANSFER_MAX:
+            raise SFTPError(
+                "TRANSFER_TOO_LARGE",
+                f"Files of {len(raw)} bytes or more must use HTTP upload endpoint /sftp/upload.",
+            )
         result = await sftp_manager.upload_file(tab_id, data.get("path", ""), raw)
         await sio.emit("sftp:upload:result", {"tab_id": tab_id, **result}, to=sid)
     except SFTPError as exc:
@@ -906,7 +942,9 @@ async def on_sftp_download(sid, data):
     if not await _require_auth(sid, tab_id):
         return
     try:
-        result = await sftp_manager.download_file(tab_id, data.get("path", ""))
+        result = await sftp_manager.download_file(
+            tab_id, data.get("path", ""), max_bytes=_SFTP_INLINE_TRANSFER_MAX
+        )
         await sio.emit("sftp:download:result", {"tab_id": tab_id, **result}, to=sid)
     except SFTPError as exc:
         await _emit_sftp_error(sid, tab_id, exc)

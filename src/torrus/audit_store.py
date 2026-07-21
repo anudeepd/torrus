@@ -46,7 +46,9 @@ def _connect() -> sqlite3.Connection:
         path.parent.chmod(0o700)
     except OSError:
         pass
-    connection = sqlite3.connect(path)
+    connection = sqlite3.connect(path, timeout=30)
+    connection.execute("PRAGMA journal_mode=WAL")
+    connection.execute("PRAGMA synchronous=NORMAL")
     try:
         path.chmod(0o600)
     except OSError:

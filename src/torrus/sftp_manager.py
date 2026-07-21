@@ -36,17 +36,19 @@ class SFTPSession:
     home: str = "."
     users: dict[int, str] = field(default_factory=dict)
     groups: dict[int, str] = field(default_factory=dict)
+    account_maps_refreshed: float = 0.0
     last_activity: float = field(default_factory=time.time)
 
 
 class SFTPManager:
-    def __init__(self):
+    def __init__(self, max_workers: int | None = None):
         self._sessions: dict[str, SFTPSession] = {}
         self._locks: dict[str, asyncio.Lock] = {}
         self._upload_sessions: dict[tuple[str, str], SFTPSession] = {}
         self._upload_locks: dict[tuple[str, str], asyncio.Lock] = {}
+        workers = max_workers or max(16, min(64, (os.cpu_count() or 4) * 4))
         self._executor = concurrent.futures.ThreadPoolExecutor(
-            max_workers=10, thread_name_prefix="sftp"
+            max_workers=workers, thread_name_prefix="sftp"
         )
 
     async def shutdown(self) -> None:
@@ -142,8 +144,10 @@ class SFTPManager:
     async def upload_file(self, tab_id: str, remote_path: str, data: bytes) -> dict[str, Any]:
         return await self._locked(tab_id, lambda session: self._upload_file_sync(session, remote_path, data))
 
-    async def download_file(self, tab_id: str, remote_path: str) -> dict[str, Any]:
-        return await self._locked(tab_id, lambda session: self._download_file_sync(session, remote_path))
+    async def download_file(self, tab_id: str, remote_path: str, max_bytes: int | None = None) -> dict[str, Any]:
+        return await self._locked(
+            tab_id, lambda session: self._download_file_sync(session, remote_path, max_bytes)
+        )
 
     async def prepare_download(
         self,
@@ -472,9 +476,18 @@ class SFTPManager:
         except Exception as exc:
             raise _map_error(exc, resolved) from exc
 
-    def _download_file_sync(self, session: SFTPSession, remote_path: str) -> dict[str, Any]:
+    def _download_file_sync(
+        self, session: SFTPSession, remote_path: str, max_bytes: int | None = None
+    ) -> dict[str, Any]:
         resolved = _resolve_remote_path(session.cwd, remote_path, session.home)
         try:
+            if max_bytes is not None:
+                size = session.client.stat(resolved).st_size or 0
+                if size >= max_bytes:
+                    raise SFTPError(
+                        "TRANSFER_TOO_LARGE",
+                        f"Files of {size} bytes or more must use HTTP download endpoint /sftp/download.",
+                    )
             with session.client.open(resolved, "rb") as remote_file:
                 data = remote_file.read()
             return {
@@ -551,7 +564,7 @@ class SFTPManager:
         }
 
     def _account_maps_sync(self, session: SFTPSession, force: bool = False) -> tuple[dict[int, str], dict[int, str]]:
-        if (session.users or session.groups) and not force:
+        if not force and session.account_maps_refreshed and time.time() - session.account_maps_refreshed < 60:
             return session.users, session.groups
         try:
             session.users = _parse_passwd(_read_remote_text(session.client, "/etc/passwd"))
@@ -561,6 +574,7 @@ class SFTPManager:
             session.groups = _parse_group(_read_remote_text(session.client, "/etc/group"))
         except Exception:
             session.groups = {}
+        session.account_maps_refreshed = time.time()
         return session.users, session.groups
 
     def _mkdir_sync(self, session: SFTPSession, path: str) -> dict[str, Any]:

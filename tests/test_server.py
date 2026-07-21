@@ -573,6 +573,17 @@ class TestIpLogging:
             remote_arg = mock_info.call_args[0][2]
             assert remote_arg == "192.168.1.5"
 
+    @pytest.mark.asyncio
+    async def test_rate_limit_survives_socket_reconnect_for_same_ip(self):
+        from torrus import server as server_module
+
+        await server_module.on_connect("sid-ip-1", {"REMOTE_ADDR": "192.0.2.10"})
+        for _ in range(server_module._RATE_LIMIT_MAX):
+            assert await server_module._check_rate_limit("sid-ip-1", "tab") is True
+        await server_module.on_disconnect("sid-ip-1")
+        await server_module.on_connect("sid-ip-2", {"REMOTE_ADDR": "192.0.2.10"})
+        assert await server_module._check_rate_limit("sid-ip-2", "tab") is False
+
 
 class TestSocketDisconnect:
     """Socket disconnect cleanup must await async SSH manager cleanup."""
