@@ -21,3 +21,14 @@ describe('terminal scrollbar CSS', () => {
     expect(css).toContain('color-scheme: dark;')
   })
 })
+
+describe('password input CSS', () => {
+  it('hides browser-native reveal and credential controls beside the app toggle', () => {
+    expect(css).toContain('.torrus-password-input::-ms-reveal,')
+    expect(css).toContain('.torrus-password-input::-ms-clear {')
+    expect(css).toContain('.torrus-password-input::-moz-reveal {')
+    expect(css).toContain('.torrus-password-input::-webkit-credentials-auto-fill-button {')
+    expect(css).toContain('.torrus-password-input::-webkit-textfield-decoration-container {')
+    expect(css).toContain('  display: none;')
+  })
+})

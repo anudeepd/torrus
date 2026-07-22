@@ -97,7 +97,7 @@ export default function ConnectForm({
               value={password}
               onChange={e => setPassword(e.target.value)}
               autoComplete="current-password"
-              className="pr-10"
+              className="torrus-password-input pr-10"
               data-testid="password-input"
             />
             <button
