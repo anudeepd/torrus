@@ -35,11 +35,15 @@ else:
 
 _SAFE_ID = re.compile(r'^[a-zA-Z0-9_\-]+$')
 _DEV_MODE = bool(os.getenv("TORRUS_DEV"))
-_DEV_ORIGINS = [
-    f"http://{host}:{port}"
-    for host in ("localhost", "127.0.0.1")
-    for port in range(5173, 5184)
-] if _DEV_MODE else []
+def _dev_socket_origins() -> list[str]:
+    return [
+        f"http://{host}:{port}"
+        for host in ("localhost", "127.0.0.1")
+        for port in (8080, *range(5173, 5184))
+    ]
+
+
+_DEV_ORIGINS = _dev_socket_origins() if _DEV_MODE else []
 _ALLOW_PRIVATE_HOSTS_WITHOUT_LDAP = os.getenv(
     "TORRUS_ALLOW_PRIVATE_HOSTS_WITHOUT_LDAP", "true"
 ).lower() in {"1", "true", "yes", "on"}

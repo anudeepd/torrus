@@ -8,7 +8,7 @@ import { mockSearchAddonInstances, mockTerminalInstances, clearMockTerminalInsta
 import { mockResizeObserverInstances } from '@/test/setup'
 import TerminalPane from './TerminalPane'
 
-function seedStores(tabId: string, status: 'connected' | 'disconnected') {
+function seedStores(tabId: string, status: 'connected' | 'connecting' | 'disconnected') {
   useTerminalStore.setState({
     sessionId: 'test-session',
     tabs: [
@@ -710,5 +710,32 @@ describe('TerminalPane', () => {
     })
 
     expect(term.write).toHaveBeenCalledWith('\x1b[H\x1b[2J\x1b[3Jprompt$ ')
+  })
+
+  it('marks a connecting terminal as connected when it receives remote output', async () => {
+    const tabId = 'tab-output-confirms-connection'
+    act(() => {
+      seedStores(tabId, 'connecting')
+    })
+
+    const socket = createMockSocket()
+    render(
+      <TerminalPane
+        tabId={tabId}
+        isActive={true}
+        focused={true}
+        socket={socket as unknown as import('socket.io-client').Socket}
+      />
+    )
+
+    await waitFor(() => {
+      expect(mockTerminalInstances.length).toBeGreaterThan(0)
+    })
+
+    act(() => {
+      socket._trigger('ssh:output', { tab_id: tabId, data: 'prompt$ ' })
+    })
+
+    expect(useTerminalStore.getState().tabs[0]?.status).toBe('connected')
   })
 })

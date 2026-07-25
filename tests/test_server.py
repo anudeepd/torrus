@@ -4,6 +4,14 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 
+def test_dev_socket_origins_allow_local_torrus_server():
+    from torrus.server import _dev_socket_origins
+
+    origins = _dev_socket_origins()
+    assert "http://localhost:8080" in origins
+    assert "http://127.0.0.1:8080" in origins
+
+
 class TestValidIdChecks:
     """Ensure malformed session/tab IDs are rejected at the handler level."""
 

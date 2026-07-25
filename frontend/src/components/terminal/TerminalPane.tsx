@@ -31,6 +31,7 @@ const TERMINAL_REPLY_SEQUENCE = new RegExp(
   'g'
 )
 const RESTORE_INPUT_SUPPRESSION_MS = 800
+const CONNECT_TIMEOUT_MS = 25_000
 
 function prepareTextForTerminal(text: string): string {
   return text.replace(/\r?\n/g, '\r')
@@ -126,6 +127,7 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
   // responses (OSC 11, DSR, DA) from being echoed back to the remote shell
   const suppressInputRef = useRef(true)
   const suppressInputTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const connectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // Tracks actual xterm.js keyboard focus — only the focused terminal broadcasts.
   // Prevents other panes' DA/DSR escape responses from leaking into all terminals.
   const hasFocusRef = useRef(false)
@@ -154,6 +156,11 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
       suppressInputRef.current = false
       suppressInputTimerRef.current = null
     }, RESTORE_INPUT_SUPPRESSION_MS)
+  }, [])
+
+  const clearConnectTimeout = useCallback(() => {
+    if (connectTimeoutRef.current) clearTimeout(connectTimeoutRef.current)
+    connectTimeoutRef.current = null
   }, [])
 
   const emitInput = useCallback((data: string) => {
@@ -563,6 +570,9 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
   useEffect(() => {
     const onOutput = ({ tab_id, data }: { tab_id: string; data: unknown }) => {
       if (tab_id !== tabId || !termRef.current) return
+      if (useTerminalStore.getState().tabs.find(tab => tab.id === tabId)?.status === 'connecting') {
+        setTabStatus(tabId, 'connected')
+      }
       const stripCtrlLClear = (output: string): string | undefined => {
         if (!suppressNextScrollbackClearRef.current) return undefined
         const pendingPrefix = pendingScrollbackClearPrefixRef.current
@@ -596,7 +606,7 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
     }
     socket.on('ssh:output', onOutput)
     return () => { socket.off('ssh:output', onOutput) }
-  }, [socket, tabId])
+  }, [socket, tabId, setTabStatus])
 
   // Session restore / ssh:connected / ssh:error / ssh:closed
   useEffect(() => {
@@ -621,6 +631,7 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
 
     const onConnected = ({ tab_id }: { tab_id: string }) => {
       if (tab_id !== tabId) return
+      clearConnectTimeout()
       errorRef.current = ''
       setConnectionError('')
       setTabStatus(tabId, 'connected')
@@ -636,6 +647,7 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
 
     const onError = ({ tab_id, message }: { tab_id: string; message: string }) => {
       if (tab_id !== tabId) return
+      clearConnectTimeout()
       errorRef.current = message
       setConnectionError(message)
       suppressInputRef.current = true
@@ -644,6 +656,7 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
 
     const onClosed = ({ tab_id, reason }: { tab_id: string; reason: string }) => {
       if (tab_id !== tabId) return
+      clearConnectTimeout()
       suppressInputRef.current = true
       setTabStatus(tabId, 'dead')
       termRef.current?.write(`\r\n\x1b[38;5;244m[torrus: ${reason}]\x1b[0m\r\n`)
@@ -660,12 +673,13 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
         clearTimeout(suppressInputTimerRef.current)
         suppressInputTimerRef.current = null
       }
+      clearConnectTimeout()
       socket.off('session:restored', onRestored)
       socket.off('ssh:connected', onConnected)
       socket.off('ssh:error', onError)
       socket.off('ssh:closed', onClosed)
     }
-  }, [socket, tabId, setTabStatus, fitAndEmitResize, suppressRestoreInputBriefly])
+  }, [socket, tabId, setTabStatus, fitAndEmitResize, suppressRestoreInputBriefly, clearConnectTimeout])
 
   // Focus terminal when tab becomes active
   useEffect(() => {
@@ -680,6 +694,7 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
   }, [isActive, focused, tab?.status, fitAndEmitResize])
 
   const handleConnect = useCallback((values: ConnectFormValues) => {
+    clearConnectTimeout()
     errorRef.current = ''
     setTabStatus(tabId, 'connecting')
     setTabConnection(tabId, values.host, values.port, values.username)
@@ -694,7 +709,16 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
       cols: term ? term.cols : 220,
       rows: term ? term.rows : 50,
     })
-  }, [socket, sessionId, tabId, setTabStatus, setTabConnection])
+    connectTimeoutRef.current = setTimeout(() => {
+      connectTimeoutRef.current = null
+      if (useTerminalStore.getState().tabs.find(tab => tab.id === tabId)?.status !== 'connecting') return
+      const message = 'Connection timed out. Check host, port, and network access.'
+      errorRef.current = message
+      setConnectionError(message)
+      suppressInputRef.current = true
+      setTabStatus(tabId, 'dead')
+    }, CONNECT_TIMEOUT_MS)
+  }, [socket, sessionId, tabId, setTabStatus, setTabConnection, clearConnectTimeout])
 
   const showForm = !tab || tab.status === 'disconnected' || tab.status === 'dead'
   const isConnecting = tab?.status === 'connecting'

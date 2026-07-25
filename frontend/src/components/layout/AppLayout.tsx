@@ -23,6 +23,8 @@ import { AnimatePresence } from 'motion/react'
 import * as m from 'motion/react-m'
 import { fade, surface, surfaceSpring } from '@/motion/tokens'
 
+const SESSION_RESTORE_RETRY_MS = 3_000
+
 type PendingClose = {
   kind: 'tab' | 'pane'
   tabId: string
@@ -202,18 +204,46 @@ export default function AppLayout() {
     }
   }, [setSFTPDisconnected, tabs])
 
-  // Register all tabs on socket connect
+  // Re-register all terminals after Socket.IO reconnects. A lost restore event
+  // must not leave a terminal's input suppressed indefinitely.
   useEffect(() => {
+    const restoreRetries = new Map<string, number>()
+    const clearRestoreRetry = (tabId: string) => {
+      const retry = restoreRetries.get(tabId)
+      if (retry === undefined) return
+      window.clearTimeout(retry)
+      restoreRetries.delete(tabId)
+    }
+    const register = (tabId: string, sid: string) => {
+      socket.emit('session:register', { session_id: sid, tab_id: tabId })
+      clearRestoreRetry(tabId)
+      restoreRetries.set(tabId, window.setTimeout(() => {
+        restoreRetries.delete(tabId)
+        if (socket.connected) socket.emit('session:register', { session_id: sid, tab_id: tabId })
+      }, SESSION_RESTORE_RETRY_MS))
+    }
     const onConnect = () => {
       const { tabs: currentTabs, sessionId: sid } = useTerminalStore.getState()
       for (const tab of currentTabs) {
-        if (tab.type !== 'terminal') continue
-        socket.emit('session:register', { session_id: sid, tab_id: tab.id })
+        if (tab.type === 'terminal') register(tab.id, sid)
       }
     }
+    const onRestored = (payload: { tab_id?: string }) => {
+      if (payload.tab_id) clearRestoreRetry(payload.tab_id)
+    }
+    const onDisconnect = () => {
+      for (const tabId of restoreRetries.keys()) clearRestoreRetry(tabId)
+    }
     socket.on('connect', onConnect)
+    socket.on('disconnect', onDisconnect)
+    socket.on('session:restored', onRestored)
     if (socket.connected) onConnect()
-    return () => { socket.off('connect', onConnect) }
+    return () => {
+      socket.off('connect', onConnect)
+      socket.off('disconnect', onDisconnect)
+      socket.off('session:restored', onRestored)
+      onDisconnect()
+    }
   }, [socket])
 
   const handleAddTab = useCallback(() => {

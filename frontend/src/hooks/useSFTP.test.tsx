@@ -254,6 +254,21 @@ describe('useSFTP', () => {
     expect(socket.emit.mock.calls.filter(call => call[0] === 'sftp:list')).toHaveLength(2)
   })
 
+  it('stops loading when a directory listing result never arrives', () => {
+    vi.useFakeTimers()
+    const socket = createMockSocket()
+    const { result } = renderHook(() => useSFTP(tabId, 'terminal-tab', socket as unknown as Socket))
+
+    act(() => result.current.list('/root'))
+    expect(useSFTPStore.getState().tabs[tabId]?.loading).toBe(true)
+
+    act(() => vi.advanceTimersByTime(15_000))
+    expect(useSFTPStore.getState().tabs[tabId]).toMatchObject({
+      loading: false,
+      error: 'Folder listing timed out. Refresh to try again.',
+    })
+  })
+
   it('uploads through the resumable chunk endpoint and reports byte progress', async () => {
     const socket = createMockSocket()
     const fetchMock = vi.fn().mockResolvedValue({

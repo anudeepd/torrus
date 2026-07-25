@@ -22,6 +22,7 @@ IDLE_TIMEOUT = 4 * 3600        # 4 hours
 KEEPALIVE_INTERVAL = 30        # seconds
 CLEANUP_INTERVAL = 300         # 5 minutes
 CHANNEL_READ_TIMEOUT = 0.1     # seconds — blocking read timeout to avoid busy-wait
+CONNECTION_TIMEOUT = 20        # seconds — includes DNS and post-login probes
 
 
 class _WarnThenAddPolicy(paramiko.MissingHostKeyPolicy):
@@ -155,9 +156,12 @@ class SSHManager:
             logger.info("Connecting to %s (session=%s, tab=%s)", target, session_id, tab_id)
 
             try:
-                has_tmux, is_root = await loop.run_in_executor(
-                    self._ssh_executor,
-                    lambda: _connect_and_check_tmux(client, host, port, username, password_buffer),
+                has_tmux, is_root = await asyncio.wait_for(
+                    loop.run_in_executor(
+                        self._ssh_executor,
+                        lambda: _connect_and_check_tmux(client, host, port, username, password_buffer),
+                    ),
+                    timeout=CONNECTION_TIMEOUT,
                 )
             except paramiko.AuthenticationException:
                 logger.warning("Auth failed for %s", target)

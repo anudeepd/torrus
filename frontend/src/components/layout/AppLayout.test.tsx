@@ -209,4 +209,40 @@ describe('AppLayout LDAP auth handling', () => {
       tab_id: 'sftp-tab',
     })
   })
+
+  it('retries terminal registration when a restore event is lost', async () => {
+    useTerminalStore.setState({
+      sessionId: 'test-session',
+      tabs: [{
+        id: 'terminal-tab',
+        type: 'terminal',
+        host: 'localhost',
+        port: 22,
+        username: 'alice',
+        label: null,
+        status: 'connected',
+        sessionKey: 'test-session:terminal-tab',
+      }],
+      activeTabId: 'terminal-tab',
+    })
+    const { socket } = await renderAppLayout()
+    socket._trigger('session:restored', { tab_id: 'terminal-tab', status: 'active' })
+    socket.emit.mockClear()
+    vi.useFakeTimers()
+
+    act(() => {
+      socket._trigger('connect')
+      vi.advanceTimersByTime(3_000)
+    })
+
+    expect(socket.emit).toHaveBeenCalledTimes(2)
+    expect(socket.emit).toHaveBeenNthCalledWith(1, 'session:register', {
+      session_id: 'test-session',
+      tab_id: 'terminal-tab',
+    })
+    expect(socket.emit).toHaveBeenNthCalledWith(2, 'session:register', {
+      session_id: 'test-session',
+      tab_id: 'terminal-tab',
+    })
+  })
 })

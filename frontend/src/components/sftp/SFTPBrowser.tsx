@@ -41,12 +41,13 @@ interface SFTPBrowserProps {
 interface ContextMenuState {
   x: number
   y: number
-  entry: SFTPEntry
+  entries: SFTPEntry[]
 }
 
 interface ChmodDialogState {
   entry: SFTPEntry
   mode: number
+  modeInput: string
   uid: string
   gid: string
 }
@@ -134,6 +135,15 @@ function formatDate(mtime: number): string {
 
 function formatMode(mode?: number): string {
   return ((mode ?? 0) & 0o7777).toString(8).padStart(4, '0')
+}
+
+function formatModeInput(mode: number): string {
+  const permissionMode = mode & 0o7777
+  return permissionMode.toString(8).padStart(permissionMode & 0o7000 ? 4 : 3, '0')
+}
+
+function octalModeInputValid(mode: string): boolean {
+  return /^[0-7]{3,4}$/.test(mode)
 }
 
 function permissionTitle(mode?: number): string {
@@ -413,6 +423,7 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
   const [helpOpen, setHelpOpen] = useState(false)
   const [moreActionsOpen, setMoreActionsOpen] = useState(false)
   const [sortRules, setSortRules] = useState<SortRule[]>([])
+  const [selectionAnchorPath, setSelectionAnchorPath] = useState<string | null>(null)
   const {
     path,
     username,
@@ -443,6 +454,10 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
   } = useSFTP(tabId, sourceTabId, socket)
   const { toggleSelected, setSelected, clearSelected, removeTransfer } = useSFTPStore()
   const statusNotice = notice ?? (error ? { tone: 'error' as const, message: error } : null)
+  const clearFileSelection = useCallback(() => {
+    clearSelected(tabId)
+    setSelectionAnchorPath(null)
+  }, [clearSelected, tabId])
 
   const clearDropFeedback = useCallback(() => {
     if (dragOverlayTimerRef.current !== null) {
@@ -617,6 +632,8 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
     () => sortedEntries.filter(entry => selectedPaths.includes(entry.path)),
     [selectedPaths, sortedEntries],
   )
+  const allEntriesSelected = sortedEntries.length > 0 && selectedEntries.length === sortedEntries.length
+  const someEntriesSelected = selectedEntries.length > 0 && !allEntriesSelected
   const deleteEntries = useMemo(
     () => entries.filter(entry => deletePaths?.includes(entry.path)),
     [deletePaths, entries],
@@ -659,9 +676,11 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
 
   const openPermissions = useCallback((entry: SFTPEntry) => {
     loadAccounts()
+    const mode = (entry.mode ?? 0) & 0o7777
     setChmodDialog({
       entry,
-      mode: (entry.mode ?? 0) & 0o7777,
+      mode,
+      modeInput: formatModeInput(mode),
       uid: entry.uid == null ? '' : String(entry.uid),
       gid: entry.gid == null ? '' : String(entry.gid),
     })
@@ -685,51 +704,82 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
     setChmodDialog(null)
   }, [chmod, chmodDialog, chown])
 
+  const setRangeSelection = useCallback((targetPath: string, select: boolean) => {
+    const targetIndex = sortedEntries.findIndex(entry => entry.path === targetPath)
+    if (targetIndex < 0) return
+    const anchorIndex = selectionAnchorPath === null ? -1 : sortedEntries.findIndex(entry => entry.path === selectionAnchorPath)
+    const start = Math.min(anchorIndex < 0 ? targetIndex : anchorIndex, targetIndex)
+    const end = Math.max(anchorIndex < 0 ? targetIndex : anchorIndex, targetIndex)
+    const nextSelected = new Set(selectedPaths)
+    for (const entry of sortedEntries.slice(start, end + 1)) {
+      if (select) nextSelected.add(entry.path)
+      else nextSelected.delete(entry.path)
+    }
+    setSelected(tabId, [...nextSelected])
+  }, [selectedPaths, selectionAnchorPath, setSelected, sortedEntries, tabId])
+
   const handleRowClick = useCallback((event: React.MouseEvent, entry: SFTPEntry) => {
-    if (event.ctrlKey || event.metaKey) {
+    const selected = selectedPaths.includes(entry.path)
+    if (event.shiftKey) {
+      setRangeSelection(entry.path, !selected)
+    } else if (event.ctrlKey || event.metaKey) {
       toggleSelected(tabId, entry.path)
-      return
+    } else if (selectedPaths.length === 1 && selected) {
+      clearSelected(tabId)
+    } else {
+      setSelected(tabId, [entry.path])
     }
-    if (selectedPaths.includes(entry.path)) {
-      toggleSelected(tabId, entry.path)
-      return
-    }
-    setSelected(tabId, [entry.path])
-  }, [selectedPaths, setSelected, tabId, toggleSelected])
+    setSelectionAnchorPath(entry.path)
+    listRef.current?.focus()
+  }, [clearSelected, selectedPaths, setRangeSelection, setSelected, tabId, toggleSelected])
 
   const handleKeyDown = useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
-    const selected = selectedEntries[0]
+    const selected = (selectionAnchorPath ? sortedEntries.find(entry => entry.path === selectionAnchorPath) : undefined) ?? selectedEntries[0]
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'a') {
       event.preventDefault()
       setSelected(tabId, sortedEntries.map(entry => entry.path))
+      setSelectionAnchorPath(sortedEntries[0]?.path ?? null)
     } else if (event.key === 'Escape') {
-      clearSelected(tabId)
+      clearFileSelection()
       setRenamePath(null)
       setContextMenu(null)
     } else if (event.key === 'Backspace') {
       event.preventDefault()
       list(parentPath(path))
     } else if (event.key === 'Enter' && selected) {
+      event.preventDefault()
       openEntry(selected)
+    } else if (event.key === ' ' && selected) {
+      event.preventDefault()
+      if (event.shiftKey) setRangeSelection(selected.path, !selectedPaths.includes(selected.path))
+      else toggleSelected(tabId, selected.path)
+      setSelectionAnchorPath(selected.path)
     } else if (event.key === 'F2' && selected) {
       startRename(selected)
     } else if (event.key === 'Delete' && selectedPaths.length) {
+      event.preventDefault()
       setDeletePaths(selectedPaths)
-    } else if ((event.key === 'ArrowDown' || event.key === 'ArrowUp') && sortedEntries.length) {
+    } else if ((event.key === 'ArrowDown' || event.key === 'ArrowUp' || event.key === 'Home' || event.key === 'End') && sortedEntries.length) {
       event.preventDefault()
       const currentIndex = selected ? sortedEntries.findIndex(entry => entry.path === selected.path) : -1
-      const delta = event.key === 'ArrowDown' ? 1 : -1
-      const nextIndex = Math.max(0, Math.min(sortedEntries.length - 1, currentIndex + delta))
-      setSelected(tabId, [sortedEntries[nextIndex].path])
+      const nextIndex = event.key === 'Home'
+        ? 0
+        : event.key === 'End'
+          ? sortedEntries.length - 1
+          : Math.max(0, Math.min(sortedEntries.length - 1, currentIndex + (event.key === 'ArrowDown' ? 1 : -1)))
+      const next = sortedEntries[nextIndex]
+      if (event.shiftKey) setRangeSelection(next.path, true)
+      else setSelected(tabId, [next.path])
+      setSelectionAnchorPath(next.path)
     }
-  }, [clearSelected, list, openEntry, parentPath, path, selectedEntries, selectedPaths, setSelected, sortedEntries, startRename, tabId])
+  }, [clearFileSelection, list, openEntry, parentPath, path, selectedEntries, selectedPaths, selectionAnchorPath, setRangeSelection, setSelected, sortedEntries, startRename, tabId, toggleSelected])
 
   const confirmDelete = useCallback(() => {
     if (!deletePaths?.length) return
     remove(deletePaths)
     setDeletePaths(null)
-    clearSelected(tabId)
-  }, [clearSelected, deletePaths, remove, tabId])
+    clearFileSelection()
+  }, [clearFileSelection, deletePaths, remove])
 
   const createFolder = useCallback(() => {
     const name = newFolderName.trim()
@@ -831,7 +881,7 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
               <span className="hidden text-[11px] text-slate-500 min-[720px]:inline">{selectedPaths.length} selected</span>
               <button
                 type="button"
-                onClick={() => clearSelected(tabId)}
+                onClick={clearFileSelection}
                 className="flex h-8 w-8 items-center justify-center text-slate-500 hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 max-[600px]:h-11 max-[600px]:w-11"
                 title="Clear selection"
                 aria-label="Clear selection"
@@ -936,7 +986,7 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
         tabIndex={0}
         onKeyDown={handleKeyDown}
         onMouseDown={event => {
-          if (event.target === event.currentTarget) clearSelected(tabId)
+          if (event.target === event.currentTarget) clearFileSelection()
         }}
         onDragOver={event => { event.preventDefault(); refreshDragOverlay() }}
         onDragLeave={event => { if (event.currentTarget === event.target) clearDropFeedback() }}
@@ -952,7 +1002,8 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
         {loading && entries.length === 0 && (
           <div className="p-2">
             {[0, 1, 2].map(row => (
-              <div key={row} className="mb-2 grid h-8 animate-pulse grid-cols-[24px_minmax(0,1fr)_96px_104px_112px_144px] items-center gap-2 opacity-50 max-[600px]:grid-cols-[24px_minmax(0,1fr)]">
+              <div key={row} className="mb-2 grid h-8 animate-pulse grid-cols-[20px_24px_minmax(0,1fr)_96px_104px_112px_144px] items-center gap-2 opacity-50 max-[600px]:grid-cols-[20px_24px_minmax(0,1fr)]">
+                <div className="h-3.5 w-3.5 bg-surface-800" />
                 <div className="h-4 w-4 bg-surface-800" />
                 <div className="h-3 w-3/5 bg-surface-800" />
                 <div className="h-3 bg-surface-800 max-[600px]:hidden" />
@@ -970,8 +1021,24 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
 
         {entries.length > 0 && (
           <m.div key={path} {...fade} transition={exitTransition} className={clsx({ 'pointer-events-none opacity-60': loading })} aria-busy={loading}>
-            <div className="sticky top-0 z-10 grid h-8 grid-cols-[24px_minmax(0,1fr)_96px_104px_112px_144px] items-center gap-2 border-b border-surface-800 bg-surface-950 px-2 font-mono text-[11px] font-medium text-slate-500 max-[600px]:grid-cols-[24px_minmax(0,1fr)]">
-              <button type="button" className="col-span-2 flex h-full min-w-0 items-center gap-1 pl-[32px] text-left hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 max-[600px]:pl-0" onClick={() => toggleSort('name')} title="Sort by name">
+            <div className="sticky top-0 z-10 grid h-8 grid-cols-[20px_24px_minmax(0,1fr)_96px_104px_112px_144px] items-center gap-2 border-b border-surface-800 bg-surface-950 px-2 font-mono text-[11px] font-medium text-slate-500 max-[600px]:grid-cols-[20px_24px_minmax(0,1fr)]">
+              <input
+                ref={element => { if (element) element.indeterminate = someEntriesSelected }}
+                type="checkbox"
+                checked={allEntriesSelected}
+                onChange={event => {
+                  if (event.target.checked) {
+                    setSelected(tabId, sortedEntries.map(entry => entry.path))
+                    setSelectionAnchorPath(sortedEntries[0]?.path ?? null)
+                  } else {
+                    clearFileSelection()
+                  }
+                  listRef.current?.focus()
+                }}
+                aria-label="Select all files"
+                className="h-3.5 w-3.5 accent-brand-500"
+              />
+              <button type="button" className="col-span-2 flex h-full min-w-0 items-center gap-1 pl-8 text-left hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 max-[600px]:pl-8" onClick={() => toggleSort('name')} title="Sort by name">
                 <span>name</span><SortIndicator rules={sortRules} sortKey="name" />
               </button>
               <button type="button" className="flex h-full min-w-0 items-center gap-1 text-left hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 max-[600px]:hidden" onClick={() => toggleSort('size')} title="Sort by size">
@@ -1003,19 +1070,34 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
                     event.preventDefault()
                     event.stopPropagation()
                     provideContextFeedback()
+                    const contextEntries = selected ? selectedEntries : [entry]
                     if (!selected) setSelected(tabId, [entry.path])
                     contextMenuTriggerRef.current = event.currentTarget
                     setContextMenu({
                       x: Math.min(event.clientX, window.innerWidth - 190),
                       y: Math.min(event.clientY, window.innerHeight - 230),
-                      entry,
+                      entries: contextEntries,
                     })
                   }}
-                  className={clsx('grid min-h-8 cursor-default grid-cols-[24px_minmax(0,1fr)_96px_104px_112px_144px] items-center gap-2 px-2 py-1 font-mono text-xs max-[600px]:min-h-11 max-[600px]:grid-cols-[24px_minmax(0,1fr)]', {
+                  className={clsx('grid min-h-8 cursor-default grid-cols-[20px_24px_minmax(0,1fr)_96px_104px_112px_144px] items-center gap-2 px-2 py-1 font-mono text-xs max-[600px]:min-h-11 max-[600px]:grid-cols-[20px_24px_minmax(0,1fr)]', {
                     'bg-brand-500/10 hover:bg-brand-500/20': selected,
                     'hover:bg-surface-800': !selected,
                   })}
                 >
+                  <input
+                    type="checkbox"
+                    checked={selected}
+                    onClick={event => event.stopPropagation()}
+                    onChange={event => {
+                      if ((event.nativeEvent as MouseEvent).shiftKey) setRangeSelection(entry.path, event.target.checked)
+                      else toggleSelected(tabId, entry.path)
+                      setSelectionAnchorPath(entry.path)
+                      listRef.current?.focus()
+                    }}
+                    onKeyDown={event => event.stopPropagation()}
+                    aria-label={`Select ${entry.name}`}
+                    className="h-3.5 w-3.5 accent-brand-500"
+                  />
                   <FileIcon entry={entry} />
                   {renamePath === entry.path ? (
                     <input
@@ -1065,13 +1147,29 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
           aria-label="File actions"
           onKeyDown={event => moveMenuFocus(event, contextMenuRef.current, () => closeContextMenu(true))}
         >
-          {[
-            { label: 'Open', icon: FolderOpen, action: () => openEntry(contextMenu.entry) },
-            { label: 'Rename', icon: Pencil, action: () => startRename(contextMenu.entry) },
-            { label: 'Permissions', icon: ShieldCheck, action: () => openPermissions(contextMenu.entry) },
-            ...(contextMenu.entry.type === 'directory' ? [] : [{ label: 'Download', icon: Download, action: () => void download(contextMenu.entry) }]),
-            { label: 'Delete', icon: Trash2, action: () => setDeletePaths([contextMenu.entry.path]), danger: true },
-          ].map(item => (
+          {(() => {
+            const entry = contextMenu.entries[0]!
+            const isSingleEntry = contextMenu.entries.length === 1
+            const files = contextMenu.entries.filter(item => item.type !== 'directory')
+            const actions = [
+              ...(isSingleEntry ? [
+                { label: 'Open', icon: FolderOpen, action: () => openEntry(entry) },
+                { label: 'Rename', icon: Pencil, action: () => startRename(entry) },
+                { label: 'Permissions', icon: ShieldCheck, action: () => openPermissions(entry) },
+              ] : []),
+              ...(files.length > 0 ? [{
+                label: files.length === 1 ? 'Download' : `Download ${files.length} files`,
+                icon: Download,
+                action: () => files.forEach(file => void download(file)),
+              }] : []),
+              {
+                label: isSingleEntry ? 'Delete' : `Delete ${contextMenu.entries.length} items`,
+                icon: Trash2,
+                action: () => setDeletePaths(contextMenu.entries.map(item => item.path)),
+                danger: true,
+              },
+            ]
+            return actions.map(item => (
             <button
               key={item.label}
               type="button"
@@ -1089,7 +1187,8 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
               <item.icon className="h-3.5 w-3.5" />
               {item.label}
             </button>
-          ))}
+            ))
+          })()}
         </div>
       )}
 
@@ -1104,11 +1203,6 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
         transfers={transfers}
         onDismiss={removeTransfer}
         onRetry={retryUpload}
-        onClearCompleted={() => {
-          for (const transfer of transfers) {
-            if (transfer.status === 'done' || transfer.status === 'error') removeTransfer(transfer.id)
-          }
-        }}
       />
 
       {newFolderOpen && (
@@ -1145,6 +1239,35 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
               <h2 id="permissions-title" className="text-xs font-medium text-slate-200">Permissions</h2>
               <p className="mt-1 truncate font-mono text-[11px] text-slate-500">{chmodDialog.entry.path}</p>
             </div>
+            <label className="flex flex-col gap-1">
+              <span className="text-[11px] font-medium text-slate-400">Octal mode</span>
+              <input
+                type="text"
+                inputMode="numeric"
+                pattern="[0-7]*"
+                maxLength={4}
+                value={chmodDialog.modeInput}
+                onChange={event => {
+                  const modeInput = event.target.value
+                  if (!/^[0-7]{0,4}$/.test(modeInput)) return
+                  setChmodDialog(dialog => {
+                    if (!dialog) return null
+                    return {
+                      ...dialog,
+                      modeInput,
+                      ...(octalModeInputValid(modeInput) ? { mode: Number.parseInt(modeInput, 8) } : {}),
+                    }
+                  })
+                }}
+                aria-invalid={!octalModeInputValid(chmodDialog.modeInput)}
+                aria-describedby="octal-mode-help"
+                aria-label="Octal mode"
+                className="h-8 rounded-md border border-surface-700 bg-surface-950 px-2 font-mono text-xs text-slate-200 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500/30 max-[600px]:h-11"
+              />
+              <span id="octal-mode-help" className={octalModeInputValid(chmodDialog.modeInput) ? 'text-[11px] text-slate-500' : 'text-[11px] text-red-300'}>
+                {octalModeInputValid(chmodDialog.modeInput) ? 'Three or four octal digits, for example 744 or 1777.' : 'Enter three or four octal digits (000–7777).'}
+              </span>
+            </label>
             <div className="grid grid-cols-[72px_repeat(3,1fr)] gap-2 text-xs">
               <span />
               {['Read', 'Write', 'Execute'].map(label => <span key={label} className="text-center text-[11px] text-slate-500">{label}</span>)}
@@ -1156,7 +1279,11 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
                       <input
                         type="checkbox"
                         checked={Boolean(chmodDialog.mode & permission.bit)}
-                        onChange={() => setChmodDialog(dialog => dialog ? { ...dialog, mode: dialog.mode ^ permission.bit } : null)}
+                        onChange={() => setChmodDialog(dialog => {
+                          if (!dialog) return null
+                          const mode = dialog.mode ^ permission.bit
+                          return { ...dialog, mode, modeInput: formatModeInput(mode) }
+                        })}
                         aria-label={`${permission.scope} ${permission.label}`}
                         className="h-3.5 w-3.5 accent-brand-500"
                       />
@@ -1173,7 +1300,11 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
                     <input
                       type="checkbox"
                       checked={Boolean(chmodDialog.mode & permission.bit)}
-                      onChange={() => setChmodDialog(dialog => dialog ? { ...dialog, mode: dialog.mode ^ permission.bit } : null)}
+                        onChange={() => setChmodDialog(dialog => {
+                          if (!dialog) return null
+                          const mode = dialog.mode ^ permission.bit
+                          return { ...dialog, mode, modeInput: formatModeInput(mode) }
+                        })}
                       aria-label={permission.label}
                       className="h-3.5 w-3.5 accent-brand-500"
                     />
@@ -1255,7 +1386,7 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
               <Button
                 className="flex-1 max-[600px]:h-11"
                 variant="primary"
-                disabled={!ownershipInputValid(chmodDialog.uid, chmodDialog.gid)}
+                disabled={!octalModeInputValid(chmodDialog.modeInput) || !ownershipInputValid(chmodDialog.uid, chmodDialog.gid)}
                 onClick={applyPermissions}
               >
                 Apply

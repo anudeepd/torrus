@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback, useMemo, type FormEvent } from 'react'
+import { useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo, type FormEvent } from 'react'
 import { Plus, X, Pencil, Bookmark, Copy, Folder, GitFork, Settings, LogOut, Menu, PanelLeftClose, Radio, Columns2, Command } from 'lucide-react'
 import clsx from 'clsx'
 import { useTerminalStore } from '@/store/terminalStore'
@@ -163,13 +163,23 @@ export default function TabBar({ onAddTab, onCloseTab, onCloneTab, onOpenSftpTab
   const editInputRef = useRef<HTMLInputElement>(null)
   const contextMenuRef = useRef<HTMLDivElement>(null)
   const tabRefs = useRef<Record<string, HTMLButtonElement | null>>({})
+  const tabListRef = useRef<HTMLDivElement>(null)
 
-  useEffect(() => {
-    if (!activeTabId) return
-    tabRefs.current[activeTabId]?.scrollIntoView({
-      block: 'nearest',
-      inline: 'nearest',
+  useLayoutEffect(() => {
+    const tab = activeTabId ? tabRefs.current[activeTabId]?.parentElement : null
+    const tabList = tabListRef.current
+    if (!tab || !tabList) return
+
+    const frame = window.requestAnimationFrame(() => {
+      const tabRect = tab.getBoundingClientRect()
+      const tabListRect = tabList.getBoundingClientRect()
+      if (tabRect.left < tabListRect.left) {
+        tabList.scrollLeft += tabRect.left - tabListRect.left
+      } else if (tabRect.right > tabListRect.right) {
+        tabList.scrollLeft += tabRect.right - tabListRect.right
+      }
     })
+    return () => window.cancelAnimationFrame(frame)
   }, [activeTabId, tabs.length])
 
   // Reset save dialog if its tab is closed
@@ -272,7 +282,7 @@ export default function TabBar({ onAddTab, onCloseTab, onCloneTab, onOpenSftpTab
 
       {/* Tab buttons */}
       <div className={clsx('flex-1 h-full min-w-0 overflow-hidden', compactSidebar && 'col-start-2 row-start-2', compactSidebar && inSplitMode && 'col-end-4')}>
-        <div className="torrus-tab-strip flex h-full items-center flex-nowrap overflow-x-scroll overflow-y-hidden" role="tablist" aria-label="Sessions">
+        <div ref={tabListRef} className="torrus-tab-strip flex h-full items-center flex-nowrap overflow-x-scroll overflow-y-hidden" role="tablist" aria-label="Sessions">
           <AnimatePresence initial={false}>
           {tabs.map(tab => (
             <m.div

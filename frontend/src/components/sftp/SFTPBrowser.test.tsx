@@ -182,6 +182,19 @@ describe('SFTPBrowser', () => {
     expect(screen.getByRole('checkbox', { name: 'Setgid' })).toBeChecked()
     expect(screen.getByRole('checkbox', { name: 'Sticky' })).toBeChecked()
     expect(screen.getByText('rwSr-S--T')).toBeInTheDocument()
+    const octalModeInput = screen.getByRole('textbox', { name: 'Octal mode' })
+    expect(octalModeInput).toHaveValue('7640')
+    fireEvent.change(octalModeInput, { target: { value: '744' } })
+    expect(octalModeInput).toHaveValue('744')
+    expect(screen.getByRole('checkbox', { name: 'Owner Execute' })).toBeChecked()
+    expect(screen.getByRole('checkbox', { name: 'Group Read' })).toBeChecked()
+    expect(screen.getByRole('checkbox', { name: 'Group Write' })).not.toBeChecked()
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Owner Execute' }))
+    expect(octalModeInput).toHaveValue('644')
+    fireEvent.change(octalModeInput, { target: { value: '77' } })
+    expect(screen.getByText('Enter three or four octal digits (000–7777).')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Apply' })).toBeDisabled()
+    fireEvent.change(octalModeInput, { target: { value: '7640' } })
     fireEvent.click(screen.getByRole('checkbox', { name: 'Setuid' }))
     expect(screen.getByText(/3640/)).toBeInTheDocument()
     fireEvent.click(screen.getByRole('checkbox', { name: 'Setuid' }))
@@ -340,6 +353,101 @@ describe('SFTPBrowser', () => {
     fireEvent.click(row)
     expect(screen.queryByText('1 selected')).not.toBeInTheDocument()
     expect(row).toHaveAttribute('aria-selected', 'false')
+  })
+
+  it('supports range selection, additive selection, and keyboard deletion', () => {
+    const socket = createMockSocket()
+    render(<SFTPBrowser tabId={tabId} sourceTabId="terminal-tab" socket={socket as unknown as Socket} />)
+
+    act(() => {
+      socket._trigger('sftp:open:result', {
+        tab_id: tabId,
+        ok: true,
+        path: '/var/log',
+        entries: [
+          { name: 'alpha.log', path: '/var/log/alpha.log', type: 'file', size: 2, mtime: 1 },
+          { name: 'bravo.log', path: '/var/log/bravo.log', type: 'file', size: 2, mtime: 1 },
+          { name: 'charlie.log', path: '/var/log/charlie.log', type: 'file', size: 2, mtime: 1 },
+        ],
+      })
+    })
+
+    const alpha = screen.getByRole('option', { name: /alpha\.log/i })
+    const bravo = screen.getByRole('option', { name: /bravo\.log/i })
+    const charlie = screen.getByRole('option', { name: /charlie\.log/i })
+    fireEvent.click(alpha)
+    fireEvent.click(bravo, { shiftKey: true })
+    fireEvent.click(charlie, { ctrlKey: true })
+    expect(screen.getByText('3 selected')).toBeInTheDocument()
+
+    const browser = screen.getByRole('listbox', { name: 'File browser' })
+    fireEvent.keyDown(browser, { key: 'Delete' })
+    expect(screen.getByRole('heading', { name: 'Delete 3 items?' })).toBeInTheDocument()
+    socket.emit.mockClear()
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    expect(socket.emit).toHaveBeenCalledWith('sftp:delete', expect.objectContaining({
+      paths: expect.arrayContaining(['/var/log/alpha.log', '/var/log/bravo.log', '/var/log/charlie.log']),
+    }))
+  })
+
+  it('applies context-menu delete to every selected entry', () => {
+    const socket = createMockSocket()
+    render(<SFTPBrowser tabId={tabId} sourceTabId="terminal-tab" socket={socket as unknown as Socket} />)
+
+    act(() => {
+      socket._trigger('sftp:open:result', {
+        tab_id: tabId,
+        ok: true,
+        path: '/var/log',
+        entries: [
+          { name: 'alpha.log', path: '/var/log/alpha.log', type: 'file', size: 2, mtime: 1 },
+          { name: 'bravo.log', path: '/var/log/bravo.log', type: 'file', size: 2, mtime: 1 },
+          { name: 'charlie.log', path: '/var/log/charlie.log', type: 'file', size: 2, mtime: 1 },
+        ],
+      })
+    })
+
+    const alpha = screen.getByRole('option', { name: /alpha\.log/i })
+    const bravo = screen.getByRole('option', { name: /bravo\.log/i })
+    const charlie = screen.getByRole('option', { name: /charlie\.log/i })
+    fireEvent.click(alpha)
+    fireEvent.click(bravo, { shiftKey: true })
+    fireEvent.click(charlie, { ctrlKey: true })
+    fireEvent.contextMenu(bravo, { clientX: 40, clientY: 40 })
+
+    expect(screen.getByRole('menuitem', { name: 'Delete 3 items' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Delete 3 items' }))
+    expect(screen.getByRole('heading', { name: 'Delete 3 items?' })).toBeInTheDocument()
+
+    socket.emit.mockClear()
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    expect(socket.emit).toHaveBeenCalledWith('sftp:delete', expect.objectContaining({
+      paths: expect.arrayContaining(['/var/log/alpha.log', '/var/log/bravo.log', '/var/log/charlie.log']),
+    }))
+  })
+
+  it('selects files with row and select-all checkboxes', () => {
+    const socket = createMockSocket()
+    render(<SFTPBrowser tabId={tabId} sourceTabId="terminal-tab" socket={socket as unknown as Socket} />)
+
+    act(() => {
+      socket._trigger('sftp:open:result', {
+        tab_id: tabId,
+        ok: true,
+        path: '/var/log',
+        entries: [
+          { name: 'alpha.log', path: '/var/log/alpha.log', type: 'file', size: 2, mtime: 1 },
+          { name: 'bravo.log', path: '/var/log/bravo.log', type: 'file', size: 2, mtime: 1 },
+        ],
+      })
+    })
+
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Select alpha.log' }))
+    expect(screen.getByText('1 selected')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Select all files' }))
+    expect(screen.getByText('2 selected')).toBeInTheDocument()
+    expect(screen.getByRole('checkbox', { name: 'Select alpha.log' })).toBeChecked()
+    expect(screen.getByRole('checkbox', { name: 'Select bravo.log' })).toBeChecked()
   })
 
   it('uses the standard modal title typography for delete confirmation', () => {

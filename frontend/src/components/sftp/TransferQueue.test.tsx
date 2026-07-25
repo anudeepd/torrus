@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import TransferQueue from './TransferQueue'
 
@@ -8,17 +8,20 @@ const transfer = {
 }
 
 describe('TransferQueue', () => {
-  it('smoothly collapses and restores its transfer content', () => {
-    render(<TransferQueue transfers={[transfer]} onDismiss={vi.fn()} onRetry={vi.fn()} onClearCompleted={vi.fn()} />)
-    const toggle = screen.getByRole('button', { name: /Transfers/ })
-    expect(toggle).toHaveAttribute('aria-expanded', 'true')
-    expect(screen.getByText('release.tar.gz')).toBeInTheDocument()
+  it('shows each active transfer in a floating progress notification stack', () => {
+    const secondTransfer = {
+      ...transfer,
+      id: 'upload-2',
+      name: 'database.sql.gz',
+      bytes: 25,
+      progress: 25,
+    }
 
-    fireEvent.click(toggle)
-    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    render(<TransferQueue transfers={[transfer, secondTransfer]} onDismiss={vi.fn()} onRetry={vi.fn()} />)
 
-    fireEvent.click(toggle)
-    expect(toggle).toHaveAttribute('aria-expanded', 'true')
     expect(screen.getByText('release.tar.gz')).toBeInTheDocument()
+    expect(screen.getByText('database.sql.gz')).toBeInTheDocument()
+    expect(screen.getByRole('progressbar', { name: 'release.tar.gz transfer progress' })).toHaveAttribute('aria-valuenow', '50')
+    expect(screen.getByRole('progressbar', { name: 'database.sql.gz transfer progress' })).toHaveAttribute('aria-valuenow', '25')
   })
 })

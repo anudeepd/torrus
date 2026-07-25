@@ -12,6 +12,7 @@ const MAX_UPLOAD_CHUNK_BYTES = 32 * 1024 * 1024
 const TARGET_UPLOAD_CHUNKS = 128
 const UPLOAD_RETRY_LIMIT = 3
 const MAX_CONCURRENT_UPLOADS = 2
+const LISTING_TIMEOUT_MS = 15_000
 
 interface ListingPayload {
   tab_id: string
@@ -174,6 +175,7 @@ export function useSFTP(tabId: string, sourceTabId: string | undefined, socket: 
   const pendingUploadsRef = useRef(new Map<string, PendingUpload>())
   const pendingListingPathRef = useRef<string | null>(null)
   const queuedSamePathRefreshRef = useRef(false)
+  const listingTimeoutRef = useRef<number | null>(null)
   const sessionId = useTerminalStore(s => s.sessionId)
   const addTab = useTerminalStore(s => s.addTab)
   const setActiveTab = useTerminalStore(s => s.setActiveTab)
@@ -205,6 +207,26 @@ export function useSFTP(tabId: string, sourceTabId: string | undefined, socket: 
     notice: null,
     disconnected: false,
   }, [tab])
+  const clearListingTimeout = useCallback(() => {
+    if (listingTimeoutRef.current !== null) {
+      window.clearTimeout(listingTimeoutRef.current)
+      listingTimeoutRef.current = null
+    }
+  }, [])
+
+  const scheduleListingTimeout = useCallback((path: string) => {
+    clearListingTimeout()
+    listingTimeoutRef.current = window.setTimeout(() => {
+      listingTimeoutRef.current = null
+      if (pendingListingPathRef.current !== path) return
+      pendingListingPathRef.current = null
+      queuedSamePathRefreshRef.current = false
+      setError(tabId, 'Folder listing timed out. Refresh to try again.')
+    }, LISTING_TIMEOUT_MS)
+  }, [clearListingTimeout, setError, tabId])
+
+  useEffect(() => () => clearListingTimeout(), [clearListingTimeout])
+
 
   const list = useCallback((path?: string) => {
     const targetPath = path ?? useSFTPStore.getState().tabs[tabId]?.path ?? '.'
@@ -215,10 +237,11 @@ export function useSFTP(tabId: string, sourceTabId: string | undefined, socket: 
     }
     pendingListingPathRef.current = normalized
     queuedSamePathRefreshRef.current = false
+    scheduleListingTimeout(normalized)
     ensureTab(tabId)
     setLoading(tabId, true)
     socket.emit('sftp:list', { session_id: sessionId, tab_id: tabId, path: targetPath })
-  }, [socket, sessionId, tabId, ensureTab, setLoading])
+  }, [scheduleListingTimeout, socket, sessionId, tabId, ensureTab, setLoading])
 
   const refreshCurrentDirectory = useCallback(() => {
     list(useSFTPStore.getState().tabs[tabId]?.path ?? '.')
@@ -312,6 +335,7 @@ export function useSFTP(tabId: string, sourceTabId: string | undefined, socket: 
         requestedPath !== null && responsePath !== undefined && responsePath !== requestedPath
         && requestedPath.startsWith('/') && !requestedPath.startsWith('~/')
       ) return
+      clearListingTimeout()
       if (payload.ok === false) {
         pendingListingPathRef.current = null
         setError(tabId, payload.message ?? payload.code ?? 'Unable to list directory.')
@@ -425,7 +449,7 @@ export function useSFTP(tabId: string, sourceTabId: string | undefined, socket: 
       socket.off('sftp:download:result', onDownload)
       socket.off('sftp:accounts:result', onAccounts)
     }
-  }, [socket, tabId, list, refreshCurrentDirectory, setTabStatus, setError, setNotice, setListing, setUsername, setIsRoot, setDisconnected])
+  }, [clearListingTimeout, socket, tabId, list, refreshCurrentDirectory, setTabStatus, setError, setNotice, setListing, setUsername, setIsRoot, setDisconnected])
 
   const resumeUpload = useCallback(async (transferId: string) => {
     const pending = pendingUploadsRef.current.get(transferId)

@@ -2,7 +2,7 @@
 
 import asyncio
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 
 async def _cleanup_manager(manager):
@@ -95,6 +95,31 @@ class TestConnectFlow:
 
         mock_sio.emit.assert_awaited_once()
         assert mock_sio.emit.call_args[0][1]["code"] == "timeout"
+
+    @pytest.mark.asyncio
+    async def test_connect_hard_timeout_covers_blocking_connection_work(self, mock_sio):
+        from torrus.ssh_manager import CONNECTION_TIMEOUT, SSHManager
+
+        manager = SSHManager(mock_sio)
+        with patch("torrus.ssh_manager.paramiko.SSHClient") as MockClient, patch(
+            "torrus.ssh_manager.asyncio.wait_for",
+            new=AsyncMock(side_effect=TimeoutError()),
+        ) as wait_for:
+            client = MagicMock()
+            MockClient.return_value = client
+            await manager.connect(
+                sid="sid-1",
+                session_id="sess1",
+                tab_id="tab1",
+                host="example.com",
+                port=22,
+                username="user",
+                password="pass",
+            )
+
+        assert mock_sio.emit.await_args[0][1]["code"] == "timeout"
+        assert wait_for.await_args.kwargs["timeout"] == CONNECTION_TIMEOUT
+        client.close.assert_called_once()
 
 
 class TestSessionLifecycle:
