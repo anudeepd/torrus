@@ -829,10 +829,20 @@ async def on_ssh_clone(sid, data):
 # SFTP events
 # ---------------------------------------------------------------------------
 
-async def _emit_sftp_error(sid: str, tab_id: str, exc: SFTPError) -> None:
+async def _emit_sftp_error(
+    sid: str,
+    tab_id: str,
+    exc: SFTPError,
+    operation: str,
+) -> None:
     await sio.emit(
         "sftp:error",
-        {"tab_id": tab_id, "code": exc.code, "message": exc.message},
+        {
+            "tab_id": tab_id,
+            "code": exc.code,
+            "message": exc.message,
+            "operation": operation,
+        },
         to=sid,
     )
 
@@ -921,9 +931,14 @@ async def on_sftp_upload(sid, data):
         result = await sftp_manager.upload_file(tab_id, data.get("path", ""), raw)
         await sio.emit("sftp:upload:result", {"tab_id": tab_id, **result}, to=sid)
     except SFTPError as exc:
-        await _emit_sftp_error(sid, tab_id, exc)
+        await _emit_sftp_error(sid, tab_id, exc, "upload")
     except Exception:
-        await _emit_sftp_error(sid, tab_id, SFTPError("TRANSFER_FAILED", "Transfer failed. Check connection and retry."))
+        await _emit_sftp_error(
+            sid,
+            tab_id,
+            SFTPError("TRANSFER_FAILED", "Transfer failed. Check connection and retry."),
+            "upload",
+        )
 
 
 @sio.on("sftp:download")
@@ -939,7 +954,7 @@ async def on_sftp_download(sid, data):
         )
         await sio.emit("sftp:download:result", {"tab_id": tab_id, **result}, to=sid)
     except SFTPError as exc:
-        await _emit_sftp_error(sid, tab_id, exc)
+        await _emit_sftp_error(sid, tab_id, exc, "download")
 
 
 @sio.on("sftp:delete")
@@ -974,7 +989,7 @@ async def on_sftp_rename(sid, data):
         result = await sftp_manager.rename(tab_id, data.get("old_path", ""), data.get("new_path", ""))
         await sio.emit("sftp:rename:result", {"tab_id": tab_id, **result}, to=sid)
     except SFTPError as exc:
-        await _emit_sftp_error(sid, tab_id, exc)
+        await _emit_sftp_error(sid, tab_id, exc, "rename")
 
 
 @sio.on("sftp:mkdir")
@@ -988,7 +1003,7 @@ async def on_sftp_mkdir(sid, data):
         result = await sftp_manager.mkdir(tab_id, data.get("path", ""))
         await sio.emit("sftp:mkdir:result", {"tab_id": tab_id, **result}, to=sid)
     except SFTPError as exc:
-        await _emit_sftp_error(sid, tab_id, exc)
+        await _emit_sftp_error(sid, tab_id, exc, "mkdir")
 
 
 @sio.on("sftp:chmod")

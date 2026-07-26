@@ -53,7 +53,7 @@ describe('useSFTP', () => {
 
     expect(useSFTPStore.getState().tabs[tabId]).toMatchObject({
       disconnected: true,
-      error: 'SSH connection lost. Reconnect to continue.',
+      error: 'Could not load folder: SSH connection lost. Reconnect to continue.',
     })
     expect(useTerminalStore.getState().tabs[0].status).toBe('dead')
   })
@@ -73,7 +73,7 @@ describe('useSFTP', () => {
 
     expect(useSFTPStore.getState().tabs[tabId]).toMatchObject({
       disconnected: true,
-      error: 'SSH connection lost. Reconnect to continue.',
+      error: 'Upload failed: SSH connection lost. Reconnect to continue.',
     })
     expect(useTerminalStore.getState().tabs[0].status).toBe('dead')
   })
@@ -305,6 +305,31 @@ describe('useSFTP', () => {
     expect(socket.emit).not.toHaveBeenCalledWith('sftp:upload', expect.anything())
   })
 
+
+  it('shows the server detail when a streamed download fails', async () => {
+    const socket = createMockSocket()
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 403,
+      json: async () => ({ code: 'PERMISSION_DENIED', message: 'Permission denied: /srv/app/archive.tar' }),
+    }))
+    const { result } = renderHook(() => useSFTP(tabId, 'terminal-tab', socket as unknown as Socket))
+
+    await act(async () => {
+      await result.current.download({
+        name: 'archive.tar',
+        path: '/srv/app/archive.tar',
+        type: 'file',
+        size: 6 * 1024 * 1024,
+        mtime: 1,
+      })
+    })
+
+    expect(useSFTPStore.getState().tabs[tabId].error).toBe(
+      'Download failed: Permission denied: /srv/app/archive.tar',
+    )
+  })
+
   it('shows detailed delete errors without reloading the directory', () => {
     const socket = createMockSocket()
     renderHook(() => useSFTP(tabId, 'terminal-tab', socket as unknown as Socket))
@@ -343,6 +368,53 @@ describe('useSFTP', () => {
       tone: 'error',
       message: 'Permission denied: /srv/app/locked.txt',
     })
+  })
+
+
+  it.each([
+    ['upload', 'Upload failed'],
+    ['download', 'Download failed'],
+    ['rename', 'Could not rename item'],
+    ['mkdir', 'Could not create folder'],
+  ] as const)('labels %s failures with operation context', (operation, prefix) => {
+    const socket = createMockSocket()
+    renderHook(() => useSFTP(tabId, 'terminal-tab', socket as unknown as Socket))
+
+    act(() => {
+      socket._trigger('sftp:error', {
+        tab_id: tabId,
+        operation,
+        code: 'PERMISSION_DENIED',
+        message: 'Permission denied: /srv/app/locked',
+      })
+    })
+
+    expect(useSFTPStore.getState().tabs[tabId].error).toBe(
+      `${prefix}: Permission denied: /srv/app/locked`,
+    )
+  })
+
+  it.each([
+    ['sftp:chmod:result', 'Could not update permissions'],
+    ['sftp:chown:result', 'Could not update ownership'],
+    ['sftp:list:result', 'Could not load folder'],
+    ['sftp:accounts:result', 'Could not load remote accounts'],
+  ] as const)('labels %s failures with operation context', (event, prefix) => {
+    const socket = createMockSocket()
+    renderHook(() => useSFTP(tabId, 'terminal-tab', socket as unknown as Socket))
+
+    act(() => {
+      socket._trigger(event, {
+        tab_id: tabId,
+        ok: false,
+        code: 'PERMISSION_DENIED',
+        message: 'Permission denied: /srv/app/locked',
+      })
+    })
+
+    expect(useSFTPStore.getState().tabs[tabId].error).toBe(
+      `${prefix}: Permission denied: /srv/app/locked`,
+    )
   })
 
   it('reloads the directory after a partially successful delete', () => {

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react'
 import {
   ArrowUp,
   CircleAlert,
@@ -25,10 +25,10 @@ import Button from '@/components/ui/Button'
 import FileIcon from './FileIcon'
 import TransferQueue from './TransferQueue'
 import { useSFTP } from '@/hooks/useSFTP'
-import { useModalFocus } from '@/hooks/useModalFocus'
+import { useDialogPresence } from '@/hooks/useDialogPresence'
 import { useSFTPStore } from '@/store/sftpStore'
 import type { SFTPEntry } from '@/types'
-import { completedTransferRetentionMs, fade, exitTransition, surfaceTransition } from '@/motion/tokens'
+import { anchoredSurface, completedTransferRetentionMs, exitTransition, fade, surface, surfaceSpring, surfaceTransition } from '@/motion/tokens'
 import * as m from 'motion/react-m'
 import { AnimatePresence } from 'motion/react'
 
@@ -373,7 +373,9 @@ function StatusRail({
   const label = tone === 'error' ? 'ERROR' : 'OK'
 
   return (
-    <div
+    <m.div
+      {...fade}
+      transition={exitTransition}
       className={clsx('flex min-h-9 flex-shrink-0 items-start gap-2 border-b border-surface-800 border-l-2 bg-surface-900 px-3 py-2 font-mono text-[11px] leading-4', {
         'border-l-red-400 text-red-200': tone === 'error',
         'border-l-brand-400 text-slate-300': tone === 'success',
@@ -389,10 +391,45 @@ function StatusRail({
         'text-brand-400': tone === 'success',
       })}>{label}</span>
       <span className="min-w-0 flex-1 break-words text-slate-300">{message}</span>
-      <button type="button" onClick={onDismiss} className="-my-1 flex h-6 w-6 flex-shrink-0 items-center justify-center text-slate-500 hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500" aria-label="Dismiss message">
+      <button type="button" onClick={onDismiss} className="-my-1 flex h-6 w-6 flex-shrink-0 items-center justify-center text-slate-500 hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 max-[600px]:-my-2 max-[600px]:h-11 max-[600px]:w-11" aria-label="Dismiss message">
         <X className="h-3.5 w-3.5" />
       </button>
-    </div>
+    </m.div>
+  )
+}
+
+interface SFTPDialogProps {
+  labelledBy: string
+  initialFocus?: RefObject<HTMLElement | null>
+  onClose: () => void
+  className: string
+  children: ReactNode
+}
+
+function SFTPDialog({ labelledBy, initialFocus, onClose, className, children }: SFTPDialogProps) {
+  const { ref, presenceProps } = useDialogPresence(onClose, initialFocus)
+
+  return (
+    <m.div
+      {...fade}
+      transition={exitTransition}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-surface-950/70 p-4 backdrop-blur-[1px]"
+      onMouseDown={event => { if (event.target === event.currentTarget) onClose() }}
+    >
+      <m.div
+        {...surface}
+        {...presenceProps}
+        transition={surfaceSpring}
+        ref={ref}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={labelledBy}
+        tabIndex={-1}
+        className={clsx('flex w-full flex-col gap-4 rounded-xl border border-surface-700 bg-surface-900/95 p-5 shadow-2xl', className)}
+      >
+        {children}
+      </m.div>
+    </m.div>
   )
 }
 
@@ -453,7 +490,7 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
     parentPath,
   } = useSFTP(tabId, sourceTabId, socket)
   const { toggleSelected, setSelected, clearSelected, removeTransfer } = useSFTPStore()
-  const statusNotice = notice ?? (error ? { tone: 'error' as const, message: error } : null)
+  const statusNotice = error ? { tone: 'error' as const, message: error } : notice
   const clearFileSelection = useCallback(() => {
     clearSelected(tabId)
     setSelectionAnchorPath(null)
@@ -538,9 +575,6 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
   const closePermissions = useCallback(() => setChmodDialog(null), [])
   const closeDelete = useCallback(() => setDeletePaths(null), [])
 
-  const newFolderDialogRef = useModalFocus(newFolderOpen, closeNewFolder, folderInputRef)
-  const chmodDialogRef = useModalFocus(Boolean(chmodDialog), closePermissions)
-  const deleteDialogRef = useModalFocus(Boolean(deletePaths), closeDelete, deleteCancelRef)
   const completedTransferTimersRef = useRef(new Map<string, number>())
 
   useEffect(() => {
@@ -597,7 +631,7 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
     const onKeyDown = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'l') {
         event.preventDefault()
-        setEditingPath(true)
+        if (!newFolderOpen && !chmodDialog && !deletePaths) setEditingPath(true)
       } else if (event.key === 'Escape') {
         if (contextMenu) {
           event.preventDefault()
@@ -622,7 +656,7 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
       window.removeEventListener('keydown', onKeyDown)
       window.removeEventListener('pointerdown', closeMenu)
     }
-  }, [closeContextMenu, closeHelpMenu, closeMoreMenu, contextMenu, helpOpen, moreActionsOpen])
+  }, [chmodDialog, closeContextMenu, closeHelpMenu, closeMoreMenu, contextMenu, deletePaths, helpOpen, moreActionsOpen, newFolderOpen])
 
   const sortedEntries = useMemo(
     () => sortRules.length === 0 ? entries : [...entries].sort((a, b) => compareEntries(a, b, sortRules)),
@@ -755,6 +789,7 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
       else toggleSelected(tabId, selected.path)
       setSelectionAnchorPath(selected.path)
     } else if (event.key === 'F2' && selected) {
+      event.preventDefault()
       startRename(selected)
     } else if (event.key === 'Delete' && selectedPaths.length) {
       event.preventDefault()
@@ -831,7 +866,7 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
           </Button>
           <Button className="max-[600px]:hidden" variant="ghost" size="sm" onClick={() => setNewFolderOpen(true)} title="Create new folder">
             <FolderPlus className="h-3.5 w-3.5" />
-            <span className="hidden sm:inline">New Folder</span>
+            <span className="hidden sm:inline">New folder</span>
           </Button>
           <Button className="max-[600px]:h-11 max-[600px]:w-11 max-[600px]:px-0" variant="ghost" size="sm" title="Upload files" onClick={() => fileInputRef.current?.click()}>
             <Upload className="h-3.5 w-3.5" />
@@ -855,8 +890,12 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
           >
             <MoreHorizontal className="h-4 w-4" />
           </Button>
+          <AnimatePresence initial={false}>
           {moreActionsOpen && (
-            <div
+            <div key="more-actions" className="contents">
+            <m.div
+              {...anchoredSurface}
+              transition={surfaceSpring}
               ref={moreMenuRef}
               id="sftp-more-actions"
               role="menu"
@@ -871,8 +910,10 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
               <button type="button" role="menuitem" onClick={() => { closeMoreMenu(true); setNewFolderOpen(true) }} className="flex h-11 w-full items-center gap-2 px-3 text-left text-xs text-slate-300 hover:bg-surface-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-500">
                 <FolderPlus className="h-3.5 w-3.5" /> New folder
               </button>
+            </m.div>
             </div>
           )}
+          </AnimatePresence>
           {selectedPaths.length > 0 && (
             <div className="mx-1 h-5 border-l border-surface-800" />
           )}
@@ -912,8 +953,10 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
           >
             <CircleHelp className="h-3.5 w-3.5" />
           </Button>
+          <AnimatePresence initial={false}>
           {helpOpen && (
-            <div ref={helpMenuRef} id="sftp-shortcuts" className="absolute right-0 top-8 z-40 w-64 rounded-lg border border-surface-700 bg-surface-800 p-3 shadow-xl" onPointerDown={event => event.stopPropagation()}>
+            <div key="keyboard-shortcuts" className="contents">
+            <m.div {...anchoredSurface} transition={surfaceSpring} ref={helpMenuRef} id="sftp-shortcuts" className="absolute right-0 top-8 z-40 w-64 rounded-lg border border-surface-700 bg-surface-800 p-3 shadow-xl" onPointerDown={event => event.stopPropagation()}>
               <p className="mb-2 text-xs font-medium text-slate-200">Keyboard shortcuts</p>
               <div className="grid grid-cols-[72px_1fr] gap-x-3 gap-y-1 text-[11px] text-slate-400">
                 <span className="font-mono text-slate-300">Ctrl+L</span><span>Edit path</span>
@@ -924,8 +967,10 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
                 <span className="font-mono text-slate-300">Ctrl+A</span><span>Select all</span>
                 <span className="font-mono text-slate-300">Arrows</span><span>Move selection</span>
               </div>
+            </m.div>
             </div>
           )}
+          </AnimatePresence>
         </div>
       </div>
 
@@ -943,8 +988,12 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
         }}
       />
 
+      <AnimatePresence initial={false}>
       {dropWaitState && (
-        <div
+        <m.div
+          key={dropWaitState}
+          {...fade}
+          transition={exitTransition}
           className="flex min-h-9 flex-shrink-0 items-center gap-2 border-b border-surface-800 border-l-2 border-l-brand-400 bg-surface-900 px-3 py-1.5 font-mono text-[11px] text-slate-300"
         >
           {dropWaitState === 'preparing' ? (
@@ -959,7 +1008,7 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
-              className="flex h-8 flex-shrink-0 items-center px-2 font-sans text-xs font-medium text-brand-300 hover:text-brand-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+              className="flex h-8 flex-shrink-0 items-center px-2 font-sans text-xs font-medium text-brand-300 hover:text-brand-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 max-[600px]:h-11"
             >
               Choose files
             </button>
@@ -967,15 +1016,18 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
           <button
             type="button"
             onClick={clearDropFeedback}
-            className="flex h-8 w-8 flex-shrink-0 items-center justify-center text-slate-500 hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+            className="flex h-8 w-8 flex-shrink-0 items-center justify-center text-slate-500 hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 max-[600px]:h-11 max-[600px]:w-11"
             aria-label="Dismiss upload status"
           >
             <X className="h-3.5 w-3.5" />
           </button>
-        </div>
+        </m.div>
       )}
+      </AnimatePresence>
 
-      {statusNotice && <StatusRail {...statusNotice} onDismiss={dismissStatusNotice} />}
+      <AnimatePresence initial={false}>
+        {statusNotice && <StatusRail key={`${statusNotice.tone}-${statusNotice.message}`} {...statusNotice} onDismiss={dismissStatusNotice} />}
+      </AnimatePresence>
 
       <div
         ref={listRef}
@@ -1106,9 +1158,17 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
                       onChange={event => setRenameValue(event.target.value)}
                       onBlur={confirmRename}
                       onKeyDown={event => {
-                        if (event.key === 'Enter') confirmRename()
-                        if (event.key === 'Escape') setRenamePath(null)
+                        event.stopPropagation()
+                        if (event.key === 'Enter') {
+                          event.preventDefault()
+                          confirmRename()
+                        }
+                        if (event.key === 'Escape') {
+                          event.preventDefault()
+                          setRenamePath(null)
+                        }
                       }}
+                      aria-label={`Rename ${entry.name}`}
                       className="min-w-0 border border-brand-500 bg-surface-950 px-1 text-xs text-slate-200 outline-none"
                     />
                   ) : (
@@ -1130,15 +1190,21 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
           </m.div>
         )}
 
+        <AnimatePresence initial={false}>
         {dragging && (
-          <div className="absolute inset-0 flex items-center justify-center bg-brand-500/20 text-xs font-medium text-brand-100">
+          <m.div {...fade} transition={exitTransition} className="absolute inset-0 flex items-center justify-center bg-brand-500/20 text-xs font-medium text-brand-100">
             Drop files to upload
-          </div>
+          </m.div>
         )}
+        </AnimatePresence>
       </div>
 
+      <AnimatePresence initial={false}>
       {contextMenu && (
-        <div
+        <div key={`${contextMenu.entries[0]?.path}-${contextMenu.x}-${contextMenu.y}`} className="contents">
+        <m.div
+          {...anchoredSurface}
+          transition={surfaceSpring}
           ref={contextMenuRef}
           className="fixed z-50 w-44 rounded-lg border border-surface-700 bg-surface-800 py-1 shadow-xl"
           style={{ left: contextMenu.x, top: contextMenu.y }}
@@ -1189,15 +1255,19 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
             </button>
             ))
           })()}
+        </m.div>
         </div>
       )}
+      </AnimatePresence>
 
+      <AnimatePresence initial={false}>
       {disconnected && (
-        <div className="absolute inset-0 z-30 flex flex-col items-center justify-center gap-3 bg-surface-950/80">
+        <m.div {...fade} transition={exitTransition} className="absolute inset-0 z-30 flex flex-col items-center justify-center gap-3 bg-surface-950/80">
           <p className="text-xs text-slate-300">SSH connection lost</p>
           <Button variant="primary" size="sm" onClick={open} aria-label="Reconnect SSH session">Reconnect</Button>
-        </div>
+        </m.div>
       )}
+      </AnimatePresence>
 
       <TransferQueue
         transfers={transfers}
@@ -1205,39 +1275,39 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
         onRetry={retryUpload}
       />
 
+      <AnimatePresence initial={false}>
       {newFolderOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-sm" onMouseDown={event => { if (event.target === event.currentTarget) setNewFolderOpen(false) }}>
-          <div ref={newFolderDialogRef} role="dialog" aria-modal="true" aria-labelledby="new-folder-title" tabIndex={-1} className="flex w-full max-w-xs flex-col gap-4 rounded-xl border border-surface-700 bg-surface-900/95 p-5 shadow-2xl">
+        <SFTPDialog key="new-folder" labelledBy="new-folder-title" initialFocus={folderInputRef} onClose={closeNewFolder} className="max-w-xs">
             <div>
-              <h2 id="new-folder-title" className="text-xs font-medium text-slate-200">New folder</h2>
-              <p className="mt-1 text-[11px] text-slate-500">Create inside {path}</p>
+              <h2 id="new-folder-title" className="text-sm font-semibold text-slate-200">New folder</h2>
+              <p className="mt-2 truncate text-xs text-slate-400" title={path}>Create inside {path}</p>
             </div>
-            <label htmlFor="new-folder-name" className="text-[11px] font-medium text-slate-400">Folder name</label>
-            <input
-              id="new-folder-name"
-              ref={folderInputRef}
-              value={newFolderName}
-              onChange={event => setNewFolderName(event.target.value)}
-              onKeyDown={event => {
-                if (event.key === 'Enter') createFolder()
-              }}
-              className="rounded-md border border-surface-700 bg-surface-950 px-2 py-1.5 text-xs text-slate-200 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500/30 max-[600px]:h-11"
-              placeholder="Folder name"
-            />
+            <label className="flex flex-col gap-1">
+              <span className="text-[11px] font-medium text-slate-400">Folder name</span>
+              <input
+                id="new-folder-name"
+                ref={folderInputRef}
+                value={newFolderName}
+                onChange={event => setNewFolderName(event.target.value)}
+                onKeyDown={event => {
+                  if (event.key === 'Enter') createFolder()
+                }}
+                className="rounded-md border border-surface-700 bg-surface-950 px-2 py-1.5 text-xs text-slate-200 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500/30 max-[600px]:h-11"
+                placeholder="Folder name"
+              />
+            </label>
             <div className="flex gap-2">
               <Button className="flex-1 max-[600px]:h-11" variant="secondary" onClick={() => setNewFolderOpen(false)}>Cancel</Button>
               <Button className="flex-1 max-[600px]:h-11" variant="primary" disabled={!newFolderName.trim()} onClick={createFolder}>Create</Button>
             </div>
-          </div>
-        </div>
+        </SFTPDialog>
       )}
 
       {chmodDialog && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-sm" onMouseDown={event => { if (event.target === event.currentTarget) setChmodDialog(null) }}>
-          <div ref={chmodDialogRef} role="dialog" aria-modal="true" aria-labelledby="permissions-title" tabIndex={-1} className="flex w-full max-w-[360px] flex-col gap-4 rounded-xl border border-surface-700 bg-surface-900/95 p-5 shadow-2xl">
+        <SFTPDialog key="permissions" labelledBy="permissions-title" onClose={closePermissions} className="max-w-[360px]">
             <div>
-              <h2 id="permissions-title" className="text-xs font-medium text-slate-200">Permissions</h2>
-              <p className="mt-1 truncate font-mono text-[11px] text-slate-500">{chmodDialog.entry.path}</p>
+              <h2 id="permissions-title" className="text-sm font-semibold text-slate-200">Permissions</h2>
+              <p className="mt-2 truncate font-mono text-xs text-slate-400" title={chmodDialog.entry.path}>{chmodDialog.entry.path}</p>
             </div>
             <label className="flex flex-col gap-1">
               <span className="text-[11px] font-medium text-slate-400">Octal mode</span>
@@ -1392,13 +1462,11 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
                 Apply
               </Button>
             </div>
-          </div>
-        </div>
+        </SFTPDialog>
       )}
 
       {deletePaths && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-sm" onMouseDown={event => { if (event.target === event.currentTarget) setDeletePaths(null) }}>
-          <div ref={deleteDialogRef} role="dialog" aria-modal="true" aria-labelledby="delete-title" tabIndex={-1} className="flex w-full max-w-xs flex-col gap-4 rounded-xl border border-surface-700 bg-surface-900/95 p-5 shadow-2xl">
+        <SFTPDialog key="delete" labelledBy="delete-title" initialFocus={deleteCancelRef} onClose={closeDelete} className="max-w-xs">
             <div>
               <h2 id="delete-title" className="text-sm font-semibold text-slate-200">Delete {deletePaths.length === 1 ? 'item' : `${deletePaths.length} items`}?</h2>
               <p className="mt-2 text-xs leading-relaxed text-slate-400">
@@ -1411,9 +1479,9 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
               <Button ref={deleteCancelRef} className="flex-1 max-[600px]:h-11" variant="secondary" onClick={() => setDeletePaths(null)}>Cancel</Button>
               <Button className="flex-1 max-[600px]:h-11" variant="danger" onClick={confirmDelete}>Delete</Button>
             </div>
-          </div>
-        </div>
+        </SFTPDialog>
       )}
+      </AnimatePresence>
     </div>
   )
 }

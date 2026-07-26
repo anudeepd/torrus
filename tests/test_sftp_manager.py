@@ -277,6 +277,31 @@ async def test_missing_file_maps_to_file_not_found():
     assert exc.value.code == "FILE_NOT_FOUND"
 
 
+
+@pytest.mark.asyncio
+async def test_nonempty_directory_delete_reports_actionable_error():
+    from torrus.sftp_manager import SFTPError, SFTPManager
+
+    sftp = FakeSFTP()
+    sftp.dirs.add("/home/app/full")
+    sftp.fs["/home/app/full/child.txt"] = b"content"
+
+    def reject_nonempty_directory(_path: str) -> None:
+        raise OSError("Failure")
+
+    sftp.rmdir = reject_nonempty_directory
+    manager = SFTPManager()
+    try:
+        await manager.open_sftp("sess1", "tab1", FakeSSHManager(sftp))
+        with pytest.raises(SFTPError) as exc:
+            await manager.delete("tab1", "full")
+    finally:
+        await manager.shutdown()
+
+    assert exc.value.code == "DIRECTORY_NOT_EMPTY"
+    assert exc.value.message == "Directory is not empty: /home/app/full"
+
+
 @pytest.mark.asyncio
 async def test_chmod_missing_file_maps_to_file_not_found():
     from torrus.sftp_manager import SFTPError, SFTPManager

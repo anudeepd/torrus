@@ -178,6 +178,7 @@ describe('SFTPBrowser', () => {
 
     fireEvent.contextMenu(screen.getByRole('option', { name: /app\.log/i }), { clientX: 40, clientY: 40 })
     fireEvent.click(screen.getByRole('menuitem', { name: 'Permissions' }))
+    expect(screen.getByRole('heading', { name: 'Permissions' })).toHaveClass('text-sm', 'font-semibold')
     expect(screen.getByRole('checkbox', { name: 'Setuid' })).toBeChecked()
     expect(screen.getByRole('checkbox', { name: 'Setgid' })).toBeChecked()
     expect(screen.getByRole('checkbox', { name: 'Sticky' })).toBeChecked()
@@ -225,8 +226,9 @@ describe('SFTPBrowser', () => {
     fireEvent.click(screen.getByRole('button', { name: 'var' }))
     expect(socket.emit).toHaveBeenCalledWith('sftp:list', expect.objectContaining({ path: '/var' }))
 
-    fireEvent.click(screen.getByRole('button', { name: 'New Folder' }))
-    expect(screen.getByRole('heading', { name: 'New folder' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'New folder' }))
+    expect(screen.getByRole('heading', { name: 'New folder' })).toHaveClass('text-sm', 'font-semibold')
+    expect(screen.getByLabelText('Folder name').parentElement).toHaveClass('gap-1')
     fireEvent.change(screen.getByPlaceholderText('Folder name'), { target: { value: 'archive' } })
     socket.emit.mockClear()
     fireEvent.click(screen.getByRole('button', { name: 'Create' }))
@@ -248,11 +250,26 @@ describe('SFTPBrowser', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('Failed to delete item: Permission denied.')
     expect(screen.getByRole('alert')).toHaveTextContent('ERROR')
     expect(screen.getByText('Failed to delete item: Permission denied.')).toHaveClass('break-words')
+    expect(screen.getByRole('button', { name: 'Dismiss message' })).toHaveClass('max-[600px]:h-11', 'max-[600px]:w-11')
 
     act(() => vi.advanceTimersByTime(11999))
     expect(screen.getByRole('alert')).toBeInTheDocument()
     act(() => vi.advanceTimersByTime(1))
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
+
+  it('prioritizes current errors over stale success notices', () => {
+    const socket = createMockSocket()
+    render(<SFTPBrowser tabId={tabId} sourceTabId="terminal-tab" socket={socket as unknown as Socket} />)
+
+    act(() => {
+      useSFTPStore.getState().setNotice(tabId, { tone: 'success', message: 'Deleted 1 item.' })
+      useSFTPStore.getState().setError(tabId, 'Folder listing failed. Refresh to try again.')
+    })
+
+    expect(screen.getByRole('alert')).toHaveTextContent('Folder listing failed. Refresh to try again.')
+    expect(screen.queryByText('Deleted 1 item.')).not.toBeInTheDocument()
   })
 
   it('keeps failed transfers visible until dismissed', () => {
@@ -353,6 +370,38 @@ describe('SFTPBrowser', () => {
     fireEvent.click(row)
     expect(screen.queryByText('1 selected')).not.toBeInTheDocument()
     expect(row).toHaveAttribute('aria-selected', 'false')
+  })
+
+
+  it('keeps rename keyboard events inside the editor', () => {
+    const socket = createMockSocket()
+    render(<SFTPBrowser tabId={tabId} sourceTabId="terminal-tab" socket={socket as unknown as Socket} />)
+
+    act(() => {
+      socket._trigger('sftp:open:result', {
+        tab_id: tabId,
+        ok: true,
+        path: '/var/log',
+        entries: [{ name: 'app.log', path: '/var/log/app.log', type: 'file', size: 2, mtime: 1 }],
+      })
+    })
+
+    fireEvent.click(screen.getByRole('option', { name: /app\.log/i }))
+    const browser = screen.getByRole('listbox', { name: 'File browser' })
+    expect(fireEvent.keyDown(browser, { key: 'F2' })).toBe(false)
+
+    const editor = screen.getByRole('textbox', { name: 'Rename app.log' })
+    fireEvent.change(editor, { target: { value: 'renamed.log' } })
+    socket.emit.mockClear()
+    fireEvent.keyDown(editor, { key: 'Backspace' })
+    expect(socket.emit).not.toHaveBeenCalledWith('sftp:list', expect.anything())
+
+    fireEvent.keyDown(editor, { key: 'Enter' })
+    expect(socket.emit).toHaveBeenCalledWith('sftp:rename', expect.objectContaining({
+      old_path: '/var/log/app.log',
+      new_path: '/var/log/renamed.log',
+    }))
+    expect(socket.emit).not.toHaveBeenCalledWith('sftp:download', expect.anything())
   })
 
   it('supports range selection, additive selection, and keyboard deletion', () => {

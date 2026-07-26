@@ -518,9 +518,11 @@ class SFTPManager:
 
     def _delete_sync(self, session: SFTPSession, path: str) -> dict[str, Any]:
         resolved = _resolve_remote_path(session.cwd, path, session.home)
+        is_directory = False
         try:
             attr = session.client.lstat(resolved)
-            if stat.S_ISDIR(attr.st_mode or 0):
+            is_directory = stat.S_ISDIR(attr.st_mode or 0)
+            if is_directory:
                 session.client.rmdir(resolved)
             else:
                 session.client.remove(resolved)
@@ -528,7 +530,18 @@ class SFTPManager:
         except SFTPError:
             raise
         except Exception as exc:
-            raise _map_error(exc, resolved) from exc
+            mapped = _map_error(exc, resolved)
+            if is_directory and mapped.code == "TRANSFER_FAILED":
+                try:
+                    has_entries = bool(session.client.listdir_attr(resolved))
+                except Exception:
+                    has_entries = False
+                if has_entries:
+                    raise SFTPError(
+                        "DIRECTORY_NOT_EMPTY",
+                        f"Directory is not empty: {resolved}",
+                    ) from exc
+            raise mapped from exc
 
     def _rename_sync(self, session: SFTPSession, old_path: str, new_path: str) -> dict[str, Any]:
         old_resolved = _resolve_remote_path(session.cwd, old_path, session.home)
@@ -652,6 +665,8 @@ def _map_error(exc: Exception, path: str) -> SFTPError:
         return SFTPError("FILE_NOT_FOUND", f"File not found: {path}")
     if isinstance(exc, PermissionError) or err_no in {errno.EACCES, errno.EPERM}:
         return SFTPError("PERMISSION_DENIED", f"Permission denied: {path}")
+    if err_no == errno.ENOTEMPTY:
+        return SFTPError("DIRECTORY_NOT_EMPTY", f"Directory is not empty: {path}")
     if _is_connection_closed(exc, err_no, message):
         return SFTPError("CONNECTION_CLOSED", "SSH connection lost. Reconnect to continue.")
     return SFTPError("TRANSFER_FAILED", message)

@@ -31,12 +31,17 @@ interface DownloadPayload {
   ok?: boolean
   name?: string
   data?: string
+  code?: string
+  message?: string
 }
+
+type SFTPErrorOperation = 'upload' | 'download' | 'rename' | 'mkdir'
 
 interface SFTPErrorPayload {
   tab_id: string
   code?: string
   message?: string
+  operation?: SFTPErrorOperation
 }
 
 interface AccountsPayload {
@@ -153,6 +158,24 @@ function deleteFailureMessage(payload: ListingPayload): string {
     return `Deleted ${plural(succeeded.length, 'item')}; failed to delete ${itemLabel(firstFailure?.path)}: ${detail}`
   }
   return `Failed to delete ${itemLabel(firstFailure?.path)}: ${detail}`
+}
+
+const OPERATION_FAILURE_PREFIX: Record<SFTPErrorOperation, string> = {
+  upload: 'Upload failed',
+  download: 'Download failed',
+  rename: 'Could not rename item',
+  mkdir: 'Could not create folder',
+}
+
+function contextualFailureMessage(
+  prefix: string,
+  payload: { message?: string },
+  fallback: string,
+): string {
+  const detail = payload.message ?? fallback
+  return detail.toLowerCase().startsWith(prefix.toLowerCase())
+    ? detail
+    : `${prefix}: ${detail}`
 }
 
 function triggerDownload(name: string, base64Data: string) {
@@ -338,11 +361,7 @@ export function useSFTP(tabId: string, sourceTabId: string | undefined, socket: 
       clearListingTimeout()
       if (payload.ok === false) {
         pendingListingPathRef.current = null
-        setError(tabId, payload.message ?? payload.code ?? 'Unable to list directory.')
-        if (payload.code === 'CONNECTION_CLOSED') {
-          setDisconnected(tabId, true)
-          setTabStatus(tabId, 'dead')
-        }
+        showFailure(payload, 'Could not load folder', 'Check the path and retry.')
         if (queuedSamePathRefreshRef.current) {
           queuedSamePathRefreshRef.current = false
           list(requestedPath ?? payload.path ?? '.')
@@ -359,9 +378,14 @@ export function useSFTP(tabId: string, sourceTabId: string | undefined, socket: 
         list(payload.path ?? requestedPath ?? '.')
       }
     }
-    const onError = (payload: SFTPErrorPayload) => {
-      if (payload.tab_id !== tabId) return
-      const message = payload.message ?? 'Transfer failed. Check connection and retry.'
+    const showFailure = (
+      payload: { code?: string; message?: string },
+      prefix?: string,
+      fallback = 'SFTP operation failed. Check connection and retry.',
+    ) => {
+      const message = prefix
+        ? contextualFailureMessage(prefix, payload, fallback)
+        : payload.message ?? fallback
       setError(tabId, message)
       setNotice(tabId, { tone: 'error', message })
       if (payload.code === 'CONNECTION_CLOSED') {
@@ -369,18 +393,24 @@ export function useSFTP(tabId: string, sourceTabId: string | undefined, socket: 
         setTabStatus(tabId, 'dead')
       }
     }
-    const onMutation = (payload: ListingPayload) => {
+    const onError = (payload: SFTPErrorPayload) => {
+      if (payload.tab_id !== tabId) return
+      showFailure(
+        payload,
+        payload.operation ? OPERATION_FAILURE_PREFIX[payload.operation] : undefined,
+      )
+    }
+    const mutationHandler = (prefix: string) => (payload: ListingPayload) => {
       if (payload.tab_id !== tabId) return
       if (payload.ok === false) {
-        setError(tabId, payload.message ?? 'Operation failed. Check permissions and retry.')
-        if (payload.code === 'CONNECTION_CLOSED') {
-          setDisconnected(tabId, true)
-          setTabStatus(tabId, 'dead')
-        }
+        showFailure(payload, prefix, 'Check permissions and retry.')
         return
       }
       refreshCurrentDirectory()
     }
+    const onUpload = mutationHandler('Upload failed')
+    const onRename = mutationHandler('Could not rename item')
+    const onMkdir = mutationHandler('Could not create folder')
     const onDelete = (payload: ListingPayload) => {
       if (payload.tab_id !== tabId) return
       if (payload.ok === false) {
@@ -400,26 +430,20 @@ export function useSFTP(tabId: string, sourceTabId: string | undefined, socket: 
       setNotice(tabId, { tone: 'success', message: deleteSuccessMessage(payload) })
       refreshCurrentDirectory()
     }
-    const onChmod = (payload: ListingPayload) => {
+    const onChmod = mutationHandler('Could not update permissions')
+    const onChown = mutationHandler('Could not update ownership')
+    const onDownload = (payload: DownloadPayload) => {
       if (payload.tab_id !== tabId) return
       if (payload.ok === false) {
-        setError(tabId, payload.message ?? 'Unable to update permissions.')
-        if (payload.code === 'CONNECTION_CLOSED') {
-          setDisconnected(tabId, true)
-          setTabStatus(tabId, 'dead')
-        }
+        showFailure(payload, 'Download failed', 'Check connection and retry.')
         return
       }
-      refreshCurrentDirectory()
-    }
-    const onDownload = (payload: DownloadPayload) => {
-      if (payload.tab_id !== tabId || !payload.data) return
-      triggerDownload(payload.name ?? 'download', payload.data)
+      if (payload.data) triggerDownload(payload.name ?? 'download', payload.data)
     }
     const onAccounts = (payload: AccountsPayload) => {
       if (payload.tab_id !== tabId) return
       if (payload.ok === false) {
-        setError(tabId, payload.message ?? 'Unable to load remote accounts.')
+        showFailure(payload, 'Could not load remote accounts', 'Check permissions and retry.')
         return
       }
       setUsers(payload.users ?? [])
@@ -428,24 +452,24 @@ export function useSFTP(tabId: string, sourceTabId: string | undefined, socket: 
     socket.on('sftp:open:result', onListing)
     socket.on('sftp:list:result', onListing)
     socket.on('sftp:error', onError)
-    socket.on('sftp:upload:result', onMutation)
+    socket.on('sftp:upload:result', onUpload)
     socket.on('sftp:delete:result', onDelete)
-    socket.on('sftp:rename:result', onMutation)
-    socket.on('sftp:mkdir:result', onMutation)
+    socket.on('sftp:rename:result', onRename)
+    socket.on('sftp:mkdir:result', onMkdir)
     socket.on('sftp:chmod:result', onChmod)
-    socket.on('sftp:chown:result', onChmod)
+    socket.on('sftp:chown:result', onChown)
     socket.on('sftp:download:result', onDownload)
     socket.on('sftp:accounts:result', onAccounts)
     return () => {
       socket.off('sftp:open:result', onListing)
       socket.off('sftp:list:result', onListing)
       socket.off('sftp:error', onError)
-      socket.off('sftp:upload:result', onMutation)
+      socket.off('sftp:upload:result', onUpload)
       socket.off('sftp:delete:result', onDelete)
-      socket.off('sftp:rename:result', onMutation)
-      socket.off('sftp:mkdir:result', onMutation)
+      socket.off('sftp:rename:result', onRename)
+      socket.off('sftp:mkdir:result', onMkdir)
       socket.off('sftp:chmod:result', onChmod)
-      socket.off('sftp:chown:result', onChmod)
+      socket.off('sftp:chown:result', onChown)
       socket.off('sftp:download:result', onDownload)
       socket.off('sftp:accounts:result', onAccounts)
     }
@@ -554,7 +578,12 @@ export function useSFTP(tabId: string, sourceTabId: string | undefined, socket: 
         `/sftp/download?session_id=${encodeURIComponent(sessionId)}&tab_id=${encodeURIComponent(tabId)}&path=${encodeURIComponent(entry.path)}`,
       )
       if (!response.ok) {
-        setError(tabId, `Download failed (${response.status})`)
+        const body = await response.json().catch(() => null) as { message?: string } | null
+        setError(tabId, contextualFailureMessage(
+          'Download failed',
+          body ?? {},
+          `Server returned ${response.status}.`,
+        ))
         return
       }
       const url = URL.createObjectURL(await response.blob())

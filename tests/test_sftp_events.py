@@ -80,9 +80,47 @@ async def test_sftp_error_event_on_missing_session(reset_server_state):
 
     sio_mock.emit.assert_awaited_once_with(
         "sftp:error",
-        {"tab_id": "tab1", "code": "CONNECTION_CLOSED", "message": "SSH connection lost. Reconnect to continue."},
+        {
+            "tab_id": "tab1",
+            "code": "CONNECTION_CLOSED",
+            "message": "SSH connection lost. Reconnect to continue.",
+            "operation": "download",
+        },
         to="sid-1",
     )
+
+
+@pytest.mark.asyncio
+async def test_sftp_mkdir_error_identifies_operation(reset_server_state):
+    from torrus.server import on_sftp_mkdir
+    from torrus.sftp_manager import SFTPError
+    import torrus.server as server_module
+
+    sio_mock = MagicMock()
+    sio_mock.emit = AsyncMock()
+    server_module.sftp_manager = MagicMock()
+    server_module.sftp_manager.mkdir = AsyncMock(
+        side_effect=SFTPError("PERMISSION_DENIED", "Permission denied: /srv/app/new")
+    )
+
+    with patch("torrus.server.sio", sio_mock):
+        await on_sftp_mkdir(
+            "sid-1",
+            {"session_id": "sess1", "tab_id": "tab1", "path": "/srv/app/new"},
+        )
+
+    sio_mock.emit.assert_awaited_once_with(
+        "sftp:error",
+        {
+            "tab_id": "tab1",
+            "code": "PERMISSION_DENIED",
+            "message": "Permission denied: /srv/app/new",
+            "operation": "mkdir",
+        },
+        to="sid-1",
+    )
+
+
 
 
 @pytest.mark.asyncio
