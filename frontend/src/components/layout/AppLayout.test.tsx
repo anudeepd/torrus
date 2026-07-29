@@ -21,8 +21,11 @@ async function renderAppLayout({ strict = false }: { strict?: boolean } = {}) {
     redirectToLdapLoginNow: vi.fn(),
   }))
   vi.doMock('./TabBar', () => ({
-    default: ({ onCloseAllTabs }: { onCloseAllTabs: () => void }) => (
-      <button type="button" data-testid="tabbar" onClick={onCloseAllTabs}>Close All</button>
+    default: ({ onCloseAllTabs, onCloseTab }: { onCloseAllTabs: () => void; onCloseTab: (tabId: string) => void }) => (
+      <>
+        <button type="button" data-testid="tabbar" onClick={onCloseAllTabs}>Close All</button>
+        <button type="button" data-testid="close-tab" onClick={() => onCloseTab('terminal-tab')}>Close Tab</button>
+      </>
     ),
   }))
   vi.doMock('./SessionSidebar', () => ({
@@ -130,6 +133,32 @@ describe('AppLayout LDAP auth handling', () => {
 
     expect(allowed).toBe(true)
     expect(event.defaultPrevented).toBe(false)
+  })
+
+  it('closes a disconnected SSH tab without an active-session warning', async () => {
+    useTerminalStore.setState({
+      sessionId: 'test-session',
+      tabs: [{
+        id: 'terminal-tab',
+        type: 'terminal',
+        host: 'localhost',
+        port: 22,
+        username: 'alice',
+        label: null,
+        status: 'disconnected',
+        sessionKey: 'test-session:terminal-tab',
+      }],
+      activeTabId: 'terminal-tab',
+    })
+    const { socket } = await renderAppLayout()
+
+    fireEvent.click(screen.getByTestId('close-tab'))
+
+    expect(screen.queryByText('Close session?')).not.toBeInTheDocument()
+    expect(socket.emit).toHaveBeenCalledWith('ssh:disconnect', {
+      session_id: 'test-session',
+      tab_id: 'terminal-tab',
+    })
   })
 
   it('confirms before closing an sftp tab and closes only the sftp channel', async () => {

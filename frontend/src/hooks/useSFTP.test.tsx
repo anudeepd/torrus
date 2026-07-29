@@ -290,6 +290,7 @@ describe('useSFTP', () => {
     }
     vi.stubGlobal('XMLHttpRequest', MockUploadRequest)
     const { result } = renderHook(() => useSFTP(tabId, 'terminal-tab', socket as unknown as Socket))
+    socket.emit.mockClear()
 
     await act(async () => {
       await result.current.uploadFiles([new File(['hello'], 'release.txt')])
@@ -303,16 +304,15 @@ describe('useSFTP', () => {
       progress: 100,
     })
     expect(socket.emit).not.toHaveBeenCalledWith('sftp:upload', expect.anything())
+    expect(socket.emit).toHaveBeenCalledWith('sftp:list', expect.objectContaining({ path: '.' }))
   })
 
 
-  it('shows the server detail when a streamed download fails', async () => {
+  it('starts large downloads through the browser without buffering the file', async () => {
     const socket = createMockSocket()
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
-      ok: false,
-      status: 403,
-      json: async () => ({ code: 'PERMISSION_DENIED', message: 'Permission denied: /srv/app/archive.tar' }),
-    }))
+    const fetchMock = vi.fn()
+    const anchorClick = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    vi.stubGlobal('fetch', fetchMock)
     const { result } = renderHook(() => useSFTP(tabId, 'terminal-tab', socket as unknown as Socket))
 
     await act(async () => {
@@ -325,9 +325,9 @@ describe('useSFTP', () => {
       })
     })
 
-    expect(useSFTPStore.getState().tabs[tabId].error).toBe(
-      'Download failed: Permission denied: /srv/app/archive.tar',
-    )
+    expect(anchorClick).toHaveBeenCalledOnce()
+    expect(fetchMock).not.toHaveBeenCalled()
+    anchorClick.mockRestore()
   })
 
   it('shows detailed delete errors without reloading the directory', () => {

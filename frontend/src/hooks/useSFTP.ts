@@ -526,13 +526,14 @@ export function useSFTP(tabId: string, sourceTabId: string | undefined, socket: 
       } while (pending.offset < file.size)
       pendingUploadsRef.current.delete(transferId)
       updateTransfer(transferId, { status: 'done', progress: 100, bytes: file.size })
+      refreshCurrentDirectory()
     } catch (error) {
       updateTransfer(transferId, {
         status: 'error',
         error: error instanceof Error ? error.message : 'Upload failed',
       })
     }
-  }, [sessionId, tabId, updateTransfer])
+  }, [refreshCurrentDirectory, sessionId, tabId, updateTransfer])
 
   const uploadFiles = useCallback(async (files: FileList | File[]) => {
     const currentPath = useSFTPStore.getState().tabs[tabId]?.path ?? '.'
@@ -565,8 +566,7 @@ export function useSFTP(tabId: string, sourceTabId: string | undefined, socket: 
       }
     }
     await Promise.all(Array.from({ length: Math.min(MAX_CONCURRENT_UPLOADS, pendingIds.length) }, worker))
-    list(currentPath)
-  }, [tabId, list, addTransfer, resumeUpload])
+  }, [tabId, addTransfer, resumeUpload])
 
   const retryUpload = useCallback((transferId: string) => {
     void resumeUpload(transferId)
@@ -574,30 +574,16 @@ export function useSFTP(tabId: string, sourceTabId: string | undefined, socket: 
 
   const download = useCallback(async (entry: SFTPEntry) => {
     if (entry.size > LARGE_UPLOAD_THRESHOLD) {
-      const response = await fetch(
-        `/sftp/download?session_id=${encodeURIComponent(sessionId)}&tab_id=${encodeURIComponent(tabId)}&path=${encodeURIComponent(entry.path)}`,
-      )
-      if (!response.ok) {
-        const body = await response.json().catch(() => null) as { message?: string } | null
-        setError(tabId, contextualFailureMessage(
-          'Download failed',
-          body ?? {},
-          `Server returned ${response.status}.`,
-        ))
-        return
-      }
-      const url = URL.createObjectURL(await response.blob())
       const anchor = document.createElement('a')
-      anchor.href = url
+      anchor.href = `/sftp/download?session_id=${encodeURIComponent(sessionId)}&tab_id=${encodeURIComponent(tabId)}&path=${encodeURIComponent(entry.path)}`
       anchor.download = entry.name
       document.body.appendChild(anchor)
       anchor.click()
       anchor.remove()
-      URL.revokeObjectURL(url)
       return
     }
     socket.emit('sftp:download', { session_id: sessionId, tab_id: tabId, path: entry.path })
-  }, [socket, sessionId, tabId, setError])
+  }, [socket, sessionId, tabId])
 
   const remove = useCallback((paths: string[]) => {
     socket.emit('sftp:delete', { session_id: sessionId, tab_id: tabId, paths })

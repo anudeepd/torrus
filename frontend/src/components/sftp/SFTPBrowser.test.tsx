@@ -235,6 +235,46 @@ describe('SFTPBrowser', () => {
     expect(socket.emit).toHaveBeenCalledWith('sftp:mkdir', expect.objectContaining({ path: '/var/log/archive' }))
   })
 
+  it('changes permissions for every selected item from the context menu', () => {
+    const socket = createMockSocket()
+    render(<SFTPBrowser tabId={tabId} sourceTabId="terminal-tab" socket={socket as unknown as Socket} />)
+
+    act(() => {
+      socket._trigger('sftp:open:result', {
+        tab_id: tabId,
+        ok: true,
+        path: '/var/log',
+        entries: [
+          { name: 'app.log', path: '/var/log/app.log', type: 'file', size: 2, mtime: 1, mode: 0o100640, uid: 1000, gid: 1000 },
+          { name: 'worker.log', path: '/var/log/worker.log', type: 'file', size: 3, mtime: 1, mode: 0o100600, uid: 1000, gid: 1000 },
+        ],
+      })
+    })
+
+    fireEvent.click(screen.getByRole('option', { name: /app\.log/i }))
+    fireEvent.click(screen.getByRole('option', { name: /worker\.log/i }), { ctrlKey: true })
+    fireEvent.contextMenu(screen.getByRole('option', { name: /worker\.log/i }), { clientX: 40, clientY: 40 })
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Permissions' }))
+
+    expect(screen.getByText('2 selected items')).toBeInTheDocument()
+    fireEvent.change(screen.getByRole('textbox', { name: 'Octal mode' }), { target: { value: '644' } })
+    socket.emit.mockClear()
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }))
+
+    expect(socket.emit).toHaveBeenCalledWith('sftp:chmod', {
+      session_id: 'test-session',
+      tab_id: tabId,
+      path: '/var/log/app.log',
+      mode: 0o644,
+    })
+    expect(socket.emit).toHaveBeenCalledWith('sftp:chmod', {
+      session_id: 'test-session',
+      tab_id: tabId,
+      path: '/var/log/worker.log',
+      mode: 0o644,
+    })
+  })
+
   it('auto-dismisses operation errors', () => {
     vi.useFakeTimers()
     const socket = createMockSocket()

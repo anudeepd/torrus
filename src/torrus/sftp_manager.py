@@ -299,7 +299,7 @@ class SFTPManager:
         self,
         tab_id: str,
         remote_path: str,
-        chunk_size: int = 64 * 1024,
+        chunk_size: int = 4 * 1024 * 1024,
         expected_session_id: str | None = None,
     ) -> AsyncIterator[bytes]:
         lock = self._locks.setdefault(tab_id, asyncio.Lock())

@@ -46,10 +46,13 @@ interface ContextMenuState {
 
 interface ChmodDialogState {
   entry: SFTPEntry
+  entries: SFTPEntry[]
   mode: number
   modeInput: string
+  modeDirty: boolean
   uid: string
   gid: string
+  ownershipDirty: boolean
 }
 
 type SortKey = 'name' | 'size' | 'owner' | 'mode' | 'mtime'
@@ -708,15 +711,20 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
     else void download(entry)
   }, [download, list])
 
-  const openPermissions = useCallback((entry: SFTPEntry) => {
+  const openPermissions = useCallback((entries: SFTPEntry[]) => {
+    const entry = entries[0]
+    if (!entry) return
     loadAccounts()
     const mode = (entry.mode ?? 0) & 0o7777
     setChmodDialog({
       entry,
+      entries,
       mode,
       modeInput: formatModeInput(mode),
+      modeDirty: false,
       uid: entry.uid == null ? '' : String(entry.uid),
       gid: entry.gid == null ? '' : String(entry.gid),
+      ownershipDirty: false,
     })
     setContextMenu(null)
   }, [loadAccounts])
@@ -725,15 +733,15 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
     if (!chmodDialog) return
     const nextUid = Number(chmodDialog.uid)
     const nextGid = Number(chmodDialog.gid)
-    const ownerChanged = ownershipInputValid(chmodDialog.uid, chmodDialog.gid)
+    const ownerChanged = chmodDialog.ownershipDirty
+      && ownershipInputValid(chmodDialog.uid, chmodDialog.gid)
       && chmodDialog.uid.trim() !== ''
       && chmodDialog.gid.trim() !== ''
-      && (nextUid !== chmodDialog.entry.uid || nextGid !== chmodDialog.entry.gid)
-    if (chmodDialog.mode !== ((chmodDialog.entry.mode ?? 0) & 0o7777)) {
-      chmod(chmodDialog.entry.path, chmodDialog.mode)
+    if (chmodDialog.modeDirty) {
+      chmodDialog.entries.forEach(entry => chmod(entry.path, chmodDialog.mode))
     }
     if (ownerChanged) {
-      chown(chmodDialog.entry.path, nextUid, nextGid)
+      chmodDialog.entries.forEach(entry => chown(entry.path, nextUid, nextGid))
     }
     setChmodDialog(null)
   }, [chmod, chmodDialog, chown])
@@ -1221,8 +1229,8 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
               ...(isSingleEntry ? [
                 { label: 'Open', icon: FolderOpen, action: () => openEntry(entry) },
                 { label: 'Rename', icon: Pencil, action: () => startRename(entry) },
-                { label: 'Permissions', icon: ShieldCheck, action: () => openPermissions(entry) },
               ] : []),
+              { label: 'Permissions', icon: ShieldCheck, action: () => openPermissions(contextMenu.entries) },
               ...(files.length > 0 ? [{
                 label: files.length === 1 ? 'Download' : `Download ${files.length} files`,
                 icon: Download,
@@ -1307,7 +1315,9 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
         <SFTPDialog key="permissions" labelledBy="permissions-title" onClose={closePermissions} className="max-w-[360px]">
             <div>
               <h2 id="permissions-title" className="text-sm font-semibold text-slate-200">Permissions</h2>
-              <p className="mt-2 truncate font-mono text-xs text-slate-400" title={chmodDialog.entry.path}>{chmodDialog.entry.path}</p>
+              <p className="mt-2 truncate font-mono text-xs text-slate-400" title={chmodDialog.entries.length === 1 ? chmodDialog.entry.path : undefined}>
+                {chmodDialog.entries.length === 1 ? chmodDialog.entry.path : `${chmodDialog.entries.length} selected items`}
+              </p>
             </div>
             <label className="flex flex-col gap-1">
               <span className="text-[11px] font-medium text-slate-400">Octal mode</span>
@@ -1325,6 +1335,7 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
                     return {
                       ...dialog,
                       modeInput,
+                      modeDirty: true,
                       ...(octalModeInputValid(modeInput) ? { mode: Number.parseInt(modeInput, 8) } : {}),
                     }
                   })
@@ -1352,7 +1363,7 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
                         onChange={() => setChmodDialog(dialog => {
                           if (!dialog) return null
                           const mode = dialog.mode ^ permission.bit
-                          return { ...dialog, mode, modeInput: formatModeInput(mode) }
+                          return { ...dialog, mode, modeInput: formatModeInput(mode), modeDirty: true }
                         })}
                         aria-label={`${permission.scope} ${permission.label}`}
                         className="h-3.5 w-3.5 accent-brand-500"
@@ -1370,11 +1381,11 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
                     <input
                       type="checkbox"
                       checked={Boolean(chmodDialog.mode & permission.bit)}
-                        onChange={() => setChmodDialog(dialog => {
-                          if (!dialog) return null
-                          const mode = dialog.mode ^ permission.bit
-                          return { ...dialog, mode, modeInput: formatModeInput(mode) }
-                        })}
+                      onChange={() => setChmodDialog(dialog => {
+                        if (!dialog) return null
+                        const mode = dialog.mode ^ permission.bit
+                        return { ...dialog, mode, modeInput: formatModeInput(mode), modeDirty: true }
+                      })}
                       aria-label={permission.label}
                       className="h-3.5 w-3.5 accent-brand-500"
                     />
@@ -1391,7 +1402,7 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
                   {users.length > 0 ? (
                     <select
                       value={chmodDialog.uid}
-                      onChange={event => setChmodDialog(dialog => dialog ? { ...dialog, uid: event.target.value } : null)}
+                      onChange={event => setChmodDialog(dialog => dialog ? { ...dialog, uid: event.target.value, ownershipDirty: true } : null)}
                       className="h-8 rounded-md border border-surface-700 bg-surface-950 px-2 text-xs text-slate-200 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500/30 max-[600px]:h-11"
                       aria-label="Owner"
                     >
@@ -1406,7 +1417,7 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
                       min={0}
                       step={1}
                       value={chmodDialog.uid}
-                      onChange={event => setChmodDialog(dialog => dialog ? { ...dialog, uid: event.target.value } : null)}
+                      onChange={event => setChmodDialog(dialog => dialog ? { ...dialog, uid: event.target.value, ownershipDirty: true } : null)}
                       className="h-8 rounded-md border border-surface-700 bg-surface-950 px-2 font-mono text-xs text-slate-200 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500/30 max-[600px]:h-11"
                       aria-label="Owner UID"
                     />
@@ -1417,7 +1428,7 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
                   {groups.length > 0 ? (
                     <select
                       value={chmodDialog.gid}
-                      onChange={event => setChmodDialog(dialog => dialog ? { ...dialog, gid: event.target.value } : null)}
+                      onChange={event => setChmodDialog(dialog => dialog ? { ...dialog, gid: event.target.value, ownershipDirty: true } : null)}
                       className="h-8 rounded-md border border-surface-700 bg-surface-950 px-2 text-xs text-slate-200 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500/30 max-[600px]:h-11"
                       aria-label="Group"
                     >
@@ -1432,7 +1443,7 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
                       min={0}
                       step={1}
                       value={chmodDialog.gid}
-                      onChange={event => setChmodDialog(dialog => dialog ? { ...dialog, gid: event.target.value } : null)}
+                      onChange={event => setChmodDialog(dialog => dialog ? { ...dialog, gid: event.target.value, ownershipDirty: true } : null)}
                       className="h-8 rounded-md border border-surface-700 bg-surface-950 px-2 font-mono text-xs text-slate-200 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500/30 max-[600px]:h-11"
                       aria-label="Group GID"
                     />

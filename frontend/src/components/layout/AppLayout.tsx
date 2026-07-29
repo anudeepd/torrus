@@ -110,7 +110,7 @@ export default function AppLayout() {
     const tab = useTerminalStore.getState().tabs.find(t => t.id === tabId)
     if (!tab) return false
     if (tab.type === 'sftp') return true
-    return tab.status !== 'disconnected' || !!tab.host || !!tab.username
+    return tab.status === 'connected'
   }, [])
 
   const closeRemoteTab = useCallback((tabId: string) => {

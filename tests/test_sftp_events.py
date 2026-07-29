@@ -380,6 +380,35 @@ async def test_sftp_http_download_returns_error_before_stream(reset_server_state
 
 
 @pytest.mark.asyncio
+async def test_sftp_http_download_reports_stream_size(reset_server_state):
+    from torrus.server import sftp_stream_download
+    import torrus.server as server_module
+
+    server_module.ssh_manager = MagicMock()
+    server_module.ssh_manager.has_session = AsyncMock(return_value=True)
+    server_module.sftp_manager = MagicMock()
+    server_module.sftp_manager.prepare_download = AsyncMock(
+        return_value={"path": "/srv/archive.tar", "name": "archive.tar", "size": 12 * 1024**3}
+    )
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/sftp/download",
+            "query_string": b"session_id=sess1&tab_id=tab1&path=archive.tar",
+            "headers": [],
+        }
+    )
+    response = await sftp_stream_download(request)
+
+    assert response.headers["content-length"] == str(12 * 1024**3)
+    server_module.sftp_manager.stream_download.assert_called_once_with(
+        "tab1", "/srv/archive.tar", expected_session_id="sess1"
+    )
+
+
+@pytest.mark.asyncio
 async def test_sftp_http_download_binds_tab_to_session(reset_server_state):
     from torrus.server import sftp_stream_download
     from torrus.sftp_manager import SFTPError

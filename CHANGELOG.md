@@ -2,17 +2,24 @@
 
 ## Unreleased
 
+### Added
+
+- Apply permission and ownership changes to multiple selected SFTP entries from the file context menu.
+
 ### Fixed
 
 - Report non-empty remote directories with an actionable SFTP deletion error instead of the server's opaque `Failure` response.
 - Keep current SFTP errors visible ahead of stale success notices.
 - Label folder creation, rename, upload, download, listing, permission, ownership, and account-loading failures with operation context while preserving server details.
+- Close disconnected SSH tabs without showing the active-session confirmation.
+- Refresh the current SFTP directory after successful uploads, retried uploads, permission changes, and ownership changes.
 
 ### Changed
 
 - Align SFTP dialog typography, field spacing, sentence case, path readability, and compact-viewport feedback controls with the rest of the app.
 - Animate SFTP feedback rails, drag-and-drop overlays, action menus, disconnect states, and dialogs with the shared reduced-motion-aware motion system.
 - Keep rename editor keystrokes isolated from file-browser shortcuts while preserving menu and dialog focus, arrow-key, and Escape behavior.
+- Stream large SFTP downloads directly to the browser with 4 MB server chunks and a declared content length, avoiding full-file browser buffering.
 
 ## [0.2.10] - 2026-07-19
 

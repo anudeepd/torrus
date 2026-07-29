@@ -323,7 +323,10 @@ async def sftp_stream_download(request: Request):
     return StreamingResponse(
         sftp_manager.stream_download(tab_id, download["path"], expected_session_id=session_id),
         media_type="application/octet-stream",
-        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"},
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}",
+            "Content-Length": str(download["size"]),
+        },
     )
 
 

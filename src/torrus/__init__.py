@@ -1,3 +1,3 @@
 """torrus — web-based SSH terminal that works behind any reverse proxy."""
 
-__version__ = "0.2.20"
+__version__ = "0.2.21"
