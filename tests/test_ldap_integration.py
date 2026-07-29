@@ -47,12 +47,18 @@ def test_api_config_exposes_ldap_idle_timeout(monkeypatch):
 
 def test_login_template_uses_nonce_for_inline_assets():
     template = (
-        Path(__file__).resolve().parents[1] / "src" / "torrus" / "templates" / "login.html"
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "torrus"
+        / "templates"
+        / "login.html"
     ).read_text()
     assert '<link rel="icon" type="image/svg+xml" href="/favicon.svg">' in template
     assert '<style nonce="{{ csrf_nonce }}">' in template
     assert '<script nonce="{{ csrf_nonce }}">' in template
-    assert '<input type="hidden" name="csrf_token" value="{{ csrf_token }}">' in template
+    assert (
+        '<input type="hidden" name="csrf_token" value="{{ csrf_token }}">' in template
+    )
     assert "torrus-card-in" in template
     assert "torrus-error-up" in template
     assert "torrus:login:username" in template
@@ -67,7 +73,7 @@ def test_login_template_uses_nonce_for_inline_assets():
     assert "-webkit-appearance: none;" in template
     assert 'id="password-toggle"' not in template
     assert 'style="' not in template
-    assert "meta http-equiv=\"Content-Security-Policy\"" not in template
+    assert 'meta http-equiv="Content-Security-Policy"' not in template
 
 
 def test_favicon_svg_is_served_before_spa_fallback():

@@ -28,6 +28,7 @@ def mock_ssh_manager(mock_sio):
 @pytest.fixture
 def mock_paramiko_client():
     """Return a mocked paramiko.SSHClient with a working transport/channel."""
+
     def quiet_recv(_size):
         time.sleep(0.01)
         raise socket.timeout()

@@ -8,14 +8,23 @@ async def test_terminal_input_audit_roundtrip(monkeypatch, tmp_path):
 
     audit_store.init_db()
     await audit_store.record_terminal_input(
-        ldap_username="alice", session_id="session-1", tab_id="tab-1", input_data="ls -la\r",
-        ssh_host="example.com", ssh_port=22, ssh_username="root",
+        ldap_username="alice",
+        session_id="session-1",
+        tab_id="tab-1",
+        input_data="ls -la\r",
+        ssh_host="example.com",
+        ssh_port=22,
+        ssh_username="root",
     )
 
     events = audit_store.list_terminal_input_events(username="alice")
     assert len(events) == 1
     assert events[0]["input_data"] == b"ls -la\r"
-    assert (events[0]["ssh_host"], events[0]["ssh_port"], events[0]["ssh_username"]) == ("example.com", 22, "root")
+    assert (
+        events[0]["ssh_host"],
+        events[0]["ssh_port"],
+        events[0]["ssh_username"],
+    ) == ("example.com", 22, "root")
     assert audit_store.purge_terminal_input_events(0) == 1
     with audit_store._connect() as db:
         assert db.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"
@@ -28,9 +37,13 @@ async def test_record_command_event_stores_cleaned_command(monkeypatch, tmp_path
 
     audit_store.init_db()
     await audit_store.record_command_event(
-        ldap_username="bob", session_id="sess", tab_id="tab",
+        ldap_username="bob",
+        session_id="sess",
+        tab_id="tab",
         command="git push origin main",
-        ssh_host="git.example.com", ssh_port=22, ssh_username="git",
+        ssh_host="git.example.com",
+        ssh_port=22,
+        ssh_username="git",
     )
 
     events = audit_store.list_terminal_input_events(username="bob")

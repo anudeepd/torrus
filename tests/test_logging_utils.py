@@ -1,6 +1,9 @@
 import logging
 
-from torrus.logging_utils import RoutinePollingAccessFilter, suppress_routine_polling_logs
+from torrus.logging_utils import (
+    RoutinePollingAccessFilter,
+    suppress_routine_polling_logs,
+)
 
 
 def _access_record(path: str, status_code: int) -> logging.LogRecord:
@@ -47,7 +50,9 @@ def test_polling_filter_is_installed_once():
         suppress_routine_polling_logs()
         suppress_routine_polling_logs()
 
-        installed = [f for f in logger.filters if isinstance(f, RoutinePollingAccessFilter)]
+        installed = [
+            f for f in logger.filters if isinstance(f, RoutinePollingAccessFilter)
+        ]
         assert len(installed) == 1
     finally:
         logger.filters[:] = original_filters

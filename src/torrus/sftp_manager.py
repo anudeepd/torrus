@@ -66,12 +66,16 @@ class SFTPManager:
         lock = self._locks.setdefault(tab_id, asyncio.Lock())
         async with lock:
             await self._close_sftp_unlocked(tab_id)
-            client = await ssh_manager.open_sftp_channel(session_id, source_tab_id or tab_id)
+            client = await ssh_manager.open_sftp_channel(
+                session_id, source_tab_id or tab_id
+            )
             if client is None:
                 return False
 
             sftp_session = SFTPSession(
-                session_id=session_id, tab_id=tab_id, client=client,
+                session_id=session_id,
+                tab_id=tab_id,
+                client=client,
                 source_tab_id=source_tab_id or tab_id,
             )
             try:
@@ -84,21 +88,36 @@ class SFTPManager:
             self._sessions[tab_id] = sftp_session
             return True
 
-    async def open_upload_channel(self, tab_id: str, upload_id: str, ssh_manager,
-                                  expected_session_id: str | None = None) -> bool:
+    async def open_upload_channel(
+        self,
+        tab_id: str,
+        upload_id: str,
+        ssh_manager,
+        expected_session_id: str | None = None,
+    ) -> bool:
         key = (tab_id, upload_id)
         lock = self._upload_locks.setdefault(key, asyncio.Lock())
         async with lock:
             existing = self._upload_sessions.get(key)
             if existing is not None:
-                return existing.session_id == expected_session_id if expected_session_id else True
+                return (
+                    existing.session_id == expected_session_id
+                    if expected_session_id
+                    else True
+                )
             base = self._get_session(tab_id, expected_session_id=expected_session_id)
-            client = await ssh_manager.open_sftp_channel(base.session_id, base.source_tab_id or tab_id)
+            client = await ssh_manager.open_sftp_channel(
+                base.session_id, base.source_tab_id or tab_id
+            )
             if client is None:
                 return False
             self._upload_sessions[key] = SFTPSession(
-                session_id=base.session_id, tab_id=tab_id, client=client,
-                source_tab_id=base.source_tab_id, cwd=base.cwd, home=base.home,
+                session_id=base.session_id,
+                tab_id=tab_id,
+                client=client,
+                source_tab_id=base.source_tab_id,
+                cwd=base.cwd,
+                home=base.home,
             )
             return True
 
@@ -133,7 +152,9 @@ class SFTPManager:
             session = self._get_session(tab_id)
             session.last_activity = time.time()
             try:
-                result = await self._run_blocking(self._list_directory_sync, session, path)
+                result = await self._run_blocking(
+                    self._list_directory_sync, session, path
+                )
                 session.cwd = result["path"]
                 return result
             except SFTPError:
@@ -141,12 +162,19 @@ class SFTPManager:
             except Exception as exc:
                 raise _map_error(exc, getattr(exc, "filename", "")) from exc
 
-    async def upload_file(self, tab_id: str, remote_path: str, data: bytes) -> dict[str, Any]:
-        return await self._locked(tab_id, lambda session: self._upload_file_sync(session, remote_path, data))
-
-    async def download_file(self, tab_id: str, remote_path: str, max_bytes: int | None = None) -> dict[str, Any]:
+    async def upload_file(
+        self, tab_id: str, remote_path: str, data: bytes
+    ) -> dict[str, Any]:
         return await self._locked(
-            tab_id, lambda session: self._download_file_sync(session, remote_path, max_bytes)
+            tab_id, lambda session: self._upload_file_sync(session, remote_path, data)
+        )
+
+    async def download_file(
+        self, tab_id: str, remote_path: str, max_bytes: int | None = None
+    ) -> dict[str, Any]:
+        return await self._locked(
+            tab_id,
+            lambda session: self._download_file_sync(session, remote_path, max_bytes),
         )
 
     async def prepare_download(
@@ -162,19 +190,29 @@ class SFTPManager:
         )
 
     async def delete(self, tab_id: str, path: str) -> dict[str, Any]:
-        return await self._locked(tab_id, lambda session: self._delete_sync(session, path))
+        return await self._locked(
+            tab_id, lambda session: self._delete_sync(session, path)
+        )
 
     async def rename(self, tab_id: str, old_path: str, new_path: str) -> dict[str, Any]:
-        return await self._locked(tab_id, lambda session: self._rename_sync(session, old_path, new_path))
+        return await self._locked(
+            tab_id, lambda session: self._rename_sync(session, old_path, new_path)
+        )
 
     async def mkdir(self, tab_id: str, path: str) -> dict[str, Any]:
-        return await self._locked(tab_id, lambda session: self._mkdir_sync(session, path))
+        return await self._locked(
+            tab_id, lambda session: self._mkdir_sync(session, path)
+        )
 
     async def chmod(self, tab_id: str, path: str, mode: int) -> dict[str, Any]:
-        return await self._locked(tab_id, lambda session: self._chmod_sync(session, path, mode))
+        return await self._locked(
+            tab_id, lambda session: self._chmod_sync(session, path, mode)
+        )
 
     async def chown(self, tab_id: str, path: str, uid: int, gid: int) -> dict[str, Any]:
-        return await self._locked(tab_id, lambda session: self._chown_sync(session, path, uid, gid))
+        return await self._locked(
+            tab_id, lambda session: self._chown_sync(session, path, uid, gid)
+        )
 
     async def accounts(self, tab_id: str) -> dict[str, Any]:
         return await self._locked(tab_id, self._accounts_sync)
@@ -192,14 +230,19 @@ class SFTPManager:
             wrote = 0
             remove_partial = False
             try:
-                remote_file = await self._run_blocking(session.client.open, resolved, "wb")
+                remote_file = await self._run_blocking(
+                    session.client.open, resolved, "wb"
+                )
                 try:
                     await self._run_blocking(remote_file.set_pipelined, True)
                     async for chunk in chunks:
                         wrote += len(chunk)
                         if wrote > max_bytes:
                             remove_partial = True
-                            raise SFTPError("FILE_TOO_LARGE", f"File too large for browser transfer ({wrote} bytes).")
+                            raise SFTPError(
+                                "FILE_TOO_LARGE",
+                                f"File too large for browser transfer ({wrote} bytes).",
+                            )
                         await self._run_blocking(remote_file.write, chunk)
                 finally:
                     pending_error = sys.exc_info()[1]
@@ -214,7 +257,9 @@ class SFTPManager:
                 raise _map_error(exc, resolved) from exc
             return {"ok": True, "path": resolved, "size": wrote}
 
-        return await self._locked_stream(tab_id, write_stream, expected_session_id=expected_session_id)
+        return await self._locked_stream(
+            tab_id, write_stream, expected_session_id=expected_session_id
+        )
 
     async def upload_chunk(
         self,
@@ -239,7 +284,9 @@ class SFTPManager:
         async def write_chunk(session: SFTPSession) -> dict[str, Any]:
             resolved = _resolve_remote_path(session.cwd, remote_path, session.home)
             directory, filename = posixpath.split(resolved)
-            temporary = posixpath.join(directory, f".{filename}.torrus-upload-{upload_id}")
+            temporary = posixpath.join(
+                directory, f".{filename}.torrus-upload-{upload_id}"
+            )
             written = 0
             remote_file = None
             try:
@@ -250,17 +297,26 @@ class SFTPManager:
                 except IOError:
                     if offset and complete:
                         try:
-                            existing = await self._run_blocking(session.client.stat, resolved)
+                            existing = await self._run_blocking(
+                                session.client.stat, resolved
+                            )
                         except Exception:
                             raise
                         if existing.st_size == total:
-                            return {"ok": True, "path": resolved, "offset": total, "complete": True}
+                            return {
+                                "ok": True,
+                                "path": resolved,
+                                "offset": total,
+                                "complete": True,
+                            }
                     raise
                 await self._run_blocking(remote_file.set_pipelined, True)
                 await self._run_blocking(remote_file.seek, offset)
                 async for chunk in chunks:
                     if written + len(chunk) > total - offset:
-                        raise SFTPError("INVALID_UPLOAD", "Upload data exceeds declared size.")
+                        raise SFTPError(
+                            "INVALID_UPLOAD", "Upload data exceeds declared size."
+                        )
                     await self._run_blocking(remote_file.write, chunk)
                     written += len(chunk)
             except Exception as exc:
@@ -277,7 +333,9 @@ class SFTPManager:
             next_offset = offset + written
             if complete:
                 if next_offset != total:
-                    raise SFTPError("INVALID_UPLOAD", "Final upload chunk is incomplete.")
+                    raise SFTPError(
+                        "INVALID_UPLOAD", "Final upload chunk is incomplete."
+                    )
                 try:
                     await self._run_blocking(session.client.rename, temporary, resolved)
                 except Exception as exc:
@@ -288,12 +346,21 @@ class SFTPManager:
                         await self._run_blocking(upload.client.close)
                     except Exception:
                         pass
-            return {"ok": True, "path": resolved, "offset": next_offset, "complete": complete}
+            return {
+                "ok": True,
+                "path": resolved,
+                "offset": next_offset,
+                "complete": complete,
+            }
 
         key = (tab_id, upload_id)
         if key not in self._upload_sessions:
-            return await self._locked_stream(tab_id, write_chunk, expected_session_id=expected_session_id)
-        return await self._locked_upload(key, write_chunk, expected_session_id=expected_session_id)
+            return await self._locked_stream(
+                tab_id, write_chunk, expected_session_id=expected_session_id
+            )
+        return await self._locked_upload(
+            key, write_chunk, expected_session_id=expected_session_id
+        )
 
     async def stream_download(
         self,
@@ -308,7 +375,9 @@ class SFTPManager:
             session.last_activity = time.time()
             resolved = _resolve_remote_path(session.cwd, remote_path, session.home)
             try:
-                remote_file = await self._run_blocking(session.client.open, resolved, "rb")
+                remote_file = await self._run_blocking(
+                    session.client.open, resolved, "rb"
+                )
             except Exception as exc:
                 raise _map_error(exc, resolved) from exc
 
@@ -322,7 +391,10 @@ class SFTPManager:
         except Exception as exc:
             mapped = _map_error(exc, resolved)
             if mapped.code in {"CONNECTION_CLOSED", "TRANSFER_FAILED"}:
-                raise SFTPError("DOWNLOAD_INTERRUPTED", "Download interrupted. Reconnect and try again.") from exc
+                raise SFTPError(
+                    "DOWNLOAD_INTERRUPTED",
+                    "Download interrupted. Reconnect and try again.",
+                ) from exc
             raise mapped from exc
         finally:
             async with lock:
@@ -344,7 +416,9 @@ class SFTPManager:
             except Exception as exc:
                 raise _map_error(exc, getattr(exc, "filename", "")) from exc
 
-    async def _locked_stream(self, tab_id: str, work, expected_session_id: str | None = None):
+    async def _locked_stream(
+        self, tab_id: str, work, expected_session_id: str | None = None
+    ):
         lock = self._locks.setdefault(tab_id, asyncio.Lock())
         async with lock:
             session = self._get_session(tab_id, expected_session_id=expected_session_id)
@@ -356,14 +430,23 @@ class SFTPManager:
             except Exception as exc:
                 raise _map_error(exc, getattr(exc, "filename", "")) from exc
 
-    async def _locked_upload(self, key: tuple[str, str], work, expected_session_id: str | None = None):
+    async def _locked_upload(
+        self, key: tuple[str, str], work, expected_session_id: str | None = None
+    ):
         lock = self._upload_locks.setdefault(key, asyncio.Lock())
         async with lock:
             session = self._upload_sessions.get(key)
             if session is None:
-                raise SFTPError("CONNECTION_CLOSED", "Upload channel closed. Reconnect and retry.")
-            if expected_session_id is not None and session.session_id != expected_session_id:
-                raise SFTPError("PERMISSION_DENIED", "SFTP tab is not available for this session.")
+                raise SFTPError(
+                    "CONNECTION_CLOSED", "Upload channel closed. Reconnect and retry."
+                )
+            if (
+                expected_session_id is not None
+                and session.session_id != expected_session_id
+            ):
+                raise SFTPError(
+                    "PERMISSION_DENIED", "SFTP tab is not available for this session."
+                )
             session.last_activity = time.time()
             try:
                 return await work(session)
@@ -422,12 +505,21 @@ class SFTPManager:
         except Exception:
             pass
 
-    def _get_session(self, tab_id: str, expected_session_id: str | None = None) -> SFTPSession:
+    def _get_session(
+        self, tab_id: str, expected_session_id: str | None = None
+    ) -> SFTPSession:
         session = self._sessions.get(tab_id)
         if session is None:
-            raise SFTPError("CONNECTION_CLOSED", "SSH connection lost. Reconnect to continue.")
-        if expected_session_id is not None and session.session_id != expected_session_id:
-            raise SFTPError("PERMISSION_DENIED", "SFTP tab is not available for this session.")
+            raise SFTPError(
+                "CONNECTION_CLOSED", "SSH connection lost. Reconnect to continue."
+            )
+        if (
+            expected_session_id is not None
+            and session.session_id != expected_session_id
+        ):
+            raise SFTPError(
+                "PERMISSION_DENIED", "SFTP tab is not available for this session."
+            )
         return session
 
     def _list_directory_sync(self, session: SFTPSession, path: str) -> dict[str, Any]:
@@ -444,14 +536,20 @@ class SFTPManager:
                 entry_path = posixpath.join(resolved, attr.filename)
                 if is_link:
                     try:
-                        is_dir = stat.S_ISDIR((session.client.stat(entry_path).st_mode or 0))
+                        is_dir = stat.S_ISDIR(
+                            (session.client.stat(entry_path).st_mode or 0)
+                        )
                     except Exception:
                         pass
                 entries.append(
                     {
                         "name": attr.filename,
                         "path": entry_path,
-                        "type": "directory" if is_dir else "symlink" if is_link else "file",
+                        "type": "directory"
+                        if is_dir
+                        else "symlink"
+                        if is_link
+                        else "file",
                         "is_symlink": is_link,
                         "size": attr.st_size or 0,
                         "mtime": attr.st_mtime or 0,
@@ -462,12 +560,16 @@ class SFTPManager:
                         "group": groups.get(attr.st_gid),
                     }
                 )
-            entries.sort(key=lambda item: (item["type"] != "directory", item["name"].lower()))
+            entries.sort(
+                key=lambda item: (item["type"] != "directory", item["name"].lower())
+            )
             return {"ok": True, "path": resolved, "entries": entries}
         except Exception as exc:
             raise _map_error(exc, resolved) from exc
 
-    def _upload_file_sync(self, session: SFTPSession, remote_path: str, data: bytes) -> dict[str, Any]:
+    def _upload_file_sync(
+        self, session: SFTPSession, remote_path: str, data: bytes
+    ) -> dict[str, Any]:
         resolved = _resolve_remote_path(session.cwd, remote_path, session.home)
         try:
             with session.client.open(resolved, "wb") as remote_file:
@@ -499,12 +601,16 @@ class SFTPManager:
         except Exception as exc:
             raise _map_error(exc, resolved) from exc
 
-    def _prepare_download_sync(self, session: SFTPSession, remote_path: str) -> dict[str, Any]:
+    def _prepare_download_sync(
+        self, session: SFTPSession, remote_path: str
+    ) -> dict[str, Any]:
         resolved = _resolve_remote_path(session.cwd, remote_path, session.home)
         try:
             attr = session.client.stat(resolved)
             if stat.S_ISDIR((attr.st_mode or 0)):
-                raise SFTPError("TRANSFER_FAILED", f"Cannot download directory: {resolved}")
+                raise SFTPError(
+                    "TRANSFER_FAILED", f"Cannot download directory: {resolved}"
+                )
             return {
                 "ok": True,
                 "path": resolved,
@@ -543,7 +649,9 @@ class SFTPManager:
                     ) from exc
             raise mapped from exc
 
-    def _rename_sync(self, session: SFTPSession, old_path: str, new_path: str) -> dict[str, Any]:
+    def _rename_sync(
+        self, session: SFTPSession, old_path: str, new_path: str
+    ) -> dict[str, Any]:
         old_resolved = _resolve_remote_path(session.cwd, old_path, session.home)
         new_resolved = _resolve_remote_path(session.cwd, new_path, session.home)
         try:
@@ -560,7 +668,9 @@ class SFTPManager:
         except Exception as exc:
             raise _map_error(exc, resolved) from exc
 
-    def _chown_sync(self, session: SFTPSession, path: str, uid: int, gid: int) -> dict[str, Any]:
+    def _chown_sync(
+        self, session: SFTPSession, path: str, uid: int, gid: int
+    ) -> dict[str, Any]:
         resolved = _resolve_remote_path(session.cwd, path, session.home)
         try:
             session.client.chown(resolved, uid, gid)
@@ -572,19 +682,39 @@ class SFTPManager:
         users, groups = self._account_maps_sync(session, force=True)
         return {
             "ok": True,
-            "users": [{"uid": uid, "name": name} for uid, name in sorted(users.items(), key=lambda item: (item[1], item[0]))],
-            "groups": [{"gid": gid, "name": name} for gid, name in sorted(groups.items(), key=lambda item: (item[1], item[0]))],
+            "users": [
+                {"uid": uid, "name": name}
+                for uid, name in sorted(
+                    users.items(), key=lambda item: (item[1], item[0])
+                )
+            ],
+            "groups": [
+                {"gid": gid, "name": name}
+                for gid, name in sorted(
+                    groups.items(), key=lambda item: (item[1], item[0])
+                )
+            ],
         }
 
-    def _account_maps_sync(self, session: SFTPSession, force: bool = False) -> tuple[dict[int, str], dict[int, str]]:
-        if not force and session.account_maps_refreshed and time.time() - session.account_maps_refreshed < 60:
+    def _account_maps_sync(
+        self, session: SFTPSession, force: bool = False
+    ) -> tuple[dict[int, str], dict[int, str]]:
+        if (
+            not force
+            and session.account_maps_refreshed
+            and time.time() - session.account_maps_refreshed < 60
+        ):
             return session.users, session.groups
         try:
-            session.users = _parse_passwd(_read_remote_text(session.client, "/etc/passwd"))
+            session.users = _parse_passwd(
+                _read_remote_text(session.client, "/etc/passwd")
+            )
         except Exception:
             session.users = {}
         try:
-            session.groups = _parse_group(_read_remote_text(session.client, "/etc/group"))
+            session.groups = _parse_group(
+                _read_remote_text(session.client, "/etc/group")
+            )
         except Exception:
             session.groups = {}
         session.account_maps_refreshed = time.time()
@@ -612,7 +742,9 @@ def _resolve_remote_path(cwd: str, path: str, home: str | None = None) -> str:
     return posixpath.normpath(posixpath.join(base, raw))
 
 
-def _read_remote_text(client: paramiko.SFTPClient, path: str, max_bytes: int = 512 * 1024) -> str:
+def _read_remote_text(
+    client: paramiko.SFTPClient, path: str, max_bytes: int = 512 * 1024
+) -> str:
     with client.open(path, "r") as remote_file:
         data = remote_file.read(max_bytes + 1)
     if isinstance(data, str):
@@ -668,7 +800,9 @@ def _map_error(exc: Exception, path: str) -> SFTPError:
     if err_no == errno.ENOTEMPTY:
         return SFTPError("DIRECTORY_NOT_EMPTY", f"Directory is not empty: {path}")
     if _is_connection_closed(exc, err_no, message):
-        return SFTPError("CONNECTION_CLOSED", "SSH connection lost. Reconnect to continue.")
+        return SFTPError(
+            "CONNECTION_CLOSED", "SSH connection lost. Reconnect to continue."
+        )
     return SFTPError("TRANSFER_FAILED", message)
 
 
@@ -684,7 +818,6 @@ def _is_connection_closed(exc: Exception, err_no: int | None, message: str) -> b
     }:
         return True
     lowered = message.lower()
-    return (
-        isinstance(exc, (OSError, paramiko.SSHException))
-        and (("socket" in lowered and "closed" in lowered) or "connection reset" in lowered)
+    return isinstance(exc, (OSError, paramiko.SSHException)) and (
+        ("socket" in lowered and "closed" in lowered) or "connection reset" in lowered
     )

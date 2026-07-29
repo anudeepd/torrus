@@ -23,10 +23,14 @@ class TestValidIdChecks:
         sio_mock.emit = AsyncMock()
 
         with patch("torrus.server.sio", sio_mock):
-            result = await on_ssh_input("sid-1", {"session_id": "bad id!", "tab_id": "tab1", "data": "x"})
+            result = await on_ssh_input(
+                "sid-1", {"session_id": "bad id!", "tab_id": "tab1", "data": "x"}
+            )
             assert result == {"ok": False, "error": "Invalid session or tab ID."}
 
-            result = await on_ssh_input("sid-1", {"session_id": "sess1", "tab_id": "", "data": "x"})
+            result = await on_ssh_input(
+                "sid-1", {"session_id": "sess1", "tab_id": "", "data": "x"}
+            )
             assert result == {"ok": False, "error": "Invalid session or tab ID."}
 
     @pytest.mark.asyncio
@@ -36,7 +40,10 @@ class TestValidIdChecks:
         sio_mock = MagicMock()
         with patch("torrus.server.sio", sio_mock):
             with patch.object(ssh_manager, "handle_resize", AsyncMock()) as mock_resize:
-                await on_terminal_resize("sid-1", {"session_id": "../etc", "tab_id": "tab1", "cols": 80, "rows": 24})
+                await on_terminal_resize(
+                    "sid-1",
+                    {"session_id": "../etc", "tab_id": "tab1", "cols": 80, "rows": 24},
+                )
                 mock_resize.assert_not_called()
 
     @pytest.mark.asyncio
@@ -45,8 +52,12 @@ class TestValidIdChecks:
 
         sio_mock = MagicMock()
         with patch("torrus.server.sio", sio_mock):
-            with patch.object(ssh_manager, "disconnect_session", AsyncMock()) as mock_disconnect:
-                await on_ssh_disconnect("sid-1", {"session_id": "sess1", "tab_id": "tab id!"})
+            with patch.object(
+                ssh_manager, "disconnect_session", AsyncMock()
+            ) as mock_disconnect:
+                await on_ssh_disconnect(
+                    "sid-1", {"session_id": "sess1", "tab_id": "tab id!"}
+                )
                 mock_disconnect.assert_not_called()
 
     @pytest.mark.asyncio
@@ -55,7 +66,9 @@ class TestValidIdChecks:
 
         sio_mock = MagicMock()
         with patch("torrus.server.sio", sio_mock):
-            with patch.object(ssh_manager, "restore_session", AsyncMock()) as mock_restore:
+            with patch.object(
+                ssh_manager, "restore_session", AsyncMock()
+            ) as mock_restore:
                 await on_session_register("sid-1", {"session_id": "", "tab_id": "tab1"})
                 mock_restore.assert_not_called()
 
@@ -189,9 +202,13 @@ class TestLdapAuthGating:
         server_module.ssh_manager = ssh_manager
 
         with patch("torrus.server.sio", sio_mock):
-            await on_session_register("auth-sid", {"session_id": "sess1", "tab_id": "tab1"})
+            await on_session_register(
+                "auth-sid", {"session_id": "sess1", "tab_id": "tab1"}
+            )
 
-        ssh_manager.restore_session.assert_awaited_once_with("auth-sid", "sess1", "tab1")
+        ssh_manager.restore_session.assert_awaited_once_with(
+            "auth-sid", "sess1", "tab1"
+        )
         ssh_manager.force_redraw.assert_awaited_once_with("sess1", "tab1")
         assert server_module._authenticated_users["auth-sid"] == "alice"
 
@@ -385,18 +402,32 @@ class TestLdapAuthGating:
             "REMOTE_ADDR": "1.2.3.4",
             "HTTP_COOKIE": "ldapgate_session=abc",
         }
-        with patch("torrus.server.sio", sio_mock), \
-             patch.object(server_module.ssh_manager, "handle_input", AsyncMock()), \
-             patch.object(server_module.ssh_manager, "get_session_target", AsyncMock(return_value=("db.example", 22, "root"))), \
-             patch("torrus.server.audit_store.record_command_event", AsyncMock()) as record:
+        with (
+            patch("torrus.server.sio", sio_mock),
+            patch.object(server_module.ssh_manager, "handle_input", AsyncMock()),
+            patch.object(
+                server_module.ssh_manager,
+                "get_session_target",
+                AsyncMock(return_value=("db.example", 22, "root")),
+            ),
+            patch(
+                "torrus.server.audit_store.record_command_event", AsyncMock()
+            ) as record,
+        ):
             result = await on_ssh_input(
-                "auth-sid", {"session_id": "sess1", "tab_id": "tab1", "data": "echo hi\r"}
+                "auth-sid",
+                {"session_id": "sess1", "tab_id": "tab1", "data": "echo hi\r"},
             )
 
         assert result == {"ok": True}
         record.assert_awaited_once_with(
-            ldap_username="alice", session_id="sess1", tab_id="tab1", command="echo hi",
-            ssh_host="db.example", ssh_port=22, ssh_username="root",
+            ldap_username="alice",
+            session_id="sess1",
+            tab_id="tab1",
+            command="echo hi",
+            ssh_host="db.example",
+            ssh_port=22,
+            ssh_username="root",
         )
 
 
@@ -413,7 +444,9 @@ class TestSessionRateLimit:
         import torrus.server as server_module
 
         server_module.ssh_manager = MagicMock()
-        server_module.ssh_manager.sid_session_count.return_value = server_module._MAX_SESSIONS_PER_SID
+        server_module.ssh_manager.sid_session_count.return_value = (
+            server_module._MAX_SESSIONS_PER_SID
+        )
 
         with patch("torrus.server.sio", sio_mock):
             await on_ssh_connect(
@@ -615,8 +648,12 @@ class TestSocketDisconnect:
     async def test_on_disconnect_discards_partial_command_buffers(self):
         from torrus import server as server_module
 
-        server_module._input_buffers[("sid-1", "session-1", "tab-1")] = bytearray(b"git sta")
-        server_module._input_buffers[("sid-2", "session-1", "tab-1")] = bytearray(b"keep")
+        server_module._input_buffers[("sid-1", "session-1", "tab-1")] = bytearray(
+            b"git sta"
+        )
+        server_module._input_buffers[("sid-2", "session-1", "tab-1")] = bytearray(
+            b"keep"
+        )
         with patch.object(server_module.ssh_manager, "unmap_sid", AsyncMock()):
             await server_module.on_disconnect("sid-1")
 

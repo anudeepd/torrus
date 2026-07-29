@@ -10,24 +10,24 @@ from pathlib import Path
 
 
 _ANSI_RE = re.compile(
-    r'\x1B\[[\d;]*[A-Za-z]'          # CSI sequences
-    r'|\x1B\].*?(?:\x1B\\|\x07)'     # OSC sequences (ST or BEL terminated)
-    r'|\x1B[\x40-\x5F]'              # 2-byte escape sequences
-    r'|[\x00-\x07\x0b\x0c\x0e-\x1f]' # control chars except tab(\t), BS(\b), CR(\r), LF(\n), DEL(\x7f)
+    r"\x1B\[[\d;]*[A-Za-z]"  # CSI sequences
+    r"|\x1B\].*?(?:\x1B\\|\x07)"  # OSC sequences (ST or BEL terminated)
+    r"|\x1B[\x40-\x5F]"  # 2-byte escape sequences
+    r"|[\x00-\x07\x0b\x0c\x0e-\x1f]"  # control chars except tab(\t), BS(\b), CR(\r), LF(\n), DEL(\x7f)
 )
 
 
 def strip_escape(text: str) -> str:
     """Remove ANSI escape sequences and control characters from terminal text."""
-    text = _ANSI_RE.sub('', text)
+    text = _ANSI_RE.sub("", text)
     result: list[str] = []
     for ch in text:
-        if ch in ('\b', '\x7f'):
+        if ch in ("\b", "\x7f"):
             if result:
                 result.pop()
         else:
             result.append(ch)
-    return ''.join(result)
+    return "".join(result)
 
 
 def _db_path() -> Path:
@@ -85,24 +85,51 @@ def init_db() -> None:
                 pass
 
 
-async def record_terminal_input(*, ldap_username: str, session_id: str, tab_id: str,
-                                input_data: str | bytes, ssh_host: str | None = None,
-                                ssh_port: int | None = None, ssh_username: str | None = None) -> None:
+async def record_terminal_input(
+    *,
+    ldap_username: str,
+    session_id: str,
+    tab_id: str,
+    input_data: str | bytes,
+    ssh_host: str | None = None,
+    ssh_port: int | None = None,
+    ssh_username: str | None = None,
+) -> None:
     """Store one Socket.IO input payload exactly as bytes received by the SSH layer."""
-    raw = input_data.encode("utf-8", errors="replace") if isinstance(input_data, str) else input_data
+    raw = (
+        input_data.encode("utf-8", errors="replace")
+        if isinstance(input_data, str)
+        else input_data
+    )
     occurred_at = datetime.now(timezone.utc).isoformat()
     with _connect() as db:
         db.execute(
             "INSERT INTO terminal_input_events "
             "(occurred_at, ldap_username, session_id, tab_id, ssh_host, ssh_port, ssh_username, input_data) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (occurred_at, ldap_username, session_id, tab_id, ssh_host, ssh_port, ssh_username, raw),
+            (
+                occurred_at,
+                ldap_username,
+                session_id,
+                tab_id,
+                ssh_host,
+                ssh_port,
+                ssh_username,
+                raw,
+            ),
         )
 
 
-async def record_command_event(*, ldap_username: str, session_id: str, tab_id: str,
-                                command: str, ssh_host: str | None = None,
-                                ssh_port: int | None = None, ssh_username: str | None = None) -> None:
+async def record_command_event(
+    *,
+    ldap_username: str,
+    session_id: str,
+    tab_id: str,
+    command: str,
+    ssh_host: str | None = None,
+    ssh_port: int | None = None,
+    ssh_username: str | None = None,
+) -> None:
     """Store one complete command (terminated by Enter) for audit."""
     cleaned = strip_escape(command).strip()
     if not cleaned:
@@ -114,12 +141,22 @@ async def record_command_event(*, ldap_username: str, session_id: str, tab_id: s
             "INSERT INTO terminal_input_events "
             "(occurred_at, ldap_username, session_id, tab_id, ssh_host, ssh_port, ssh_username, input_data) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (occurred_at, ldap_username, session_id, tab_id, ssh_host, ssh_port, ssh_username, raw),
+            (
+                occurred_at,
+                ldap_username,
+                session_id,
+                tab_id,
+                ssh_host,
+                ssh_port,
+                ssh_username,
+                raw,
+            ),
         )
 
 
-def list_terminal_input_events(*, username: str | None = None, since: str | None = None,
-                               limit: int = 100) -> list[dict]:
+def list_terminal_input_events(
+    *, username: str | None = None, since: str | None = None, limit: int = 100
+) -> list[dict]:
     clauses: list[str] = []
     values: list[object] = []
     if username:
@@ -142,5 +179,7 @@ def list_terminal_input_events(*, username: str | None = None, since: str | None
 def purge_terminal_input_events(older_than_days: int) -> int:
     cutoff = (datetime.now(timezone.utc) - timedelta(days=older_than_days)).isoformat()
     with _connect() as db:
-        cursor = db.execute("DELETE FROM terminal_input_events WHERE occurred_at < ?", (cutoff,))
+        cursor = db.execute(
+            "DELETE FROM terminal_input_events WHERE occurred_at < ?", (cutoff,)
+        )
         return cursor.rowcount

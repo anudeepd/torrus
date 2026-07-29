@@ -10,7 +10,13 @@ import pytest
 
 
 class FakeRemoteFile:
-    def __init__(self, fs: dict[str, bytes], path: str, mode: str, close_error: Exception | None = None):
+    def __init__(
+        self,
+        fs: dict[str, bytes],
+        path: str,
+        mode: str,
+        close_error: Exception | None = None,
+    ):
         self.fs = fs
         self.path = path
         self.mode = mode
@@ -20,7 +26,11 @@ class FakeRemoteFile:
         self.close_error = close_error
 
     def write(self, data: bytes) -> None:
-        self.buffer = self.buffer[:self.position] + data + self.buffer[self.position + len(data):]
+        self.buffer = (
+            self.buffer[: self.position]
+            + data
+            + self.buffer[self.position + len(data) :]
+        )
         self.position += len(data)
 
     def seek(self, offset: int) -> None:
@@ -82,16 +92,34 @@ class FakeSFTP:
         names = []
         for directory in self.dirs:
             if directory.startswith(prefix):
-                rest = directory[len(prefix):]
+                rest = directory[len(prefix) :]
                 if rest and "/" not in rest:
                     uid, gid = self.owners.get(directory, (1000, 1000))
-                    names.append(SimpleNamespace(filename=rest, st_mode=0o040755, st_size=0, st_mtime=1, st_uid=uid, st_gid=gid))
+                    names.append(
+                        SimpleNamespace(
+                            filename=rest,
+                            st_mode=0o040755,
+                            st_size=0,
+                            st_mtime=1,
+                            st_uid=uid,
+                            st_gid=gid,
+                        )
+                    )
         for file_path, data in self.fs.items():
             if file_path.startswith(prefix):
-                rest = file_path[len(prefix):]
+                rest = file_path[len(prefix) :]
                 if rest and "/" not in rest:
                     uid, gid = self.owners.get(file_path, (1000, 1000))
-                    names.append(SimpleNamespace(filename=rest, st_mode=0o100644, st_size=len(data), st_mtime=2, st_uid=uid, st_gid=gid))
+                    names.append(
+                        SimpleNamespace(
+                            filename=rest,
+                            st_mode=0o100644,
+                            st_size=len(data),
+                            st_mtime=2,
+                            st_uid=uid,
+                            st_gid=gid,
+                        )
+                    )
         return names
 
     def open(self, path: str, mode: str):
@@ -222,7 +250,9 @@ async def test_open_sftp_uses_source_tab_without_private_state_move():
     ssh_manager = FakeSSHManager(sftp)
     manager = SFTPManager()
     try:
-        assert await manager.open_sftp("sess1", "sftp-tab", ssh_manager, source_tab_id="terminal-tab")
+        assert await manager.open_sftp(
+            "sess1", "sftp-tab", ssh_manager, source_tab_id="terminal-tab"
+        )
     finally:
         await manager.shutdown()
 
@@ -275,7 +305,6 @@ async def test_missing_file_maps_to_file_not_found():
         await manager.shutdown()
 
     assert exc.value.code == "FILE_NOT_FOUND"
-
 
 
 @pytest.mark.asyncio
@@ -457,16 +486,27 @@ async def test_upload_chunk_retries_and_only_replaces_target_when_complete():
     manager = SFTPManager()
     try:
         await manager.open_sftp("sess1", "tab1", ssh_manager)
-        await manager.upload_chunk("tab1", "readme.txt", "upload1", 0, 6, first_chunk(), False)
-        await manager.upload_chunk("tab1", "readme.txt", "upload1", 0, 6, first_chunk(), False)
+        await manager.upload_chunk(
+            "tab1", "readme.txt", "upload1", 0, 6, first_chunk(), False
+        )
+        await manager.upload_chunk(
+            "tab1", "readme.txt", "upload1", 0, 6, first_chunk(), False
+        )
         assert sftp.fs["/home/app/readme.txt"] == b"hello"
         assert sftp.fs["/home/app/.readme.txt.torrus-upload-upload1"] == b"abc"
 
-        result = await manager.upload_chunk("tab1", "readme.txt", "upload1", 3, 6, final_chunk(), True)
+        result = await manager.upload_chunk(
+            "tab1", "readme.txt", "upload1", 3, 6, final_chunk(), True
+        )
     finally:
         await manager.shutdown()
 
-    assert result == {"ok": True, "path": "/home/app/readme.txt", "offset": 6, "complete": True}
+    assert result == {
+        "ok": True,
+        "path": "/home/app/readme.txt",
+        "offset": 6,
+        "complete": True,
+    }
     assert sftp.fs["/home/app/readme.txt"] == b"abcdef"
     assert "/home/app/.readme.txt.torrus-upload-upload1" not in sftp.fs
     assert sftp.last_file is not None and sftp.last_file.pipelined
@@ -485,9 +525,13 @@ async def test_expected_session_id_blocks_cross_session_tab_access():
     try:
         await manager.open_sftp("session-a", "tab1", ssh_manager)
         with pytest.raises(SFTPError) as upload_exc:
-            await manager.stream_upload("tab1", "x.txt", chunks(), max_bytes=10, expected_session_id="session-b")
+            await manager.stream_upload(
+                "tab1", "x.txt", chunks(), max_bytes=10, expected_session_id="session-b"
+            )
         with pytest.raises(SFTPError) as download_exc:
-            await manager.prepare_download("tab1", "readme.txt", expected_session_id="session-b")
+            await manager.prepare_download(
+                "tab1", "readme.txt", expected_session_id="session-b"
+            )
     finally:
         await manager.shutdown()
 
@@ -586,7 +630,11 @@ async def test_run_blocking_closes_fds_when_add_reader_fails(monkeypatch):
     manager = SFTPManager()
     loop = asyncio.get_running_loop()
     real_close = __import__("os").close
-    monkeypatch.setattr(loop, "add_reader", lambda *_args: (_ for _ in ()).throw(RuntimeError("closing")))
+    monkeypatch.setattr(
+        loop,
+        "add_reader",
+        lambda *_args: (_ for _ in ()).throw(RuntimeError("closing")),
+    )
     monkeypatch.setattr("os.close", track_close)
     try:
         with pytest.raises(RuntimeError):
@@ -606,7 +654,12 @@ async def test_stream_download_yields_chunks():
     manager = SFTPManager()
     try:
         await manager.open_sftp("sess1", "tab1", ssh_manager)
-        chunks = [chunk async for chunk in manager.stream_download("tab1", "readme.txt", chunk_size=2)]
+        chunks = [
+            chunk
+            async for chunk in manager.stream_download(
+                "tab1", "readme.txt", chunk_size=2
+            )
+        ]
     finally:
         await manager.shutdown()
 
@@ -619,7 +672,9 @@ async def test_ssh_disconnect_cleans_matching_sftp_sessions():
 
     sftp = FakeSFTP()
     manager = SFTPManager()
-    manager._sessions["tab1"] = SimpleNamespace(session_id="sess1", tab_id="tab1", client=sftp, cwd="/home/app")
+    manager._sessions["tab1"] = SimpleNamespace(
+        session_id="sess1", tab_id="tab1", client=sftp, cwd="/home/app"
+    )
     manager._locks["tab1"] = asyncio.Lock()
 
     await manager.on_ssh_disconnect("sess1")

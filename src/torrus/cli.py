@@ -19,18 +19,40 @@ def main():
 @main.command()
 @click.option("--host", default="127.0.0.1", show_default=True, help="Bind host")
 @click.option("--port", default=8080, show_default=True, help="Bind port")
-@click.option("--no-browser", is_flag=True, default=False, help="Don't open browser on startup")
-@click.option("--reload", is_flag=True, default=False, hidden=True, help="Dev auto-reload")
-@click.option("--ldap-config", "ldap_config", default=None,
-              type=click.Path(exists=True, dir_okay=False, resolve_path=True),
-              help="Path to ldapgate YAML config to enable LDAP authentication.")
-@click.option("--ssl-keyfile", default=None, type=click.Path(exists=True, dir_okay=False),
-              help="SSL key file for HTTPS")
-@click.option("--ssl-certfile", default=None, type=click.Path(exists=True, dir_okay=False),
-              help="SSL certificate file for HTTPS")
-@click.option("--log-file", type=click.Path(dir_okay=False, path_type=Path), default=None,
-              help="Append application logs to this file.")
-def serve(host, port, no_browser, reload, ldap_config, ssl_keyfile, ssl_certfile, log_file):
+@click.option(
+    "--no-browser", is_flag=True, default=False, help="Don't open browser on startup"
+)
+@click.option(
+    "--reload", is_flag=True, default=False, hidden=True, help="Dev auto-reload"
+)
+@click.option(
+    "--ldap-config",
+    "ldap_config",
+    default=None,
+    type=click.Path(exists=True, dir_okay=False, resolve_path=True),
+    help="Path to ldapgate YAML config to enable LDAP authentication.",
+)
+@click.option(
+    "--ssl-keyfile",
+    default=None,
+    type=click.Path(exists=True, dir_okay=False),
+    help="SSL key file for HTTPS",
+)
+@click.option(
+    "--ssl-certfile",
+    default=None,
+    type=click.Path(exists=True, dir_okay=False),
+    help="SSL certificate file for HTTPS",
+)
+@click.option(
+    "--log-file",
+    type=click.Path(dir_okay=False, path_type=Path),
+    default=None,
+    help="Append application logs to this file.",
+)
+def serve(
+    host, port, no_browser, reload, ldap_config, ssl_keyfile, ssl_certfile, log_file
+):
     """Start the torrus SSH web terminal."""
     if ldap_config:
         os.environ["TORRUS_LDAP_CONFIG"] = ldap_config
@@ -85,8 +107,11 @@ def audit(ctx: click.Context, username: str | None, since: str | None, limit: in
     """Read or purge raw terminal-input audit events."""
     if ctx.invoked_subcommand is None:
         from torrus.audit_store import init_db, list_terminal_input_events
+
         init_db()
-        _print_audit_events(list_terminal_input_events(username=username, since=since, limit=limit))
+        _print_audit_events(
+            list_terminal_input_events(username=username, since=since, limit=limit)
+        )
 
 
 @audit.command("show")
@@ -95,13 +120,23 @@ def audit(ctx: click.Context, username: str | None, since: str | None, limit: in
 @click.option("--limit", default=100, show_default=True, type=click.IntRange(1, 10000))
 def audit_show(username: str | None, since: str | None, limit: int):
     from torrus.audit_store import init_db, list_terminal_input_events
+
     init_db()
-    _print_audit_events(list_terminal_input_events(username=username, since=since, limit=limit))
+    _print_audit_events(
+        list_terminal_input_events(username=username, since=since, limit=limit)
+    )
 
 
 @audit.command("purge")
-@click.option("--older-than", default=90, show_default=True, type=click.IntRange(1), help="Age in days.")
+@click.option(
+    "--older-than",
+    default=90,
+    show_default=True,
+    type=click.IntRange(1),
+    help="Age in days.",
+)
 def audit_purge(older_than: int):
     from torrus.audit_store import init_db, purge_terminal_input_events
+
     init_db()
     click.echo(f"Purged {purge_terminal_input_events(older_than)} audit events")

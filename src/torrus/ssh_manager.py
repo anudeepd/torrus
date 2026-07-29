@@ -18,11 +18,11 @@ import paramiko
 logger = logging.getLogger("torrus.ssh")
 
 OUTPUT_BUFFER_MAX = 10 * 1024  # 10 KB replay buffer per session
-IDLE_TIMEOUT = 4 * 3600        # 4 hours
-KEEPALIVE_INTERVAL = 30        # seconds
-CLEANUP_INTERVAL = 300         # 5 minutes
-CHANNEL_READ_TIMEOUT = 0.1     # seconds — blocking read timeout to avoid busy-wait
-CONNECTION_TIMEOUT = 20        # seconds — includes DNS and post-login probes
+IDLE_TIMEOUT = 4 * 3600  # 4 hours
+KEEPALIVE_INTERVAL = 30  # seconds
+CLEANUP_INTERVAL = 300  # 5 minutes
+CHANNEL_READ_TIMEOUT = 0.1  # seconds — blocking read timeout to avoid busy-wait
+CONNECTION_TIMEOUT = 20  # seconds — includes DNS and post-login probes
 
 
 class _WarnThenAddPolicy(paramiko.MissingHostKeyPolicy):
@@ -58,7 +58,9 @@ class SSHSession:
     rows: int = 50
     read_task: Optional[asyncio.Task] = None
     write_task: Optional[asyncio.Task] = None
-    input_queue: asyncio.Queue[bytes] = field(default_factory=lambda: asyncio.Queue(maxsize=65536))
+    input_queue: asyncio.Queue[bytes] = field(
+        default_factory=lambda: asyncio.Queue(maxsize=65536)
+    )
     output_buffer: bytearray = field(default_factory=bytearray)
     # Probed at connection time; SFTP identity is scoped to the SSH transport.
     is_root: bool = False
@@ -127,7 +129,11 @@ class SSHManager:
         cols: int = 220,
         rows: int = 50,
     ) -> None:
-        password_buffer = password if isinstance(password, bytearray) else bytearray(password, "utf-8")
+        password_buffer = (
+            password
+            if isinstance(password, bytearray)
+            else bytearray(password, "utf-8")
+        )
         key = (session_id, tab_id)
         room = _room(session_id, tab_id)
 
@@ -136,7 +142,11 @@ class SSHManager:
                 logger.warning("Connection already in progress for %s", key)
                 await self.sio.emit(
                     "ssh:error",
-                    {"tab_id": tab_id, "message": "Connection already in progress.", "code": "connect_in_progress"},
+                    {
+                        "tab_id": tab_id,
+                        "message": "Connection already in progress.",
+                        "code": "connect_in_progress",
+                    },
                     to=sid,
                 )
                 return
@@ -153,13 +163,17 @@ class SSHManager:
 
             loop = asyncio.get_running_loop()
             target = f"{username}@{host}:{port}"
-            logger.info("Connecting to %s (session=%s, tab=%s)", target, session_id, tab_id)
+            logger.info(
+                "Connecting to %s (session=%s, tab=%s)", target, session_id, tab_id
+            )
 
             try:
                 has_tmux, is_root = await asyncio.wait_for(
                     loop.run_in_executor(
                         self._ssh_executor,
-                        lambda: _connect_and_check_tmux(client, host, port, username, password_buffer),
+                        lambda: _connect_and_check_tmux(
+                            client, host, port, username, password_buffer
+                        ),
                     ),
                     timeout=CONNECTION_TIMEOUT,
                 )
@@ -167,7 +181,11 @@ class SSHManager:
                 logger.warning("Auth failed for %s", target)
                 await self.sio.emit(
                     "ssh:error",
-                    {"tab_id": tab_id, "message": "Authentication failed. Check username and password.", "code": "auth_failed"},
+                    {
+                        "tab_id": tab_id,
+                        "message": "Authentication failed. Check username and password.",
+                        "code": "auth_failed",
+                    },
                     to=sid,
                 )
                 return
@@ -175,7 +193,11 @@ class SSHManager:
                 logger.warning("SSH error for %s", target, exc_info=True)
                 await self.sio.emit(
                     "ssh:error",
-                    {"tab_id": tab_id, "message": "SSH connection failed.", "code": "ssh_error"},
+                    {
+                        "tab_id": tab_id,
+                        "message": "SSH connection failed.",
+                        "code": "ssh_error",
+                    },
                     to=sid,
                 )
                 return
@@ -183,7 +205,11 @@ class SSHManager:
                 logger.warning("Connection to %s timed out", target)
                 await self.sio.emit(
                     "ssh:error",
-                    {"tab_id": tab_id, "message": "Connection timed out after 15 seconds.", "code": "timeout"},
+                    {
+                        "tab_id": tab_id,
+                        "message": "Connection timed out after 15 seconds.",
+                        "code": "timeout",
+                    },
                     to=sid,
                 )
                 return
@@ -191,12 +217,18 @@ class SSHManager:
                 logger.warning("Cannot reach %s", target, exc_info=True)
                 await self.sio.emit(
                     "ssh:error",
-                    {"tab_id": tab_id, "message": "Cannot reach host.", "code": "host_unreachable"},
+                    {
+                        "tab_id": tab_id,
+                        "message": "Cannot reach host.",
+                        "code": "host_unreachable",
+                    },
                     to=sid,
                 )
                 return
 
-            tmux_name = f"sc_{session_id.replace('-', '')}_{tab_id}" if has_tmux else None
+            tmux_name = (
+                f"sc_{session_id.replace('-', '')}_{tab_id}" if has_tmux else None
+            )
 
             try:
                 if tmux_name:
@@ -209,13 +241,20 @@ class SSHManager:
                         term="xterm-256color",
                         width=cols,
                         height=rows,
-                        environment={"COLORTERM": "truecolor", "TERM": "xterm-256color"},
+                        environment={
+                            "COLORTERM": "truecolor",
+                            "TERM": "xterm-256color",
+                        },
                     )
             except Exception:
                 logger.warning("Failed to open shell for %s", target, exc_info=True)
                 await self.sio.emit(
                     "ssh:error",
-                    {"tab_id": tab_id, "message": "Failed to open remote shell.", "code": "shell_error"},
+                    {
+                        "tab_id": tab_id,
+                        "message": "Failed to open remote shell.",
+                        "code": "shell_error",
+                    },
                     to=sid,
                 )
                 return
@@ -298,15 +337,25 @@ class SSHManager:
                 return
             try:
                 await loop.run_in_executor(
-                    self._ssh_executor, session.channel.resize_pty, session.cols + 1, session.rows,
+                    self._ssh_executor,
+                    session.channel.resize_pty,
+                    session.cols + 1,
+                    session.rows,
                 )
                 await loop.run_in_executor(
-                    self._ssh_executor, session.channel.resize_pty, session.cols, session.rows,
+                    self._ssh_executor,
+                    session.channel.resize_pty,
+                    session.cols,
+                    session.rows,
                 )
             except Exception:
-                logger.warning("force_redraw failed for %s/%s", session_id, tab_id, exc_info=True)
+                logger.warning(
+                    "force_redraw failed for %s/%s", session_id, tab_id, exc_info=True
+                )
 
-    async def handle_input(self, session_id: str, tab_id: str, data: str | bytes) -> None:
+    async def handle_input(
+        self, session_id: str, tab_id: str, data: str | bytes
+    ) -> None:
         key = (session_id, tab_id)
         async with self._lock:
             session = self._sessions.get(key)
@@ -319,7 +368,9 @@ class SSHManager:
         session.last_activity = time.time()
         await session.input_queue.put(data)
 
-    async def get_session_target(self, session_id: str, tab_id: str) -> tuple[str, int, str] | None:
+    async def get_session_target(
+        self, session_id: str, tab_id: str
+    ) -> tuple[str, int, str] | None:
         """Return the active SSH target for audit attribution."""
         async with self._lock:
             session = self._sessions.get((session_id, tab_id))
@@ -338,7 +389,10 @@ class SSHManager:
     async def has_session(self, session_id: str) -> bool:
         """Return True when any active tab exists for this browser session."""
         async with self._lock:
-            return any(key_session_id == session_id for key_session_id, _tab_id in self._sessions)
+            return any(
+                key_session_id == session_id
+                for key_session_id, _tab_id in self._sessions
+            )
 
     async def open_sftp_channel(self, session_id: str, tab_id: str):
         """Open a new SFTP channel on an existing SSH transport."""
@@ -351,14 +405,25 @@ class SSHManager:
             if transport is None or not transport.is_active():
                 return None
             try:
-                return await loop.run_in_executor(self._ssh_executor, transport.open_sftp_client)
+                return await loop.run_in_executor(
+                    self._ssh_executor, transport.open_sftp_client
+                )
             except AttributeError:
-                return await loop.run_in_executor(self._ssh_executor, session.client.open_sftp)
+                return await loop.run_in_executor(
+                    self._ssh_executor, session.client.open_sftp
+                )
             except Exception:
-                logger.warning("Failed to open SFTP channel for %s/%s", session_id, tab_id, exc_info=True)
+                logger.warning(
+                    "Failed to open SFTP channel for %s/%s",
+                    session_id,
+                    tab_id,
+                    exc_info=True,
+                )
                 return None
 
-    async def handle_resize(self, session_id: str, tab_id: str, cols: int, rows: int) -> None:
+    async def handle_resize(
+        self, session_id: str, tab_id: str, cols: int, rows: int
+    ) -> None:
         key = (session_id, tab_id)
         async with self._lock:
             session = self._sessions.get(key)
@@ -369,7 +434,9 @@ class SSHManager:
         session.rows = rows
         try:
             loop = asyncio.get_running_loop()
-            await loop.run_in_executor(self._ssh_executor, session.channel.resize_pty, cols, rows)
+            await loop.run_in_executor(
+                self._ssh_executor, session.channel.resize_pty, cols, rows
+            )
         except Exception:
             pass
 
@@ -378,7 +445,9 @@ class SSHManager:
         async with self._lock:
             session = self._sessions.get(key)
         if session:
-            logger.info("Disconnecting %s@%s (tab=%s)", session.username, session.host, tab_id)
+            logger.info(
+                "Disconnecting %s@%s (tab=%s)", session.username, session.host, tab_id
+            )
         await self._destroy_session(key)
 
     async def clone(
@@ -400,7 +469,11 @@ class SSHManager:
             if source is None or source.channel.closed:
                 await self.sio.emit(
                     "ssh:error",
-                    {"tab_id": new_tab_id, "message": "Source session is no longer active.", "code": "clone_failed"},
+                    {
+                        "tab_id": new_tab_id,
+                        "message": "Source session is no longer active.",
+                        "code": "clone_failed",
+                    },
                     to=sid,
                 )
                 return
@@ -415,14 +488,23 @@ class SSHManager:
                         term="xterm-256color",
                         width=cols,
                         height=rows,
-                        environment={"COLORTERM": "truecolor", "TERM": "xterm-256color"},
+                        environment={
+                            "COLORTERM": "truecolor",
+                            "TERM": "xterm-256color",
+                        },
                     ),
                 )
             except Exception:
-                logger.warning("Failed to clone session for %s", source_key, exc_info=True)
+                logger.warning(
+                    "Failed to clone session for %s", source_key, exc_info=True
+                )
                 await self.sio.emit(
                     "ssh:error",
-                    {"tab_id": new_tab_id, "message": "Failed to clone session.", "code": "clone_failed"},
+                    {
+                        "tab_id": new_tab_id,
+                        "message": "Failed to clone session.",
+                        "code": "clone_failed",
+                    },
                     to=sid,
                 )
                 return
@@ -450,11 +532,20 @@ class SSHManager:
         session.read_task = asyncio.create_task(self._read_loop(session))
         session.write_task = asyncio.create_task(self._write_loop(session))
 
-        logger.info("Cloned session %s@%s (tab=%s → %s)", source_username, source_host, source_tab_id, new_tab_id)
+        logger.info(
+            "Cloned session %s@%s (tab=%s → %s)",
+            source_username,
+            source_host,
+            source_tab_id,
+            new_tab_id,
+        )
 
         await self.sio.emit(
             "ssh:connected",
-            {"tab_id": new_tab_id, "message": f"Cloned from {source_username}@{source_host}"},
+            {
+                "tab_id": new_tab_id,
+                "message": f"Cloned from {source_username}@{source_host}",
+            },
             to=sid,
         )
 
@@ -481,9 +572,16 @@ class SSHManager:
 
         while not session.channel.closed:
             try:
-                data = await loop.run_in_executor(self._ssh_executor, _blocking_read, session.channel)
+                data = await loop.run_in_executor(
+                    self._ssh_executor, _blocking_read, session.channel
+                )
             except Exception:
-                logger.warning("Read error for %s/%s", session.session_id, session.tab_id, exc_info=True)
+                logger.warning(
+                    "Read error for %s/%s",
+                    session.session_id,
+                    session.tab_id,
+                    exc_info=True,
+                )
                 await self.sio.emit(
                     "ssh:closed",
                     {"tab_id": session.tab_id, "reason": "Connection closed."},
@@ -495,7 +593,9 @@ class SSHManager:
                 session.last_activity = time.time()
                 session.output_buffer.extend(data)
                 if len(session.output_buffer) > OUTPUT_BUFFER_MAX:
-                    del session.output_buffer[: len(session.output_buffer) - OUTPUT_BUFFER_MAX]
+                    del session.output_buffer[
+                        : len(session.output_buffer) - OUTPUT_BUFFER_MAX
+                    ]
 
                 await self.sio.emit(
                     "ssh:output",
@@ -514,7 +614,9 @@ class SSHManager:
             session.write_task.cancel()
         async with self._lock:
             self._sessions.pop((session.session_id, session.tab_id), None)
-            still_connected = any(key[0] == session.session_id for key in self._sessions)
+            still_connected = any(
+                key[0] == session.session_id for key in self._sessions
+            )
         if not still_connected and self._on_disconnect is not None:
             await self._on_disconnect(session.session_id)
 
@@ -534,10 +636,17 @@ class SSHManager:
                 break
 
             try:
-                await loop.run_in_executor(self._ssh_executor, _blocking_send_all, session.channel, data)
+                await loop.run_in_executor(
+                    self._ssh_executor, _blocking_send_all, session.channel, data
+                )
                 session.last_activity = time.time()
             except Exception:
-                logger.warning("Write error for %s/%s", session.session_id, session.tab_id, exc_info=True)
+                logger.warning(
+                    "Write error for %s/%s",
+                    session.session_id,
+                    session.tab_id,
+                    exc_info=True,
+                )
                 if session.read_task and not session.read_task.done():
                     session.read_task.cancel()
                 break
@@ -546,7 +655,9 @@ class SSHManager:
         """Silently check if tmux exists on the remote host using a separate channel."""
         try:
             loop = asyncio.get_running_loop()
-            return await loop.run_in_executor(self._ssh_executor, _check_tmux_blocking, client)
+            return await loop.run_in_executor(
+                self._ssh_executor, _check_tmux_blocking, client
+            )
         except Exception:
             return False
 
@@ -570,7 +681,9 @@ class SSHManager:
             session.read_task.cancel()
         if session.write_task and not session.write_task.done():
             session.write_task.cancel()
-        session.owns_client = not any(other.client is session.client for other in self._sessions.values())
+        session.owns_client = not any(
+            other.client is session.client for other in self._sessions.values()
+        )
         return session
 
     async def _close_session(self, session: SSHSession) -> None:
@@ -607,10 +720,13 @@ class SSHManager:
             for session in sessions:
                 pass
             loop = asyncio.get_running_loop()
-            await asyncio.gather(*(
-                loop.run_in_executor(self._ssh_executor, _send_keepalive, session)
-                for session in sessions
-            ), return_exceptions=True)
+            await asyncio.gather(
+                *(
+                    loop.run_in_executor(self._ssh_executor, _send_keepalive, session)
+                    for session in sessions
+                ),
+                return_exceptions=True,
+            )
 
     async def _cleanup_loop(self) -> None:
         while True:
@@ -620,7 +736,8 @@ class SSHManager:
                 to_remove = [
                     key
                     for key, session in self._sessions.items()
-                    if session.channel.closed or (now - session.last_activity) > IDLE_TIMEOUT
+                    if session.channel.closed
+                    or (now - session.last_activity) > IDLE_TIMEOUT
                 ]
                 sessions = [self._pop_session_locked(key) for key in to_remove]
             for session in sessions:
@@ -662,7 +779,9 @@ def _connect_and_check_tmux(
         username=username,
         # Convert only at boundary; caller wipes mutable password immediately
         # after executor returns. Python/Paramiko may still retain transient copies.
-        password=bytes(password) if isinstance(password, (bytes, bytearray)) else password,
+        password=bytes(password)
+        if isinstance(password, (bytes, bytearray))
+        else password,
         timeout=15,
         banner_timeout=15,
         auth_timeout=15,
@@ -712,8 +831,8 @@ def _sanitize_replay_buffer(buf: bytes) -> bytes:
 
     This detects unmatched exits and returns only the bytes that follow them.
     """
-    ENTERS = (b'\x1b[?1049h', b'\x1b[?47h', b'\x1b[?1047h')
-    EXITS  = (b'\x1b[?1049l', b'\x1b[?47l', b'\x1b[?1047l')
+    ENTERS = (b"\x1b[?1049h", b"\x1b[?47h", b"\x1b[?1047h")
+    EXITS = (b"\x1b[?1049l", b"\x1b[?47l", b"\x1b[?1047l")
 
     events: list[tuple[int, bool, int]] = []  # (position, is_enter, seq_len)
     for seq in ENTERS:
@@ -793,7 +912,9 @@ def _blocking_send_all(channel: paramiko.Channel, data: bytes) -> None:
         view = view[sent:]
 
 
-def _close_ssh_resources(channel: paramiko.Channel, client: paramiko.SSHClient | None) -> None:
+def _close_ssh_resources(
+    channel: paramiko.Channel, client: paramiko.SSHClient | None
+) -> None:
     try:
         channel.close()
     finally:

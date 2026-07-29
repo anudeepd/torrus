@@ -11,8 +11,10 @@ class TestServeCommand:
         from torrus.cli import serve
 
         runner = CliRunner()
-        with patch("torrus.cli.webbrowser.open") as mock_browser, \
-             patch("torrus.cli.uvicorn.run") as mock_uvicorn:
+        with (
+            patch("torrus.cli.webbrowser.open") as mock_browser,
+            patch("torrus.cli.uvicorn.run") as mock_uvicorn,
+        ):
             result = runner.invoke(serve, ["--no-browser"])
 
         assert result.exit_code == 0
@@ -31,7 +33,9 @@ class TestServeCommand:
             patch("torrus.cli.webbrowser.open"),
             patch("torrus.cli.uvicorn.run") as mock_uvicorn,
         ):
-            result = runner.invoke(serve, ["--host", "0.0.0.0", "--port", "9000", "--no-browser"])
+            result = runner.invoke(
+                serve, ["--host", "0.0.0.0", "--port", "9000", "--no-browser"]
+            )
 
         assert result.exit_code == 0
         args, kwargs = mock_uvicorn.call_args
@@ -49,6 +53,7 @@ class TestServeCommand:
                 captured_args["delay"] = delay
                 captured_args["target"] = target
                 captured_args["args"] = args
+
             def start(self):
                 pass
 
@@ -70,20 +75,24 @@ class TestServeCommand:
         config.write_text("ldap:\n  url: ldap://localhost\n")
 
         runner = CliRunner()
-        with patch("torrus.cli.webbrowser.open"), \
-             patch("torrus.cli.uvicorn.run"):
-            result = runner.invoke(serve, ["--ldap-config", str(config), "--no-browser"])
+        with patch("torrus.cli.webbrowser.open"), patch("torrus.cli.uvicorn.run"):
+            result = runner.invoke(
+                serve, ["--ldap-config", str(config), "--no-browser"]
+            )
 
         assert result.exit_code == 0
         import os
+
         assert os.environ.get("TORRUS_LDAP_CONFIG") == str(config)
 
     def test_serve_reload_flag(self):
         from torrus.cli import serve
 
         runner = CliRunner()
-        with patch("torrus.cli.webbrowser.open"), \
-             patch("torrus.cli.uvicorn.run") as mock_uvicorn:
+        with (
+            patch("torrus.cli.webbrowser.open"),
+            patch("torrus.cli.uvicorn.run") as mock_uvicorn,
+        ):
             result = runner.invoke(serve, ["--reload", "--no-browser"])
 
         assert result.exit_code == 0

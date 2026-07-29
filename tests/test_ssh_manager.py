@@ -101,10 +101,13 @@ class TestConnectFlow:
         from torrus.ssh_manager import CONNECTION_TIMEOUT, SSHManager
 
         manager = SSHManager(mock_sio)
-        with patch("torrus.ssh_manager.paramiko.SSHClient") as MockClient, patch(
-            "torrus.ssh_manager.asyncio.wait_for",
-            new=AsyncMock(side_effect=TimeoutError()),
-        ) as wait_for:
+        with (
+            patch("torrus.ssh_manager.paramiko.SSHClient") as MockClient,
+            patch(
+                "torrus.ssh_manager.asyncio.wait_for",
+                new=AsyncMock(side_effect=TimeoutError()),
+            ) as wait_for,
+        ):
             client = MagicMock()
             MockClient.return_value = client
             await manager.connect(
@@ -154,7 +157,9 @@ class TestSessionLifecycle:
             await _cleanup_manager(manager)
 
     @pytest.mark.asyncio
-    async def test_clone_opens_shared_transport_channel_and_emits_connected(self, mock_sio, mock_paramiko_client):
+    async def test_clone_opens_shared_transport_channel_and_emits_connected(
+        self, mock_sio, mock_paramiko_client
+    ):
         from torrus.ssh_manager import SSHManager
 
         manager = SSHManager(mock_sio)
@@ -162,14 +167,21 @@ class TestSessionLifecycle:
         try:
             with patch("torrus.ssh_manager.paramiko.SSHClient") as MockClient:
                 MockClient.return_value = mock_paramiko_client
-                await manager.connect("sid-1", "sess1", "tab1", "example.com", 22, "user", "pass")
-                mock_paramiko_client.invoke_shell = MagicMock(return_value=mock_paramiko_client.invoke_shell())
+                await manager.connect(
+                    "sid-1", "sess1", "tab1", "example.com", 22, "user", "pass"
+                )
+                mock_paramiko_client.invoke_shell = MagicMock(
+                    return_value=mock_paramiko_client.invoke_shell()
+                )
                 await manager.clone("sid-1", "sess1", "tab1", "tab2", 120, 40)
 
             assert ("sess1", "tab2") in manager._sessions
             assert manager._sessions[("sess1", "tab2")].client is mock_paramiko_client
             mock_paramiko_client.invoke_shell.assert_called_once()
-            assert any(call.args[0] == "ssh:connected" for call in mock_sio.emit.await_args_list)
+            assert any(
+                call.args[0] == "ssh:connected"
+                for call in mock_sio.emit.await_args_list
+            )
         finally:
             await _cleanup_manager(manager)
 
@@ -247,7 +259,9 @@ class TestSessionLifecycle:
             await _cleanup_manager(manager)
 
     @pytest.mark.asyncio
-    async def test_destroy_original_keeps_shared_client_until_clones_close(self, mock_sio, mock_paramiko_client):
+    async def test_destroy_original_keeps_shared_client_until_clones_close(
+        self, mock_sio, mock_paramiko_client
+    ):
         from torrus.ssh_manager import SSHManager
 
         manager = SSHManager(mock_sio)
@@ -376,7 +390,9 @@ class TestTmuxChannel:
         result = _open_tmux_channel(client, "sc_test_tab", 120, 40)
 
         assert result is channel
-        channel.get_pty.assert_called_once_with(term="xterm-256color", width=120, height=40)
+        channel.get_pty.assert_called_once_with(
+            term="xterm-256color", width=120, height=40
+        )
         command = channel.exec_command.call_args.args[0]
         assert "tmux set-option -t sc_test_tab status off" in command
         assert command.endswith("exec tmux attach-session -t sc_test_tab")

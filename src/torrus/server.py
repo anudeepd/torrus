@@ -33,8 +33,10 @@ if _log_file := os.getenv("TORRUS_LOG_FILE"):
 else:
     suppress_routine_polling_logs()
 
-_SAFE_ID = re.compile(r'^[a-zA-Z0-9_\-]+$')
+_SAFE_ID = re.compile(r"^[a-zA-Z0-9_\-]+$")
 _DEV_MODE = bool(os.getenv("TORRUS_DEV"))
+
+
 def _dev_socket_origins() -> list[str]:
     return [
         f"http://{host}:{port}"
@@ -104,6 +106,7 @@ sio = socketio.AsyncServer(
     engineio_logger=False,
 )
 
+
 @asynccontextmanager
 async def lifespan(app):
     if _ldap_enabled:
@@ -126,6 +129,7 @@ async def add_app_security_headers(request: Request, call_next):
         response.headers.setdefault("Cache-Control", HASHED_ASSET_CACHE_CONTROL)
     return response
 
+
 # CORS for Vite dev server
 if _DEV_MODE:
     fastapi_app.add_middleware(
@@ -147,7 +151,9 @@ _ldap_session_manager = None
 _RATE_LIMIT_WINDOW_SEC = 60
 _RATE_LIMIT_MAX = 10
 _connection_attempts: dict[str, list[float]] = {}
-_SFTP_INLINE_TRANSFER_MAX = int(os.getenv("TORRUS_SFTP_INLINE_MAX_BYTES", str(5 * 1024 * 1024)))
+_SFTP_INLINE_TRANSFER_MAX = int(
+    os.getenv("TORRUS_SFTP_INLINE_MAX_BYTES", str(5 * 1024 * 1024))
+)
 _sid_client_ips: dict[str, str] = {}
 
 # Per-socket/session/tab input buffers for command-level audit. A reconnect gets
@@ -179,7 +185,9 @@ if _static:
     # Serve /assets/ from Vite build output
     assets_dir = _static / "assets"
     if assets_dir.exists():
-        fastapi_app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
+        fastapi_app.mount(
+            "/assets", StaticFiles(directory=str(assets_dir)), name="assets"
+        )
 
 
 def _ensure_ldapgate_static_paths(config) -> None:
@@ -187,7 +195,10 @@ def _ensure_ldapgate_static_paths(config) -> None:
     proxy_config = getattr(config, "proxy", None)
     if proxy_config is None:
         return
-    if getattr(proxy_config, "session_cookie_name", "ldapgate_session") == "ldapgate_session":
+    if (
+        getattr(proxy_config, "session_cookie_name", "ldapgate_session")
+        == "ldapgate_session"
+    ):
         proxy_config.session_cookie_name = "torrus_session"
     static_paths = list(getattr(proxy_config, "static_paths", []) or [])
     for path in ("/favicon.svg", "/favicon.ico"):
@@ -210,9 +221,13 @@ if _ldap_config_path:
     _login_template = Path(__file__).parent / "templates" / "login.html"
     _ldap_config = load_config(_ldap_config_path)
     _ensure_ldapgate_static_paths(_ldap_config)
-    _ldap_session_manager = add_ldap_auth(fastapi_app, _ldap_config, template_path=str(_login_template))
+    _ldap_session_manager = add_ldap_auth(
+        fastapi_app, _ldap_config, template_path=str(_login_template)
+    )
     if _ldap_session_manager is None:
-        logger.warning("ldapgate.add_ldap_auth did not return a SessionManager; using compatibility fallback")
+        logger.warning(
+            "ldapgate.add_ldap_auth did not return a SessionManager; using compatibility fallback"
+        )
         _ldap_session_manager = SessionManager(
             _ldap_config.proxy.secret_key.get_secret_value(),
             _ldap_config.proxy.session_ttl,
@@ -256,12 +271,23 @@ async def sftp_stream_upload(request: Request):
         offset = int(request.query_params.get("offset", "0"))
         total = int(request.query_params.get("total", "-1"))
     except ValueError:
-        return JSONResponse(status_code=400, content={"ok": False, "code": "invalid_request"})
+        return JSONResponse(
+            status_code=400, content={"ok": False, "code": "invalid_request"}
+        )
     complete = request.query_params.get("complete", "false").lower() == "true"
-    if not _valid_id(session_id) or not _valid_id(tab_id) or not _valid_id(upload_id) or not remote_path:
-        return JSONResponse(status_code=400, content={"ok": False, "code": "invalid_request"})
+    if (
+        not _valid_id(session_id)
+        or not _valid_id(tab_id)
+        or not _valid_id(upload_id)
+        or not remote_path
+    ):
+        return JSONResponse(
+            status_code=400, content={"ok": False, "code": "invalid_request"}
+        )
     if not await ssh_manager.has_session(session_id):
-        return JSONResponse(status_code=403, content={"ok": False, "code": "auth_required"})
+        return JSONResponse(
+            status_code=403, content={"ok": False, "code": "auth_required"}
+        )
     try:
         result = await sftp_manager.upload_chunk(
             tab_id,
@@ -276,7 +302,11 @@ async def sftp_stream_upload(request: Request):
         return JSONResponse(content=result)
     except SFTPError as exc:
         return JSONResponse(
-            status_code=404 if exc.code == "FILE_NOT_FOUND" else 403 if exc.code == "PERMISSION_DENIED" else 400,
+            status_code=404
+            if exc.code == "FILE_NOT_FOUND"
+            else 403
+            if exc.code == "PERMISSION_DENIED"
+            else 400,
             content={"ok": False, "code": exc.code, "message": exc.message},
         )
 
@@ -287,17 +317,29 @@ async def sftp_upload_init(request: Request):
     tab_id = request.query_params.get("tab_id", "")
     upload_id = request.query_params.get("upload_id", "")
     if not _valid_id(session_id) or not _valid_id(tab_id) or not _valid_id(upload_id):
-        return JSONResponse(status_code=400, content={"ok": False, "code": "invalid_request"})
+        return JSONResponse(
+            status_code=400, content={"ok": False, "code": "invalid_request"}
+        )
     if not await ssh_manager.has_session(session_id):
-        return JSONResponse(status_code=403, content={"ok": False, "code": "auth_required"})
+        return JSONResponse(
+            status_code=403, content={"ok": False, "code": "auth_required"}
+        )
     try:
         opened = await sftp_manager.open_upload_channel(
-            tab_id, upload_id, ssh_manager, expected_session_id=session_id,
+            tab_id,
+            upload_id,
+            ssh_manager,
+            expected_session_id=session_id,
         )
     except SFTPError as exc:
-        return JSONResponse(status_code=403, content={"ok": False, "code": exc.code, "message": exc.message})
+        return JSONResponse(
+            status_code=403,
+            content={"ok": False, "code": exc.code, "message": exc.message},
+        )
     if not opened:
-        return JSONResponse(status_code=400, content={"ok": False, "code": "CONNECTION_CLOSED"})
+        return JSONResponse(
+            status_code=400, content={"ok": False, "code": "CONNECTION_CLOSED"}
+        )
     return JSONResponse(content={"ok": True})
 
 
@@ -307,21 +349,33 @@ async def sftp_stream_download(request: Request):
     tab_id = request.query_params.get("tab_id", "")
     remote_path = request.query_params.get("path", "")
     if not _valid_id(session_id) or not _valid_id(tab_id) or not remote_path:
-        return JSONResponse(status_code=400, content={"ok": False, "code": "invalid_request"})
+        return JSONResponse(
+            status_code=400, content={"ok": False, "code": "invalid_request"}
+        )
     if not await ssh_manager.has_session(session_id):
-        return JSONResponse(status_code=403, content={"ok": False, "code": "auth_required"})
+        return JSONResponse(
+            status_code=403, content={"ok": False, "code": "auth_required"}
+        )
 
     try:
-        download = await sftp_manager.prepare_download(tab_id, remote_path, expected_session_id=session_id)
+        download = await sftp_manager.prepare_download(
+            tab_id, remote_path, expected_session_id=session_id
+        )
     except SFTPError as exc:
         return JSONResponse(
-            status_code=404 if exc.code == "FILE_NOT_FOUND" else 403 if exc.code == "PERMISSION_DENIED" else 400,
+            status_code=404
+            if exc.code == "FILE_NOT_FOUND"
+            else 403
+            if exc.code == "PERMISSION_DENIED"
+            else 400,
             content={"ok": False, "code": exc.code, "message": exc.message},
         )
 
     filename = download["name"] or Path(remote_path).name or "download"
     return StreamingResponse(
-        sftp_manager.stream_download(tab_id, download["path"], expected_session_id=session_id),
+        sftp_manager.stream_download(
+            tab_id, download["path"], expected_session_id=session_id
+        ),
         media_type="application/octet-stream",
         headers={
             "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}",
@@ -349,6 +403,7 @@ async def spa_fallback(full_path: str):
 # ---------------------------------------------------------------------------
 # Socket.IO lifecycle
 # ---------------------------------------------------------------------------
+
 
 def _cookie_from_header(cookie_header: str, cookie_name: str) -> str | None:
     if not cookie_header:
@@ -497,6 +552,7 @@ def _verify_ldap_socket_session(environ) -> str | None:
     )
     return None
 
+
 @sio.on("connect")
 async def on_connect(sid, environ):
     remote = _direct_client_ip_from_environ(environ)
@@ -534,6 +590,7 @@ async def on_disconnect(sid):
 # Session registration / recovery
 # ---------------------------------------------------------------------------
 
+
 async def _require_auth(sid: str, tab_id: str) -> bool:
     """Return False and emit an error if LDAP is enabled but the sid is not authenticated."""
     if _ldap_enabled:
@@ -549,10 +606,16 @@ async def _require_auth(sid: str, tab_id: str) -> bool:
             async with _auth_lock:
                 _authenticated_sids.discard(sid)
                 _authenticated_users.pop(sid, None)
-            logger.info("Blocking unauthenticated socket event for sid=%s tab=%s", sid, tab_id)
+            logger.info(
+                "Blocking unauthenticated socket event for sid=%s tab=%s", sid, tab_id
+            )
             await sio.emit(
                 "ssh:error",
-                {"tab_id": tab_id, "message": "Authentication required.", "code": "auth_required"},
+                {
+                    "tab_id": tab_id,
+                    "message": "Authentication required.",
+                    "code": "auth_required",
+                },
                 to=sid,
             )
             return False
@@ -580,6 +643,7 @@ async def on_session_register(sid, data):
 # SSH events
 # ---------------------------------------------------------------------------
 
+
 def _is_private_host(host: str) -> bool:
     """Return True if host resolves to a private/local IP address."""
     try:
@@ -605,7 +669,11 @@ async def _check_rate_limit(sid: str, tab_id: str) -> bool:
     if len(attempts) >= _RATE_LIMIT_MAX:
         await sio.emit(
             "ssh:error",
-            {"tab_id": tab_id, "message": "Too many connection attempts. Please wait.", "code": "rate_limited"},
+            {
+                "tab_id": tab_id,
+                "message": "Too many connection attempts. Please wait.",
+                "code": "rate_limited",
+            },
             to=sid,
         )
         return False
@@ -630,7 +698,11 @@ async def on_ssh_connect(sid, data):
     if not host or not username or not _valid_id(session_id) or not _valid_id(tab_id):
         await sio.emit(
             "ssh:error",
-            {"tab_id": tab_id, "message": "Missing required fields.", "code": "invalid_request"},
+            {
+                "tab_id": tab_id,
+                "message": "Missing required fields.",
+                "code": "invalid_request",
+            },
             to=sid,
         )
         return
@@ -641,18 +713,30 @@ async def on_ssh_connect(sid, data):
     if ssh_manager.sid_session_count(sid) >= _MAX_SESSIONS_PER_SID:
         await sio.emit(
             "ssh:error",
-            {"tab_id": tab_id, "message": "Too many active sessions.", "code": "session_limit"},
+            {
+                "tab_id": tab_id,
+                "message": "Too many active sessions.",
+                "code": "session_limit",
+            },
             to=sid,
         )
         return
     # LDAP-gated deployments commonly connect to internal hosts or localhost.
     # Operators can disable this in unauthenticated mode by setting
     # TORRUS_ALLOW_PRIVATE_HOSTS_WITHOUT_LDAP=false.
-    if _is_private_host(host) and not _ldap_enabled and not _ALLOW_PRIVATE_HOSTS_WITHOUT_LDAP:
+    if (
+        _is_private_host(host)
+        and not _ldap_enabled
+        and not _ALLOW_PRIVATE_HOSTS_WITHOUT_LDAP
+    ):
         logger.warning("Blocked connection to private host %s from sid %s", host, sid)
         await sio.emit(
             "ssh:error",
-            {"tab_id": tab_id, "message": "Connections to private/local addresses are not allowed.", "code": "private_host_blocked"},
+            {
+                "tab_id": tab_id,
+                "message": "Connections to private/local addresses are not allowed.",
+                "code": "private_host_blocked",
+            },
             to=sid,
         )
         return
@@ -663,7 +747,9 @@ async def on_ssh_connect(sid, data):
         host=host,
         port=port,
         username=username,
-        password=bytearray(password, "utf-8") if isinstance(password, str) else bytearray(password),
+        password=bytearray(password, "utf-8")
+        if isinstance(password, str)
+        else bytearray(password),
         cols=cols,
         rows=rows,
     )
@@ -683,7 +769,7 @@ def _extract_commands(buffer: bytearray, incoming: bytes) -> list[str]:
     while True:
         idx = -1
         sep_len = 0
-        for sep in (b'\r\n', b'\n', b'\r'):
+        for sep in (b"\r\n", b"\n", b"\r"):
             i = buffer.find(sep)
             if i != -1 and (idx == -1 or i < idx):
                 idx = i
@@ -693,7 +779,7 @@ def _extract_commands(buffer: bytearray, incoming: bytes) -> list[str]:
             break
 
         cmd_bytes = buffer[:idx]
-        del buffer[:idx + sep_len]
+        del buffer[: idx + sep_len]
 
         cmd_text = cmd_bytes.decode("utf-8", errors="replace")
         cleaned = audit_store.strip_escape(cmd_text).strip()
@@ -722,7 +808,11 @@ async def on_ssh_input(sid, data):
             target = await ssh_manager.get_session_target(session_id, tab_id)
             ssh_host, ssh_port, ssh_username = target or (None, None, None)
 
-            raw = input_data.encode("utf-8", errors="replace") if isinstance(input_data, str) else input_data
+            raw = (
+                input_data.encode("utf-8", errors="replace")
+                if isinstance(input_data, str)
+                else input_data
+            )
 
             async with _input_buffer_lock:
                 key = (sid, session_id, tab_id)
@@ -801,10 +891,18 @@ async def on_ssh_clone(sid, data):
     cols = _safe_int(data.get("cols", 220), 220)
     rows = _safe_int(data.get("rows", 50), 50)
 
-    if not _valid_id(session_id) or not _valid_id(source_tab_id) or not _valid_id(new_tab_id):
+    if (
+        not _valid_id(session_id)
+        or not _valid_id(source_tab_id)
+        or not _valid_id(new_tab_id)
+    ):
         await sio.emit(
             "ssh:error",
-            {"tab_id": new_tab_id, "message": "Missing required fields.", "code": "invalid_request"},
+            {
+                "tab_id": new_tab_id,
+                "message": "Missing required fields.",
+                "code": "invalid_request",
+            },
             to=sid,
         )
         return
@@ -813,7 +911,11 @@ async def on_ssh_clone(sid, data):
     if ssh_manager.sid_session_count(sid) >= _MAX_SESSIONS_PER_SID:
         await sio.emit(
             "ssh:error",
-            {"tab_id": new_tab_id, "message": "Too many active sessions.", "code": "session_limit"},
+            {
+                "tab_id": new_tab_id,
+                "message": "Too many active sessions.",
+                "code": "session_limit",
+            },
             to=sid,
         )
         return
@@ -831,6 +933,7 @@ async def on_ssh_clone(sid, data):
 # ---------------------------------------------------------------------------
 # SFTP events
 # ---------------------------------------------------------------------------
+
 
 async def _emit_sftp_error(
     sid: str,
@@ -858,12 +961,22 @@ def _sftp_request_ids(data) -> tuple[str, str]:
 async def on_sftp_open(sid, data):
     session_id, tab_id = _sftp_request_ids(data)
     source_tab_id = data.get("source_tab_id", tab_id)
-    if not _valid_id(session_id) or not _valid_id(tab_id) or not _valid_id(source_tab_id):
-        await sio.emit("sftp:open:result", {"tab_id": tab_id, "ok": False, "code": "invalid_request"}, to=sid)
+    if (
+        not _valid_id(session_id)
+        or not _valid_id(tab_id)
+        or not _valid_id(source_tab_id)
+    ):
+        await sio.emit(
+            "sftp:open:result",
+            {"tab_id": tab_id, "ok": False, "code": "invalid_request"},
+            to=sid,
+        )
         return
     if not await _require_auth(sid, tab_id):
         return
-    ok = await sftp_manager.open_sftp(session_id, tab_id, ssh_manager, source_tab_id=source_tab_id)
+    ok = await sftp_manager.open_sftp(
+        session_id, tab_id, ssh_manager, source_tab_id=source_tab_id
+    )
     if not ok:
         await sio.emit(
             "sftp:open:result",
@@ -885,12 +998,22 @@ async def on_sftp_open(sid, data):
         target = await ssh_manager.get_session_target(session_id, source_tab_id)
         username = target[2] if target is not None else None
     except Exception:
-        logger.warning("Could not determine SFTP username for %s/%s", session_id, source_tab_id, exc_info=True)
+        logger.warning(
+            "Could not determine SFTP username for %s/%s",
+            session_id,
+            source_tab_id,
+            exc_info=True,
+        )
         username = None
     try:
         is_root = await ssh_manager.is_root_session(session_id, source_tab_id)
     except Exception:
-        logger.warning("Could not determine SFTP root status for %s/%s", session_id, source_tab_id, exc_info=True)
+        logger.warning(
+            "Could not determine SFTP root status for %s/%s",
+            session_id,
+            source_tab_id,
+            exc_info=True,
+        )
         is_root = False
     await sio.emit(
         "sftp:open:result",
@@ -939,7 +1062,9 @@ async def on_sftp_upload(sid, data):
         await _emit_sftp_error(
             sid,
             tab_id,
-            SFTPError("TRANSFER_FAILED", "Transfer failed. Check connection and retry."),
+            SFTPError(
+                "TRANSFER_FAILED", "Transfer failed. Check connection and retry."
+            ),
             "upload",
         )
 
@@ -967,16 +1092,31 @@ async def on_sftp_delete(sid, data):
         return
     if not await _require_auth(sid, tab_id):
         return
-    paths = data.get("paths") if isinstance(data.get("paths"), list) else [data.get("path", "")]
+    paths = (
+        data.get("paths")
+        if isinstance(data.get("paths"), list)
+        else [data.get("path", "")]
+    )
     results = []
     for path in paths:
         try:
             results.append(await sftp_manager.delete(tab_id, str(path)))
         except SFTPError as exc:
-            results.append({"ok": False, "path": str(path), "code": exc.code, "message": exc.message})
+            results.append(
+                {
+                    "ok": False,
+                    "path": str(path),
+                    "code": exc.code,
+                    "message": exc.message,
+                }
+            )
     await sio.emit(
         "sftp:delete:result",
-        {"tab_id": tab_id, "ok": all(item.get("ok") for item in results), "results": results},
+        {
+            "tab_id": tab_id,
+            "ok": all(item.get("ok") for item in results),
+            "results": results,
+        },
         to=sid,
     )
 
@@ -989,7 +1129,9 @@ async def on_sftp_rename(sid, data):
     if not await _require_auth(sid, tab_id):
         return
     try:
-        result = await sftp_manager.rename(tab_id, data.get("old_path", ""), data.get("new_path", ""))
+        result = await sftp_manager.rename(
+            tab_id, data.get("old_path", ""), data.get("new_path", "")
+        )
         await sio.emit("sftp:rename:result", {"tab_id": tab_id, **result}, to=sid)
     except SFTPError as exc:
         await _emit_sftp_error(sid, tab_id, exc, "rename")
@@ -1020,7 +1162,12 @@ async def on_sftp_chmod(sid, data):
     if isinstance(mode, bool) or not isinstance(mode, int) or not 0 <= mode <= 0o7777:
         await sio.emit(
             "sftp:chmod:result",
-            {"tab_id": tab_id, "ok": False, "code": "invalid_request", "message": "Invalid permission mode."},
+            {
+                "tab_id": tab_id,
+                "ok": False,
+                "code": "invalid_request",
+                "message": "Invalid permission mode.",
+            },
             to=sid,
         )
         return
@@ -1055,7 +1202,12 @@ async def on_sftp_chown(sid, data):
     ):
         await sio.emit(
             "sftp:chown:result",
-            {"tab_id": tab_id, "ok": False, "code": "invalid_request", "message": "Invalid owner or group id."},
+            {
+                "tab_id": tab_id,
+                "ok": False,
+                "code": "invalid_request",
+                "message": "Invalid owner or group id.",
+            },
             to=sid,
         )
         return
