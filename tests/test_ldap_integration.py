@@ -71,7 +71,12 @@ def test_login_template_uses_nonce_for_inline_assets():
     assert ".submit-label { min-width: 4.75rem; }" in template
     assert "appearance: none;" in template
     assert "-webkit-appearance: none;" in template
-    assert 'id="password-toggle"' not in template
+    assert ".password-field" in template
+    assert "padding-right: 2.75rem;" in template
+    assert 'class="password-toggle"' in template
+    assert "password.type = visible ? 'text' : 'password';" in template
+    assert 'input[type="password"]::-ms-reveal' in template
+    assert 'input[type="password"]::-moz-reveal' in template
     assert 'style="' not in template
     assert 'meta http-equiv="Content-Security-Policy"' not in template
 

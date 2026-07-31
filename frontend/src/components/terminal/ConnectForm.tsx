@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react'
-import { Terminal } from 'lucide-react'
+import { Eye, EyeOff, Terminal } from 'lucide-react'
 import Button from '@/components/ui/Button'
 import Input from '@/components/ui/Input'
 import type { ConnectFormValues } from '@/types'
@@ -22,6 +22,7 @@ export default function ConnectForm({
   const [port, setPort] = useState(initialPort?.toString() ?? '22')
   const [username, setUsername] = useState(initialUsername ?? '')
   const [password, setPassword] = useState('')
+  const [passwordVisible, setPasswordVisible] = useState(false)
   const [localError, setLocalError] = useState('')
 
   const handleSubmit = (e: FormEvent) => {
@@ -88,15 +89,27 @@ export default function ConnectForm({
             data-testid="username-input"
           />
 
-          <Input
-            label="Password"
-            type="password"
-            placeholder="password"
-            value={password}
-            onChange={e => setPassword(e.target.value)}
-            autoComplete="current-password"
-            data-testid="password-input"
-          />
+          <div className="relative">
+            <Input
+              label="Password"
+              type={passwordVisible ? 'text' : 'password'}
+              placeholder="password"
+              value={password}
+              onChange={e => setPassword(e.target.value)}
+              autoComplete="current-password"
+              className="torrus-password-input pr-10"
+              data-testid="password-input"
+            />
+            <button
+              type="button"
+              onClick={() => setPasswordVisible(visible => !visible)}
+              className="absolute right-2 top-[26px] rounded p-1 text-slate-400 hover:bg-surface-800 hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+              aria-label={passwordVisible ? 'Hide password' : 'Show password'}
+              aria-pressed={passwordVisible}
+            >
+              {passwordVisible ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+            </button>
+          </div>
 
           <AnimatePresence initial={false}>
             {displayError && (
