@@ -116,23 +116,7 @@
     background: #475569;
   }
 }
-/* Use app toggle instead of browser-provided password controls. */
-.torrus-password-input::-ms-reveal,
-.torrus-password-input::-ms-clear {
-  display: none;
-}
 
-.torrus-password-input::-moz-reveal {
-  display: none;
-}
-
-.torrus-password-input::-webkit-credentials-auto-fill-button {
-  display: none;
-}
-
-.torrus-password-input::-webkit-textfield-decoration-container {
-  display: none;
-}
 
 /* xterm.js — make terminal fill its container */
 .xterm {

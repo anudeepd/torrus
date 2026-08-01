@@ -23,12 +23,11 @@ describe('terminal scrollbar CSS', () => {
 })
 
 describe('password input CSS', () => {
-  it('hides browser-native password controls beside the app toggle', () => {
-    expect(css).toContain('.torrus-password-input::-ms-reveal,')
-    expect(css).toContain('.torrus-password-input::-ms-clear {')
-    expect(css).toContain('.torrus-password-input::-moz-reveal {')
-    expect(css).toContain('.torrus-password-input::-webkit-credentials-auto-fill-button {')
-    expect(css).toContain('.torrus-password-input::-webkit-textfield-decoration-container {')
-    expect(css).toContain('  display: none;')
+  it('does not override browser-native password controls', () => {
+    expect(css).not.toContain('torrus-password-input')
+    expect(css).not.toContain('::-ms-reveal')
+    expect(css).not.toContain('::-moz-reveal')
+    expect(css).not.toContain('::-webkit-credentials-auto-fill-button')
+    expect(css).not.toContain('textfield-decoration-container')
   })
 })
