@@ -189,6 +189,21 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
     }
     socket.emit('ssh:input', { session_id: sessionId, tab_id: tabId, data })
   }, [tabId, socket, sessionId])
+  const emitInterrupt = useCallback(() => {
+    if (suppressInputRef.current) return
+    const currentTab = useTerminalStore.getState().tabs.find(t => t.id === tabId)
+    if (currentTab?.status !== 'connected') return
+    const { enabled } = useBroadcastStore.getState()
+    if (enabled && hasFocusRef.current && broadcastTargetIdsRef.current.size > 0) {
+      for (const targetTabId of broadcastTargetIdsRef.current) {
+        if (targetTabId !== tabId) {
+          socket.emit('ssh:interrupt', { session_id: sessionId, tab_id: targetTabId })
+        }
+      }
+    }
+    socket.emit('ssh:interrupt', { session_id: sessionId, tab_id: tabId })
+  }, [tabId, socket, sessionId])
+
 
   const emitResize = useCallback((term: Terminal) => {
     socket.emit('terminal:resize', {
@@ -270,7 +285,7 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
       }
       if (e.ctrlKey && !e.metaKey && !e.shiftKey && key === 'c') {
         if (term.hasSelection()) return false
-        emitInput('\x03')
+        emitInterrupt()
         return false
       }
       if (e.ctrlKey && !e.metaKey && !e.shiftKey && key === 'l') {
@@ -282,7 +297,7 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
       if (mod && key === 'v') return false
       return true
     })
-  }, [emitInput])
+  }, [emitInput, emitInterrupt])
 
   // Create or reuse xterm.js terminal
   useEffect(() => {

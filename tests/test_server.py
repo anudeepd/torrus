@@ -231,6 +231,26 @@ class TestLdapAuthGating:
         assert "sid-cookie" in server_module._authenticated_sids
 
     @pytest.mark.asyncio
+    async def test_on_connect_rejects_pending_disabled_user_cookie(self):
+        from torrus.server import on_connect
+
+        import torrus.server as server_module
+
+        server_module._ldap_enabled = True
+        server_module._authenticated_sids.clear()
+        server_module._PENDING_DISABLED_USERS.add("alice")
+        server_module._ldap_config = None
+        server_module._ldap_session_manager = MagicMock()
+        server_module._ldap_session_manager.verify_session.return_value = "alice"
+
+        await on_connect(
+            "sid-disabled",
+            {"REMOTE_ADDR": "1.2.3.4", "HTTP_COOKIE": "ldapgate_session=abc"},
+        )
+
+        assert "sid-disabled" not in server_module._authenticated_sids
+
+    @pytest.mark.asyncio
     async def test_on_connect_uses_asgi_scope_client_ip(self):
         from torrus.server import on_connect
 
@@ -659,3 +679,60 @@ class TestSocketDisconnect:
 
         assert ("sid-1", "session-1", "tab-1") not in server_module._input_buffers
         assert server_module._input_buffers[("sid-2", "session-1", "tab-1")] == b"keep"
+
+
+
+class TestAdminUserRevocation:
+    @pytest.mark.asyncio
+    async def test_disable_is_feature_disabled_without_user_revocation(self, monkeypatch):
+        import torrus.server as server_module
+
+        monkeypatch.setattr(
+            server_module,
+            "_admin_actor",
+            AsyncMock(return_value=("admin", None)),
+        )
+        monkeypatch.setattr(server_module, "_ADMIN_USERS", {"admin"})
+        monkeypatch.setattr(server_module, "_ldap_session_manager", object())
+
+        result = await server_module.admin_disable_user("bob", MagicMock())
+
+        assert result.status_code == 501
+        assert "bob" not in server_module._PENDING_DISABLED_USERS
+
+    @pytest.mark.asyncio
+    async def test_disable_revokes_cookies_and_closes_owner_tabs(self, monkeypatch):
+        import torrus.server as server_module
+
+        class RevocationManager:
+            def revoke_user_sessions(self, username):
+                assert username == "bob"
+                return 2
+
+        monkeypatch.setattr(
+            server_module,
+            "_admin_actor",
+            AsyncMock(return_value=("admin", None)),
+        )
+        monkeypatch.setattr(server_module, "_ADMIN_USERS", {"admin"})
+        monkeypatch.setattr(server_module, "_ldap_session_manager", RevocationManager())
+        monkeypatch.setattr(
+            server_module.ssh_manager,
+            "terminate_owner_sessions",
+            AsyncMock(return_value=3),
+        )
+        monkeypatch.setattr(
+            server_module.ssh_manager,
+            "unmap_sid",
+            AsyncMock(),
+        )
+        server_module._authenticated_sids.add("bob-sid")
+        server_module._authenticated_users["bob-sid"] = "BOB"
+
+        result = await server_module.admin_disable_user("bob", MagicMock())
+
+        assert result["ok"] is True
+        assert result["revoked_cookies"] == 2
+        assert result["closed_tabs"] == 3
+        assert "bob" in server_module._PENDING_DISABLED_USERS
+        assert "bob-sid" not in server_module._authenticated_users

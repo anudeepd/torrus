@@ -462,3 +462,62 @@ class TestReadLoopCleanup:
             assert write_task.cancelled() or write_task.done()
         finally:
             await _cleanup_manager(manager)
+
+
+
+class TestOwnerBinding:
+    @pytest.mark.asyncio
+    async def test_session_target_restore_and_input_reject_foreign_owner(self, mock_sio):
+        from torrus.ssh_manager import SSHManager, SSHSession
+
+        manager = SSHManager(mock_sio)
+        manager.set_sid_owner("sid-bob", "bob")
+        session = SSHSession(
+            session_id="sess1",
+            tab_id="tab1",
+            client=MagicMock(),
+            channel=MagicMock(closed=False),
+            host="example.com",
+            port=22,
+            username="alice",
+            owner_ldap_username="alice",
+        )
+        manager._sessions[("sess1", "tab1")] = session
+
+        assert await manager.get_session_target("sess1", "tab1", "alice") == (
+            "example.com",
+            22,
+            "alice",
+        )
+        assert await manager.get_session_target("sess1", "tab1", "bob") is None
+        assert await manager.handle_input("sess1", "tab1", "ls", "bob") == "forbidden"
+        assert await manager.restore_session("sid-bob", "sess1", "tab1") == "forbidden"
+        await manager.stop_background_tasks()
+
+
+class TestLifecyclePriority:
+    @pytest.mark.asyncio
+    async def test_interrupt_is_queued_ahead_of_ordinary_input(self, mock_sio):
+        from torrus.ssh_manager import SSHManager, SSHSession
+
+        manager = SSHManager(mock_sio)
+        session = SSHSession(
+            session_id="sess1",
+            tab_id="tab1",
+            client=MagicMock(),
+            channel=MagicMock(closed=False),
+            host="example.com",
+            port=22,
+            username="alice",
+            owner_ldap_username="alice",
+        )
+        manager._sessions[("sess1", "tab1")] = session
+
+        try:
+            assert await manager.handle_input("sess1", "tab1", "ordinary") == "queued"
+            assert await manager.interrupt("sess1", "tab1") == "queued"
+            request = session.control_queue.get_nowait()
+            assert request.data == b"\x03"
+            assert session.input_queue.get_nowait() == b"ordinary"
+        finally:
+            await manager.stop_background_tasks()

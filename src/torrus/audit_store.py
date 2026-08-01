@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from torrus.admin_state import action_payload, new_action_id
 
 _ANSI_RE = re.compile(
     r"\x1B\[[\d;]*[A-Za-z]"  # CSI sequences
@@ -69,7 +71,8 @@ def init_db() -> None:
                 ssh_host TEXT,
                 ssh_port INTEGER,
                 ssh_username TEXT,
-                input_data BLOB NOT NULL
+                input_data BLOB NOT NULL,
+                event_kind TEXT NOT NULL DEFAULT 'terminal_input'
             )
             """
         )
@@ -77,8 +80,28 @@ def init_db() -> None:
             "CREATE INDEX IF NOT EXISTS terminal_input_events_lookup "
             "ON terminal_input_events (ldap_username, occurred_at)"
         )
+        db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS admin_actions (
+                action_id TEXT PRIMARY KEY,
+                idempotency_key TEXT NOT NULL,
+                actor TEXT NOT NULL,
+                action TEXT NOT NULL,
+                target TEXT NOT NULL,
+                status TEXT NOT NULL,
+                result_json TEXT,
+                error TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        db.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS admin_actions_idempotency "
+            "ON admin_actions (actor, action, idempotency_key)"
+        )
         # Existing early audit databases are upgraded in place.
-        for column in ("ssh_host TEXT", "ssh_port INTEGER", "ssh_username TEXT"):
+        for column in ("ssh_host TEXT", "ssh_port INTEGER", "ssh_username TEXT", "event_kind TEXT NOT NULL DEFAULT 'terminal_input'"):
             try:
                 db.execute(f"ALTER TABLE terminal_input_events ADD COLUMN {column}")
             except sqlite3.OperationalError:
@@ -105,8 +128,8 @@ async def record_terminal_input(
     with _connect() as db:
         db.execute(
             "INSERT INTO terminal_input_events "
-            "(occurred_at, ldap_username, session_id, tab_id, ssh_host, ssh_port, ssh_username, input_data) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "(occurred_at, ldap_username, session_id, tab_id, ssh_host, ssh_port, ssh_username, input_data, event_kind) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 occurred_at,
                 ldap_username,
@@ -116,6 +139,7 @@ async def record_terminal_input(
                 ssh_port,
                 ssh_username,
                 raw,
+                "raw_input",
             ),
         )
 
@@ -139,8 +163,8 @@ async def record_command_event(
     with _connect() as db:
         db.execute(
             "INSERT INTO terminal_input_events "
-            "(occurred_at, ldap_username, session_id, tab_id, ssh_host, ssh_port, ssh_username, input_data) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "(occurred_at, ldap_username, session_id, tab_id, ssh_host, ssh_port, ssh_username, input_data, event_kind) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 occurred_at,
                 ldap_username,
@@ -150,6 +174,7 @@ async def record_command_event(
                 ssh_port,
                 ssh_username,
                 raw,
+                "command",
             ),
         )
 
@@ -169,12 +194,106 @@ def list_terminal_input_events(
     with _connect() as db:
         db.row_factory = sqlite3.Row
         rows = db.execute(
-            "SELECT occurred_at, ldap_username, session_id, tab_id, ssh_host, ssh_port, ssh_username, input_data "
+            "SELECT id, occurred_at, ldap_username, session_id, tab_id, ssh_host, ssh_port, ssh_username, input_data, event_kind "
             f"FROM terminal_input_events{where} ORDER BY id DESC LIMIT ?",
-            (*values, limit),
+            (*values, min(100, max(1, int(limit)))),
         ).fetchall()
     return [dict(row) for row in rows]
 
+
+def _action_row(row: sqlite3.Row | tuple | None) -> dict | None:
+    if row is None:
+        return None
+    values = dict(row)
+    try:
+        values["result"] = json.loads(values.pop("result_json")) if values.get("result_json") else None
+    except (TypeError, json.JSONDecodeError):
+        values["result"] = None
+    values.pop("result_json", None)
+    return values
+
+
+def begin_admin_action(
+    *, actor: str, action: str, target: str, idempotency_key: str
+) -> tuple[dict, bool]:
+    """Create or replay a durable admin action intent."""
+    init_db()
+    now = datetime.now(timezone.utc).isoformat()
+    with _connect() as db:
+        db.row_factory = sqlite3.Row
+        existing = db.execute(
+            "SELECT * FROM admin_actions WHERE actor = ? AND action = ? AND idempotency_key = ?",
+            (actor, action, idempotency_key),
+        ).fetchone()
+        if existing is not None:
+            return _action_row(existing) or {}, True
+        action_id = new_action_id()
+        try:
+            db.execute(
+                "INSERT INTO admin_actions "
+                "(action_id, idempotency_key, actor, action, target, status, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)",
+                (action_id, idempotency_key, actor, action, target, now, now),
+            )
+        except sqlite3.IntegrityError:
+            existing = db.execute(
+                "SELECT * FROM admin_actions WHERE actor = ? AND action = ? AND idempotency_key = ?",
+                (actor, action, idempotency_key),
+            ).fetchone()
+            return _action_row(existing) or {}, True
+        return {
+            "action_id": action_id,
+            "idempotency_key": idempotency_key,
+            "actor": actor,
+            "action": action,
+            "target": target,
+            "status": "pending",
+            "result": None,
+            "error": None,
+            "created_at": now,
+            "updated_at": now,
+        }, False
+
+
+def complete_admin_action(
+    action_id: str, *, status: str, result: dict | None = None, error: str | None = None
+) -> dict | None:
+    """Persist terminal action outcome and return its envelope."""
+    if status not in {"succeeded", "failed", "partial", "unknown"}:
+        raise ValueError(f"invalid admin action status: {status}")
+    now = datetime.now(timezone.utc).isoformat()
+    with _connect() as db:
+        db.execute(
+            "UPDATE admin_actions SET status = ?, result_json = ?, error = ?, updated_at = ? "
+            "WHERE action_id = ?",
+            (status, action_payload(result) if result is not None else None, error, now, action_id),
+        )
+        db.row_factory = sqlite3.Row
+        return _action_row(
+            db.execute("SELECT * FROM admin_actions WHERE action_id = ?", (action_id,)).fetchone()
+        )
+
+
+def get_admin_action(action_id: str) -> dict | None:
+    init_db()
+    with _connect() as db:
+        db.row_factory = sqlite3.Row
+        return _action_row(
+            db.execute("SELECT * FROM admin_actions WHERE action_id = ?", (action_id,)).fetchone()
+        )
+
+
+def count_terminal_input_events(older_than_days: int) -> int:
+    """Count terminal rows eligible for retention purge."""
+    days = max(0, int(older_than_days))
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    with _connect() as db:
+        return int(
+            db.execute(
+                "SELECT COUNT(*) FROM terminal_input_events WHERE occurred_at < ?",
+                (cutoff,),
+            ).fetchone()[0]
+        )
 
 def purge_terminal_input_events(older_than_days: int) -> int:
     cutoff = (datetime.now(timezone.utc) - timedelta(days=older_than_days)).isoformat()

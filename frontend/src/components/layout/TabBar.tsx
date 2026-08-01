@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo, type FormEvent } from 'react'
-import { Plus, X, Pencil, Bookmark, Copy, Folder, GitFork, Settings, LogOut, Menu, PanelLeftClose, Radio, Columns2, Command } from 'lucide-react'
+import { Plus, X, Pencil, Bookmark, Copy, Folder, GitFork, Settings, LogOut, Menu, PanelLeftClose, Radio, Columns2, Command, Shield } from 'lucide-react'
 import clsx from 'clsx'
 import { useTerminalStore } from '@/store/terminalStore'
 import { useSavedServerStore } from '@/store/savedServerStore'
@@ -22,6 +22,7 @@ interface TabBarProps {
   onDuplicateTab: (id: string) => void
   onCloseAllTabs: () => void
   onOpenSettings: () => void
+  onOpenAdmin?: () => void
   onOpenSplitPicker: () => void
   onOpenBroadcastPicker: () => void
   onExitSplit: () => void
@@ -150,7 +151,7 @@ function SaveSessionDialog({ state, onSave, onClose }: {
   )
 }
 
-export default function TabBar({ onAddTab, onCloseTab, onCloneTab, onOpenSftpTab, onDuplicateTab, onCloseAllTabs, onOpenSettings, onOpenSplitPicker, onOpenBroadcastPicker, onExitSplit, onSetActiveTab, inSplitMode, compactSidebar = false, sidebarOpen = false, onToggleSidebar, onOpenCommandPalette }: TabBarProps) {
+export default function TabBar({ onAddTab, onCloseTab, onCloneTab, onOpenSftpTab, onDuplicateTab, onCloseAllTabs, onOpenSettings, onOpenAdmin, onOpenSplitPicker, onOpenBroadcastPicker, onExitSplit, onSetActiveTab, inSplitMode, compactSidebar = false, sidebarOpen = false, onToggleSidebar, onOpenCommandPalette }: TabBarProps) {
   const { tabs, activeTabId, renameTab } = useTerminalStore()
   const addServer = useSavedServerStore(s => s.addServer)
   const ldapEnabled = useServerConfigStore(s => s.ldapEnabled)
@@ -413,6 +414,15 @@ export default function TabBar({ onAddTab, onCloseTab, onCloneTab, onOpenSftpTab
       >
         <Settings className="w-3.5 h-3.5" />
       </button>}
+      {ldapEnabled && (
+        <button
+          onClick={() => onOpenAdmin?.()}
+          title="Admin console"
+          className="h-10 flex-shrink-0 w-10 flex items-center justify-center text-slate-500 hover:text-brand-300 hover:bg-surface-800 transition-colors border-l border-surface-800"
+        >
+          <Shield className="w-3.5 h-3.5" />
+        </button>
+      )}
       {ldapEnabled && (
         <button
           onClick={submitLogout}

@@ -16,6 +16,7 @@
 - **Saved servers** — save, edit, import, and export connection configs
 - **Works behind reverse proxies** — uses Socket.IO for reliable transport
 - **Session sidebar** — quick-connect to saved servers
+- **Admin console** — LDAP-admin session inventory, owner-bound controls, and metadata-only activity view
 - **LDAP/AD authentication** — optional, via [ldapgate](https://github.com/anudeepd/ldapgate)
 
 ## Install
@@ -50,9 +51,14 @@ pip install 'torrus[ldap]'
 torrus serve --ldap-config /path/to/ldapgate.yaml
 ```
 
-When LDAP is enabled, a logout button appears in the top-right corner of the tab bar.
+When LDAP is enabled, a logout button and (for configured admins) an admin console button appear in the top-right corner of the tab bar.
 
-See the [ldapgate README](https://github.com/anudeepd/ldapgate) for config file documentation.
+Set `TORRUS_ADMIN_USERS` to a comma-separated list of LDAP usernames allowed to use the console:
+
+```bash
+TORRUS_ADMIN_USERS=alice,bob torrus serve --ldap-config /path/to/ldapgate.yaml
+```
+Session controls use immutable session identity plus generation checks. User allowlist changes are queued for restart; disabling a user revokes known LDAP cookies and closes that user's active SSH tabs first. Policy mutation requires LDAPGate user-wide revocation support (0.1.22+); older deployments fail closed without changing policy.
 
 ### Terminal input audit
 

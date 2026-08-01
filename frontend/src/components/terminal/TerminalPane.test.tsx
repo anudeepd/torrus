@@ -325,12 +325,11 @@ describe('TerminalPane', () => {
 
     expect(term.simulateKey({ key: 'c', ctrlKey: true })).toBe(false)
     expect(socket.emit).toHaveBeenCalledWith(
-      'ssh:input',
-      expect.objectContaining({
+      'ssh:interrupt',
+      {
         session_id: 'test-session',
         tab_id: tabId,
-        data: '\x03',
-      })
+      }
     )
   })
 

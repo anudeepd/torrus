@@ -70,7 +70,7 @@ def reset_server_state():
     server_module._sid_client_ips.clear()
     server_module._ldap_enabled = False
     server_module._ldap_config = None
-    server_module._ldap_session_manager = None
+    server_module._PENDING_DISABLED_USERS.clear()
     yield
     server_module._authenticated_sids.clear()
     server_module._authenticated_users.clear()
@@ -80,4 +80,5 @@ def reset_server_state():
     server_module._ldap_enabled = False
     server_module._ldap_config = None
     server_module._ldap_session_manager = None
+    server_module._PENDING_DISABLED_USERS.clear()
     server_module.ssh_manager = original_ssh_manager

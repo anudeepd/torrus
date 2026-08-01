@@ -9,11 +9,12 @@ import ipaddress
 import logging
 import os
 import re
+import secrets
 import time
 from contextlib import asynccontextmanager
 from importlib.resources import files
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 import socketio
 from fastapi import FastAPI, Request
@@ -22,9 +23,15 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from torrus import audit_store
+from torrus.admin_state import (
+    LDAPPolicyStore,
+    PolicyConflict,
+    PolicyError,
+    PolicyUnavailable,
+)
 from torrus.logging_utils import configure_logging, suppress_routine_polling_logs
 from torrus.sftp_manager import SFTPError, SFTPManager
-from torrus.ssh_manager import SSHManager
+from torrus.ssh_manager import INPUT_QUEUE_MAX_BYTES, SSHManager
 
 logger = logging.getLogger("torrus.server")
 
@@ -127,6 +134,9 @@ async def add_app_security_headers(request: Request, call_next):
         response.headers.setdefault("Content-Security-Policy", APP_CSP)
     if request.url.path.startswith("/assets/"):
         response.headers.setdefault("Cache-Control", HASHED_ASSET_CACHE_CONTROL)
+    if request.url.path.startswith("/api/admin/"):
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["Vary"] = "Cookie"
     return response
 
 
@@ -162,6 +172,18 @@ _sid_client_ips: dict[str, str] = {}
 _input_buffers: dict[tuple[str, str, str], bytearray] = {}
 _input_buffer_lock = asyncio.Lock()
 _MAX_INPUT_BUFFER = 1_048_576
+_ADMIN_USERS = {
+    value.strip().lower()
+    for value in os.getenv("TORRUS_ADMIN_USERS", "").split(",")
+    if value.strip()
+}
+_PENDING_DISABLED_USERS: set[str] = set()
+_ADMIN_CSRF_TTL = 3600
+_admin_csrf_tokens: dict[str, tuple[str, float]] = {}
+_admin_sids: set[str] = set()
+_admin_stream_epoch = secrets.token_urlsafe(9)
+_admin_stream_sequence = 0
+_admin_stream_lock = asyncio.Lock()
 
 # Combined ASGI app — uvicorn runs this
 app = socketio.ASGIApp(sio, other_asgi_app=fastapi_app)
@@ -261,6 +283,639 @@ async def api_config():
     }
 
 
+async def _admin_actor(request: Request) -> tuple[str | None, JSONResponse | None]:
+    username = _http_owner(request)
+    if not username:
+        return None, JSONResponse(
+            status_code=401, content={"ok": False, "code": "auth_required"}
+        )
+    if username.lower() not in _ADMIN_USERS:
+        return None, JSONResponse(
+            status_code=403, content={"ok": False, "code": "admin_required"}
+        )
+    return username, None
+
+
+def _admin_hosts(request: Request) -> set[str]:
+    configured = getattr(getattr(_ldap_config, "proxy", None), "trusted_hosts", None)
+    hosts = {str(host).lower() for host in (configured or []) if str(host).strip()}
+    if not hosts:
+        host = request.headers.get("host", "").strip().lower()
+        if host:
+            hosts.add(host)
+    if _DEV_MODE:
+        hosts.update(urlparse(origin).netloc.lower() for origin in _DEV_ORIGINS)
+    return hosts
+
+
+def _admin_origin_allowed(request: Request) -> bool:
+    for header in ("origin", "referer"):
+        value = request.headers.get(header)
+        if not value:
+            continue
+        if value == "null":
+            return False
+        parsed = urlparse(value)
+        return parsed.scheme in {"http", "https"} and parsed.netloc.lower() in _admin_hosts(request)
+    return True
+
+
+def _admin_csrf_valid(request: Request) -> bool:
+    cookie = request.cookies.get("torrus_admin_csrf")
+    supplied = request.headers.get("x-torrus-csrf")
+    if not cookie or not supplied or not secrets.compare_digest(cookie, supplied):
+        return False
+    record = _admin_csrf_tokens.get(cookie)
+    if record is None or record[1] < time.time():
+        _admin_csrf_tokens.pop(cookie, None)
+        return False
+    return record[0].casefold() == (_http_owner(request) or "").casefold()
+
+
+async def _admin_guard(
+    request: Request, *, mutate: bool = False
+) -> tuple[str | None, JSONResponse | None]:
+    actor, error = await _admin_actor(request)
+    if error or not actor:
+        return actor, error
+    if mutate and _ldap_enabled:
+        if not _admin_origin_allowed(request):
+            return None, JSONResponse(
+                status_code=403,
+                content={"ok": False, "code": "trusted_origin_required"},
+            )
+        if not _admin_csrf_valid(request):
+            return None, JSONResponse(
+                status_code=403,
+                content={"ok": False, "code": "csrf_required"},
+            )
+    return actor, None
+
+
+def _valid_idempotency_key(value: str | None) -> bool:
+    return bool(value and 1 <= len(value) <= 128 and _SAFE_ID.fullmatch(value))
+
+
+async def _begin_admin_action(
+    request: Request, actor: str, action: str, target: str
+) -> tuple[dict | None, bool, JSONResponse | None]:
+    key = request.headers.get("idempotency-key", "")
+    if not isinstance(key, str):
+        key = ""
+    key = key.strip()
+    if not key and not _ldap_enabled:
+        key = f"test-{secrets.token_urlsafe(12)}"
+    if not _valid_idempotency_key(key):
+        return None, False, JSONResponse(
+            status_code=400,
+            content={"ok": False, "code": "idempotency_key_required"},
+        )
+    record, replayed = await asyncio.to_thread(
+        audit_store.begin_admin_action,
+        actor=actor,
+        action=action,
+        target=target,
+        idempotency_key=key,
+    )
+    return record, replayed, None
+
+
+def _replayed_action(record: dict) -> JSONResponse:
+    result = record.get("result") or {
+        "ok": False,
+        "status": record.get("status", "pending"),
+    }
+    content = dict(result)
+    content.update(
+        action_id=record.get("action_id"),
+        replayed=True,
+        status=record.get("status", "pending"),
+    )
+    code = (
+        202
+        if record.get("status") == "pending"
+        else 200
+        if record.get("status") == "succeeded"
+        else 409
+    )
+    return JSONResponse(status_code=code, content=content)
+
+
+async def _finish_admin_action(
+    record: dict,
+    *,
+    status: str,
+    result: dict | None = None,
+    error: str | None = None,
+) -> dict:
+    completed = await asyncio.to_thread(
+        audit_store.complete_admin_action,
+        record["action_id"],
+        status=status,
+        result=result,
+        error=error,
+    )
+    return completed or {**record, "status": status, "result": result, "error": error}
+
+
+async def _emit_admin_event(kind: str, data: dict) -> None:
+    global _admin_stream_sequence
+    async with _admin_stream_lock:
+        _admin_stream_sequence += 1
+        envelope = {
+            "epoch": _admin_stream_epoch,
+            "sequence": _admin_stream_sequence,
+            "kind": kind,
+            "data": data,
+            "observed_at": time.time(),
+        }
+        recipients = tuple(_admin_sids)
+    for sid in recipients:
+        await sio.emit("admin:event", envelope, room=sid)
+
+
+@fastapi_app.get("/api/admin/csrf", include_in_schema=False)
+async def admin_csrf(request: Request):
+    actor, error = await _admin_guard(request)
+    if error:
+        return error
+    token = secrets.token_urlsafe(32)
+    _admin_csrf_tokens[token] = (actor or "", time.time() + _ADMIN_CSRF_TTL)
+    response = JSONResponse({"ok": True, "token": token, "expires_in": _ADMIN_CSRF_TTL})
+    secure = bool(getattr(getattr(_ldap_config, "proxy", None), "secure_cookies", False))
+    response.set_cookie(
+        "torrus_admin_csrf",
+        token,
+        max_age=_ADMIN_CSRF_TTL,
+        secure=secure,
+        httponly=False,
+        samesite="strict",
+    )
+    return response
+
+
+@fastapi_app.get("/admin", include_in_schema=False)
+async def admin_shell(request: Request):
+    """Serve admin shell only after LDAP/admin authorization."""
+    _actor, error = await _admin_guard(request)
+    if error:
+        return error
+    if not _static:
+        return JSONResponse(
+            status_code=503,
+            content={"ok": False, "code": "frontend_unbuilt"},
+        )
+    index = _static / "index.html"
+    if not index.exists():
+        return JSONResponse(
+            status_code=503,
+            content={"ok": False, "code": "frontend_unbuilt"},
+        )
+    return FileResponse(
+        str(index), headers={"Cache-Control": APP_SHELL_CACHE_CONTROL}
+    )
+
+
+@fastapi_app.get("/api/admin/actions/{action_id}", include_in_schema=False)
+async def admin_action_status(action_id: str, request: Request):
+    actor, error = await _admin_guard(request)
+    if error:
+        return error
+    if not _valid_id(action_id):
+        return JSONResponse(
+            status_code=400, content={"ok": False, "code": "invalid_request"}
+        )
+    record = await asyncio.to_thread(audit_store.get_admin_action, action_id)
+    if record is None or record.get("actor", "").casefold() != (actor or "").casefold():
+        return JSONResponse(
+            status_code=404, content={"ok": False, "code": "action_not_found"}
+        )
+    return {"ok": True, **record}
+
+
+@fastapi_app.get("/api/admin/policy", include_in_schema=False)
+async def admin_policy(request: Request):
+    _actor, error = await _admin_guard(request)
+    if error:
+        return error
+    try:
+        snapshot = await asyncio.to_thread(LDAPPolicyStore(_ldap_config_path).snapshot)
+    except (PolicyError, OSError) as exc:
+        return JSONResponse(
+            status_code=503,
+            content={"ok": False, "code": "policy_unavailable", "message": str(exc)},
+        )
+    return {
+        "ok": True,
+        "fingerprint": snapshot["fingerprint"],
+        "allowed_users": snapshot["allowed_users"],
+        "pending_users": sorted(_PENDING_DISABLED_USERS),
+        "restart_required": bool(_PENDING_DISABLED_USERS),
+    }
+
+async def _revoke_ldap_user(username: str) -> tuple[int, int]:
+    """Revoke LDAP cookies and close live Torrus tabs for one identity."""
+    session_manager = _ldap_session_manager
+    revoke_user_sessions = getattr(session_manager, "revoke_user_sessions", None)
+    if not callable(revoke_user_sessions):
+        raise RuntimeError("LDAPGate user-wide revocation is unavailable")
+    revoked = await asyncio.to_thread(revoke_user_sessions, username)
+    closed = await ssh_manager.terminate_owner_sessions(username)
+    async with _auth_lock:
+        revoked_sids = [
+            sid
+            for sid, user in _authenticated_users.items()
+            if user.casefold() == username.casefold()
+        ]
+        for sid in revoked_sids:
+            _authenticated_sids.discard(sid)
+            _authenticated_users.pop(sid, None)
+    for sid in revoked_sids:
+        await ssh_manager.unmap_sid(sid)
+    return int(revoked or 0), closed
+
+
+def _admin_session_page(
+    sessions: list[dict[str, str | int | float]], limit: int, cursor: str | None
+) -> tuple[list[dict[str, str | int | float]], str | None]:
+    start = 0
+    if cursor:
+        try:
+            start = max(0, int(cursor))
+        except ValueError:
+            start = 0
+    page = sessions[start : start + limit]
+    next_cursor = str(start + limit) if start + limit < len(sessions) else None
+    return page, next_cursor
+
+
+@fastapi_app.get("/api/admin/users", include_in_schema=False)
+async def admin_users(request: Request):
+    _actor, error = await _admin_guard(request)
+    if error:
+        return error
+    configured = getattr(getattr(_ldap_config, "ldap", None), "allowed_users", None)
+    users = {str(user).strip().lower() for user in (configured or []) if str(user).strip()}
+    sessions = await ssh_manager.list_sessions()
+    users.update(
+        str(session["owner_ldap_username"]).lower()
+        for session in sessions
+        if session["owner_ldap_username"]
+    )
+    return {
+        "items": [
+            {
+                "username": username,
+                "active_sessions": sum(
+                    session["owner_ldap_username"].lower() == username
+                    for session in sessions
+                ),
+                "policy_state": (
+                    "pending_disable"
+                    if username in _PENDING_DISABLED_USERS
+                    else "allowed"
+                ),
+            }
+            for username in sorted(users)
+        ],
+        "observed_at": time.time(),
+    }
+
+
+@fastapi_app.get("/api/admin/sessions", include_in_schema=False)
+async def admin_sessions(request: Request):
+    _actor, error = await _admin_guard(request)
+    if error:
+        return error
+    try:
+        limit = min(100, max(1, int(request.query_params.get("limit", "100"))))
+    except ValueError:
+        limit = 100
+    sessions = await ssh_manager.list_sessions()
+    sessions.sort(key=lambda item: float(item["created_at"]), reverse=True)
+    page, next_cursor = _admin_session_page(
+        sessions, limit, request.query_params.get("cursor")
+    )
+    return {"items": page, "next_cursor": next_cursor, "observed_at": time.time()}
+
+
+@fastapi_app.get("/api/admin/activity", include_in_schema=False)
+async def admin_activity(request: Request):
+    _actor, error = await _admin_guard(request)
+    if error:
+        return error
+    try:
+        limit = min(100, max(1, int(request.query_params.get("limit", "100"))))
+    except ValueError:
+        limit = 100
+    username = request.query_params.get("username") or None
+    events = await asyncio.to_thread(
+        audit_store.list_terminal_input_events,
+        username=username,
+        since=request.query_params.get("since") or None,
+        limit=limit,
+    )
+    # Deliberately omit input bytes. Admin view is metadata-only.
+    return {
+        "items": [
+            {
+                "event_id": event["id"],
+                "occurred_at": event["occurred_at"],
+                "ldap_username": event["ldap_username"],
+                "session_id": event["session_id"],
+                "tab_id": event["tab_id"],
+                "ssh_host": event["ssh_host"],
+                "ssh_port": event["ssh_port"],
+                "ssh_username": event["ssh_username"],
+                "kind": event.get("event_kind", "terminal_input"),
+                "bytes": len(event["input_data"] or b""),
+            }
+            for event in events
+        ],
+        "observed_at": time.time(),
+    }
+
+
+@fastapi_app.get("/api/admin/retention", include_in_schema=False)
+async def admin_retention(request: Request):
+    _actor, error = await _admin_guard(request)
+    if error:
+        return error
+    try:
+        days = int(request.query_params.get("older_than_days", "30"))
+    except ValueError:
+        days = 30
+    days = max(7, min(3650, days))
+    eligible = await asyncio.to_thread(
+        audit_store.count_terminal_input_events, days
+    )
+    return {
+        "cutoff_days": days,
+        "minimum_age_days": 7,
+        "eligible_count": eligible,
+        "terminal_rows_only": True,
+        "admin_events_retained": True,
+        "observed_at": time.time(),
+    }
+
+
+def _valid_admin_identity(value: str) -> bool:
+    return bool(value) and len(value) <= 128 and "\x00" not in value
+
+
+async def _admin_action_response(
+    record: dict,
+    *,
+    status: str,
+    result: dict,
+    event_kind: str,
+) -> dict | JSONResponse:
+    completed = await _finish_admin_action(record, status=status, result=result)
+    payload = dict(result)
+    payload["action_id"] = completed.get("action_id", record["action_id"])
+    await _emit_admin_event(event_kind, payload)
+    if result.get("ok"):
+        return payload
+    return JSONResponse(status_code=409, content=payload)
+
+@fastapi_app.post("/api/admin/sessions/{session_instance_id}/interrupt", include_in_schema=False)
+async def admin_interrupt(session_instance_id: str, request: Request):
+    actor, error = await _admin_guard(request, mutate=True)
+    if error:
+        return error
+    try:
+        body = await request.json()
+        generation = int(body.get("generation"))
+    except (ValueError, TypeError, AttributeError):
+        return JSONResponse(
+            status_code=400, content={"ok": False, "code": "invalid_request"}
+        )
+    record, replayed, error = await _begin_admin_action(
+        request, actor or "", "interrupt", session_instance_id
+    )
+    if error:
+        return error
+    if replayed:
+        return _replayed_action(record or {})
+    result = await ssh_manager.interrupt_session(session_instance_id, generation)
+    payload = {
+        "ok": result in {"sent", "queued"},
+        "status": result,
+        "generation": generation,
+    }
+    return await _admin_action_response(
+        record or {}, status="succeeded" if payload["ok"] else "failed",
+        result=payload, event_kind="interrupt",
+    )
+
+
+@fastapi_app.post("/api/admin/sessions/{session_instance_id}/kick", include_in_schema=False)
+async def admin_kick(session_instance_id: str, request: Request):
+    actor, error = await _admin_guard(request, mutate=True)
+    if error:
+        return error
+    try:
+        body = await request.json()
+        generation = int(body.get("generation"))
+    except (ValueError, TypeError, AttributeError):
+        return JSONResponse(
+            status_code=400, content={"ok": False, "code": "invalid_request"}
+        )
+    record, replayed, error = await _begin_admin_action(
+        request, actor or "", "kick", session_instance_id
+    )
+    if error:
+        return error
+    if replayed:
+        return _replayed_action(record or {})
+    result = await ssh_manager.terminate_session(session_instance_id, generation)
+    payload = {
+        "ok": result == "closed",
+        "status": result,
+        "generation": generation,
+    }
+    return await _admin_action_response(
+        record or {}, status="succeeded" if payload["ok"] else "failed",
+        result=payload, event_kind="kick",
+    )
+
+
+async def _policy_mutation(
+    username: str, enabled: bool, expected_fingerprint: str | None
+) -> dict:
+    if not _ldap_config_path:
+        return {"fingerprint": None, "backup_id": None, "allowed_users": []}
+    mutation = await asyncio.to_thread(
+        LDAPPolicyStore(_ldap_config_path).mutate,
+        username,
+        enabled,
+        expected_fingerprint,
+    )
+    return {
+        "fingerprint": mutation.fingerprint,
+        "backup_id": mutation.backup_id,
+        "allowed_users": list(mutation.allowed_users),
+    }
+
+
+async def _restore_ldap_user(username: str) -> None:
+    restore = getattr(_ldap_session_manager, "restore_user_sessions", None)
+    if not callable(restore):
+        raise RuntimeError("LDAPGate user-wide revocation restore is unavailable")
+    await asyncio.to_thread(restore, username)
+
+
+@fastapi_app.post("/api/admin/users/{username}/disable", include_in_schema=False)
+async def admin_disable_user(username: str, request: Request):
+    actor, error = await _admin_guard(request, mutate=True)
+    if error:
+        return error
+    normalized = username.strip().casefold()
+    if not _valid_admin_identity(normalized):
+        return JSONResponse(
+            status_code=400, content={"ok": False, "code": "invalid_request"}
+        )
+    if normalized in _ADMIN_USERS:
+        return JSONResponse(
+            status_code=409,
+            content={"ok": False, "code": "admin_protected"},
+        )
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    expected = body.get("expected_fingerprint") if isinstance(body, dict) else None
+    record, replayed, error = await _begin_admin_action(
+        request, actor or "", "disable_user", normalized
+    )
+    if error:
+        return error
+    if replayed:
+        return _replayed_action(record or {})
+    try:
+        revoked_cookies, closed_tabs = await _revoke_ldap_user(normalized)
+        policy = await _policy_mutation(normalized, False, expected)
+    except RuntimeError as exc:
+        payload = {"ok": False, "code": "revocation_unsupported", "message": str(exc)}
+        await _finish_admin_action(record or {}, status="failed", result=payload, error=str(exc))
+        return JSONResponse(status_code=501, content=payload)
+    except PolicyConflict as exc:
+        payload = {"ok": False, "code": "policy_conflict", "message": str(exc)}
+        await _finish_admin_action(record or {}, status="failed", result=payload, error=str(exc))
+        return JSONResponse(status_code=409, content=payload)
+    except (PolicyError, OSError) as exc:
+        payload = {"ok": False, "code": "policy_unavailable", "message": str(exc)}
+        await _finish_admin_action(record or {}, status="failed", result=payload, error=str(exc))
+        return JSONResponse(status_code=503, content=payload)
+    except Exception:
+        logger.exception("LDAP user revocation failed for admin policy change")
+        payload = {
+            "ok": False,
+            "code": "revocation_failed",
+            "message": "User policy was not changed because session revocation failed.",
+        }
+        await _finish_admin_action(record or {}, status="failed", result=payload, error=payload["message"])
+        return JSONResponse(status_code=503, content=payload)
+    _PENDING_DISABLED_USERS.add(normalized)
+    payload = {
+        "ok": True,
+        "policy_state": "pending_restart",
+        "restart_required": True,
+        "revoked_cookies": revoked_cookies,
+        "closed_tabs": closed_tabs,
+        "fingerprint": policy["fingerprint"],
+        "backup_id": policy["backup_id"],
+        "message": "LDAP allowlist change queued; restart LDAPGate to enforce it.",
+    }
+    return await _admin_action_response(
+        record or {}, status="succeeded", result=payload, event_kind="policy",
+    )
+
+
+@fastapi_app.post("/api/admin/users/{username}/enable", include_in_schema=False)
+async def admin_enable_user(username: str, request: Request):
+    actor, error = await _admin_guard(request, mutate=True)
+    if error:
+        return error
+    normalized = username.strip().casefold()
+    if not _valid_admin_identity(normalized):
+        return JSONResponse(
+            status_code=400, content={"ok": False, "code": "invalid_request"}
+        )
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    expected = body.get("expected_fingerprint") if isinstance(body, dict) else None
+    record, replayed, error = await _begin_admin_action(
+        request, actor or "", "enable_user", normalized
+    )
+    if error:
+        return error
+    if replayed:
+        return _replayed_action(record or {})
+    try:
+        policy = await _policy_mutation(normalized, True, expected)
+        await _restore_ldap_user(normalized)
+    except RuntimeError as exc:
+        payload = {"ok": False, "code": "revocation_unsupported", "message": str(exc)}
+        await _finish_admin_action(record or {}, status="failed", result=payload, error=str(exc))
+        return JSONResponse(status_code=501, content=payload)
+    except PolicyConflict as exc:
+        payload = {"ok": False, "code": "policy_conflict", "message": str(exc)}
+        await _finish_admin_action(record or {}, status="failed", result=payload, error=str(exc))
+        return JSONResponse(status_code=409, content=payload)
+    except (PolicyError, OSError) as exc:
+        payload = {"ok": False, "code": "policy_unavailable", "message": str(exc)}
+        await _finish_admin_action(record or {}, status="failed", result=payload, error=str(exc))
+        return JSONResponse(status_code=503, content=payload)
+    _PENDING_DISABLED_USERS.discard(normalized)
+    payload = {
+        "ok": True,
+        "policy_state": "pending_restart",
+        "restart_required": True,
+        "fingerprint": policy["fingerprint"],
+        "backup_id": policy["backup_id"],
+    }
+    return await _admin_action_response(
+        record or {}, status="succeeded", result=payload, event_kind="policy",
+    )
+
+
+@fastapi_app.post("/api/admin/retention/purge", include_in_schema=False)
+async def admin_purge(request: Request):
+    actor, error = await _admin_guard(request, mutate=True)
+    if error:
+        return error
+    try:
+        body = await request.json()
+        days = int(body.get("older_than_days"))
+        confirmation = body.get("confirmation")
+    except (ValueError, TypeError, AttributeError):
+        return JSONResponse(
+            status_code=400, content={"ok": False, "code": "invalid_request"}
+        )
+    if days < 7 or days > 3650 or confirmation != "PURGE":
+        return JSONResponse(
+            status_code=400,
+            content={
+                "ok": False,
+                "code": "confirmation_required",
+                "message": "Use confirmation PURGE and retention between 7 and 3650 days.",
+            },
+        )
+    record, replayed, error = await _begin_admin_action(
+        request, actor or "", "purge", f"terminal:{days}",
+    )
+    if error:
+        return error
+    if replayed:
+        return _replayed_action(record or {})
+    removed = await asyncio.to_thread(audit_store.purge_terminal_input_events, days)
+    payload = {"ok": True, "removed": removed, "older_than_days": days}
+    return await _admin_action_response(
+        record or {}, status="succeeded", result=payload, event_kind="purge",
+    )
 @fastapi_app.post("/sftp/upload", include_in_schema=False)
 async def sftp_stream_upload(request: Request):
     session_id = request.query_params.get("session_id", "")
@@ -284,9 +939,14 @@ async def sftp_stream_upload(request: Request):
         return JSONResponse(
             status_code=400, content={"ok": False, "code": "invalid_request"}
         )
-    if not await ssh_manager.has_session(session_id):
+    owner = _http_owner(request)
+    if _ldap_enabled and not owner:
+        return JSONResponse(status_code=401, content={"ok": False, "code": "auth_required"})
+    if _ldap_enabled and await ssh_manager.get_session_target(
+        session_id, tab_id, owner_ldap_username=owner
+    ) is None:
         return JSONResponse(
-            status_code=403, content={"ok": False, "code": "auth_required"}
+            status_code=403, content={"ok": False, "code": "session_owner_mismatch"}
         )
     try:
         result = await sftp_manager.upload_chunk(
@@ -310,7 +970,6 @@ async def sftp_stream_upload(request: Request):
             content={"ok": False, "code": exc.code, "message": exc.message},
         )
 
-
 @fastapi_app.post("/sftp/upload/init", include_in_schema=False)
 async def sftp_upload_init(request: Request):
     session_id = request.query_params.get("session_id", "")
@@ -320,9 +979,14 @@ async def sftp_upload_init(request: Request):
         return JSONResponse(
             status_code=400, content={"ok": False, "code": "invalid_request"}
         )
-    if not await ssh_manager.has_session(session_id):
+    owner = _http_owner(request)
+    if _ldap_enabled and not owner:
+        return JSONResponse(status_code=401, content={"ok": False, "code": "auth_required"})
+    if _ldap_enabled and await ssh_manager.get_session_target(
+        session_id, tab_id, owner_ldap_username=owner
+    ) is None:
         return JSONResponse(
-            status_code=403, content={"ok": False, "code": "auth_required"}
+            status_code=403, content={"ok": False, "code": "session_owner_mismatch"}
         )
     try:
         opened = await sftp_manager.open_upload_channel(
@@ -352,9 +1016,14 @@ async def sftp_stream_download(request: Request):
         return JSONResponse(
             status_code=400, content={"ok": False, "code": "invalid_request"}
         )
-    if not await ssh_manager.has_session(session_id):
+    owner = _http_owner(request)
+    if _ldap_enabled and not owner:
+        return JSONResponse(status_code=401, content={"ok": False, "code": "auth_required"})
+    if _ldap_enabled and await ssh_manager.get_session_target(
+        session_id, tab_id, owner_ldap_username=owner
+    ) is None:
         return JSONResponse(
-            status_code=403, content={"ok": False, "code": "auth_required"}
+            status_code=403, content={"ok": False, "code": "session_owner_mismatch"}
         )
 
     try:
@@ -533,6 +1202,9 @@ def _verify_ldap_socket_session(environ) -> str | None:
                 user_agent=candidate_user_agent,
             )
             if username:
+                if username.casefold() in _PENDING_DISABLED_USERS:
+                    logger.info("LDAP socket auth blocked for pending-disabled user")
+                    return None
                 if client_ip != primary_ip or candidate_user_agent != user_agent:
                     logger.info(
                         "LDAP socket auth accepted alternate binding for client_ip=%s "
@@ -553,6 +1225,37 @@ def _verify_ldap_socket_session(environ) -> str | None:
     return None
 
 
+@sio.on("admin:subscribe")
+async def on_admin_subscribe(sid, data):
+    """Subscribe an authenticated admin to metadata-only state updates."""
+    username = None
+    if _ldap_enabled:
+        username = _verify_ldap_socket_session(sio.get_environ(sid))
+    if not username or username.casefold() not in _ADMIN_USERS:
+        return {"ok": False, "code": "admin_required"}
+    _admin_sids.add(sid)
+    async with _admin_stream_lock:
+        sequence = _admin_stream_sequence
+    await sio.emit(
+        "admin:event",
+        {
+            "epoch": _admin_stream_epoch,
+            "sequence": sequence,
+            "kind": "subscribed",
+            "data": {"username": username},
+            "observed_at": time.time(),
+        },
+        room=sid,
+    )
+    return {"ok": True, "epoch": _admin_stream_epoch, "sequence": sequence}
+
+
+@sio.on("admin:unsubscribe")
+async def on_admin_unsubscribe(sid):
+    _admin_sids.discard(sid)
+    return {"ok": True}
+
+
 @sio.on("connect")
 async def on_connect(sid, environ):
     remote = _direct_client_ip_from_environ(environ)
@@ -568,6 +1271,7 @@ async def on_connect(sid, environ):
                 async with _auth_lock:
                     _authenticated_sids.add(sid)
                     _authenticated_users[sid] = username
+                ssh_manager.set_sid_owner(sid, username)
                 logger.info("LDAP socket authenticated: %s", sid)
         except Exception:
             logger.warning("LDAP session validation failed", exc_info=True)
@@ -583,6 +1287,7 @@ async def on_disconnect(sid):
         for key in [key for key in _input_buffers if key[0] == sid]:
             del _input_buffers[key]
     _sid_client_ips.pop(sid, None)
+    _admin_sids.discard(sid)
     logger.info("Client disconnected: %s", sid)
 
 
@@ -601,6 +1306,7 @@ async def _require_auth(sid: str, tab_id: str) -> bool:
             async with _auth_lock:
                 _authenticated_sids.add(sid)
                 _authenticated_users[sid] = username
+            ssh_manager.set_sid_owner(sid, username)
         if not authenticated:
             await ssh_manager.unmap_sid(sid)
             async with _auth_lock:
@@ -620,6 +1326,45 @@ async def _require_auth(sid: str, tab_id: str) -> bool:
             )
             return False
     return True
+async def _owner_for_sid(sid: str) -> str | None:
+    if not _ldap_enabled:
+        return None
+    async with _auth_lock:
+        return _authenticated_users.get(sid)
+
+
+async def _require_session_owner(sid: str, session_id: str, tab_id: str) -> str | None:
+    owner = await _owner_for_sid(sid)
+    if not _ldap_enabled:
+        return ""
+    if await ssh_manager.get_session_target(
+        session_id, tab_id, owner_ldap_username=owner
+    ) is None:
+        await sio.emit(
+            "ssh:error",
+            {
+                "tab_id": tab_id,
+                "message": "Session is not available to this user.",
+                "code": "session_owner_mismatch",
+            },
+            to=sid,
+        )
+        return None
+    return owner
+
+
+def _http_environ(request: Request) -> dict:
+    return {
+        "asgi.scope": request.scope,
+        "REMOTE_ADDR": request.client.host if request.client else "unknown",
+    }
+
+
+def _http_owner(request: Request) -> str | None:
+    if not _ldap_enabled:
+        return None
+    return _verify_ldap_socket_session(_http_environ(request))
+
 
 
 @sio.on("session:register")
@@ -633,8 +1378,6 @@ async def on_session_register(sid, data):
 
     status = await ssh_manager.restore_session(sid, session_id, tab_id)
     await sio.emit("session:restored", {"tab_id": tab_id, "status": status}, to=sid)
-    # Force shell redraw AFTER session:restored so the frontend clears the
-    # viewport first, then the fresh prompt from SIGWINCH overwrites it.
     if status == "active":
         await ssh_manager.force_redraw(session_id, tab_id)
 
@@ -687,8 +1430,6 @@ async def on_ssh_connect(sid, data):
     host = data.get("host", "").strip()
     port = _safe_int(data.get("port", 22), 22)
     username = data.get("username", "").strip()
-    # Password starts as immutable Socket.IO JSON text. Remove it from payload
-    # immediately, then hand mutable bytes to SSHManager for best-effort wiping.
     password = data.pop("password", "")
     session_id = data.get("session_id", "")
     tab_id = data.get("tab_id", "")
@@ -721,9 +1462,6 @@ async def on_ssh_connect(sid, data):
             to=sid,
         )
         return
-    # LDAP-gated deployments commonly connect to internal hosts or localhost.
-    # Operators can disable this in unauthenticated mode by setting
-    # TORRUS_ALLOW_PRIVATE_HOSTS_WITHOUT_LDAP=false.
     if (
         _is_private_host(host)
         and not _ldap_enabled
@@ -740,6 +1478,8 @@ async def on_ssh_connect(sid, data):
             to=sid,
         )
         return
+
+    owner = await _owner_for_sid(sid)
     await ssh_manager.connect(
         sid=sid,
         session_id=session_id,
@@ -752,6 +1492,7 @@ async def on_ssh_connect(sid, data):
         else bytearray(password),
         cols=cols,
         rows=rows,
+        owner_ldap_username=owner,
     )
 
 
@@ -798,48 +1539,72 @@ async def on_ssh_input(sid, data):
         return {"ok": False, "error": "Invalid session or tab ID."}
     if not await _require_auth(sid, tab_id):
         return {"ok": False, "error": "Authentication required."}
-    if isinstance(input_data, str) and len(input_data) > 1_048_576:
-        return {"ok": False, "error": "Input too large."}
-    # Buffer input and record complete commands (lines delimited by Enter).
-    if _ldap_enabled and isinstance(input_data, (str, bytes)):
-        async with _auth_lock:
-            ldap_username = _authenticated_users.get(sid)
-        if ldap_username:
-            target = await ssh_manager.get_session_target(session_id, tab_id)
-            ssh_host, ssh_port, ssh_username = target or (None, None, None)
+    if isinstance(input_data, (str, bytes)) and len(input_data) > INPUT_QUEUE_MAX_BYTES:
+        return {"ok": False, "error": "Input too large.", "code": "input_too_large"}
 
-            raw = (
-                input_data.encode("utf-8", errors="replace")
-                if isinstance(input_data, str)
-                else input_data
-            )
+    owner = await _owner_for_sid(sid)
+    if await ssh_manager.get_session_target(
+        session_id, tab_id, owner_ldap_username=owner
+    ) is None:
+        return {"ok": False, "error": "Session is not available to this user.", "code": "session_owner_mismatch"}
 
-            async with _input_buffer_lock:
-                key = (sid, session_id, tab_id)
-                if key not in _input_buffers:
-                    _input_buffers[key] = bytearray()
-                buf = _input_buffers[key]
+    if _ldap_enabled and isinstance(input_data, (str, bytes)) and owner:
+        target = await ssh_manager.get_session_target(
+            session_id, tab_id, owner_ldap_username=owner
+        )
+        ssh_host, ssh_port, ssh_username = target or (None, None, None)
+        raw = (
+            input_data.encode("utf-8", errors="replace")
+            if isinstance(input_data, str)
+            else input_data
+        )
+        async with _input_buffer_lock:
+            key = (sid, session_id, tab_id)
+            buf = _input_buffers.setdefault(key, bytearray())
+            if len(buf) + len(raw) > _MAX_INPUT_BUFFER:
+                buf.clear()
+            commands = _extract_commands(buf, raw)
+        for cmd in commands:
+            try:
+                await audit_store.record_command_event(
+                    ldap_username=owner,
+                    session_id=session_id,
+                    tab_id=tab_id,
+                    command=cmd,
+                    ssh_host=ssh_host,
+                    ssh_port=ssh_port,
+                    ssh_username=ssh_username,
+                )
+            except Exception:
+                logger.exception("Failed to record command audit event")
 
-                if len(buf) + len(raw) > _MAX_INPUT_BUFFER:
-                    buf.clear()
+    status = await ssh_manager.handle_input(
+        session_id, tab_id, input_data, owner_ldap_username=owner
+    )
+    if not isinstance(status, str) or status in {"queued", "sent"}:
+        return {"ok": True, "status": status} if isinstance(status, str) else {"ok": True}
+    return {
+        "ok": False,
+        "status": status,
+        "code": "input_queue_full" if status == "queue_full" else status,
+        "error": "Input was not accepted.",
+    }
 
-                commands = _extract_commands(buf, raw)
-
-            for cmd in commands:
-                try:
-                    await audit_store.record_command_event(
-                        ldap_username=ldap_username,
-                        session_id=session_id,
-                        tab_id=tab_id,
-                        command=cmd,
-                        ssh_host=ssh_host,
-                        ssh_port=ssh_port,
-                        ssh_username=ssh_username,
-                    )
-                except Exception:
-                    logger.exception("Failed to record command audit event")
-    await ssh_manager.handle_input(session_id, tab_id, input_data)
-    return {"ok": True}
+@sio.on("ssh:interrupt")
+async def on_ssh_interrupt(sid, data):
+    session_id = data.get("session_id", "")
+    tab_id = data.get("tab_id", "")
+    if not _valid_id(session_id) or not _valid_id(tab_id):
+        return {"ok": False, "code": "invalid_request"}
+    if not await _require_auth(sid, tab_id):
+        return {"ok": False, "code": "auth_required"}
+    owner = await _owner_for_sid(sid)
+    status = await ssh_manager.interrupt(
+        session_id, tab_id, owner_ldap_username=owner
+    )
+    if status in {"sent", "queued"}:
+        return {"ok": True, "status": status}
+    return {"ok": False, "status": status, "code": status}
 
 
 @sio.on("terminal:resize")
@@ -850,11 +1615,13 @@ async def on_terminal_resize(sid, data):
         return
     if not await _require_auth(sid, tab_id):
         return
+    owner = await _owner_for_sid(sid)
     await ssh_manager.handle_resize(
         session_id,
         tab_id,
         _safe_int(data.get("cols", 80), 80),
         _safe_int(data.get("rows", 24), 24),
+        owner_ldap_username=owner,
     )
 
 
@@ -866,10 +1633,22 @@ async def on_ssh_disconnect(sid, data):
         return
     if not await _require_auth(sid, tab_id):
         return
+    owner = await _owner_for_sid(sid)
+    result = await ssh_manager.disconnect_session(
+        session_id, tab_id, owner_ldap_username=owner
+    )
+    if result == "forbidden":
+        await sio.emit(
+            "ssh:error",
+            {"tab_id": tab_id, "message": "Session owner mismatch.", "code": result},
+            to=sid,
+        )
+        return
     await sftp_manager.close_sftp(tab_id)
-    await ssh_manager.disconnect_session(session_id, tab_id)
     async with _input_buffer_lock:
         _input_buffers.pop((sid, session_id, tab_id), None)
+
+
 
 
 @sio.on("sftp:close")
@@ -878,6 +1657,8 @@ async def on_sftp_close(sid, data):
     if not _valid_id(session_id) or not _valid_id(tab_id):
         return
     if not await _require_auth(sid, tab_id):
+        return
+    if await _require_session_owner(sid, session_id, tab_id) is None:
         return
     await sftp_manager.close_sftp(tab_id)
     await sio.emit("sftp:close:result", {"tab_id": tab_id, "ok": True}, to=sid)
@@ -908,6 +1689,23 @@ async def on_ssh_clone(sid, data):
         return
     if not await _require_auth(sid, new_tab_id):
         return
+    owner = await _owner_for_sid(sid)
+    if _ldap_enabled and (
+        await ssh_manager.get_session_target(
+            session_id, source_tab_id, owner_ldap_username=owner
+        )
+        is None
+    ):
+        await sio.emit(
+            "ssh:error",
+            {
+                "tab_id": new_tab_id,
+                "message": "Source session is not available to this user.",
+                "code": "session_owner_mismatch",
+            },
+            to=sid,
+        )
+        return
     if ssh_manager.sid_session_count(sid) >= _MAX_SESSIONS_PER_SID:
         await sio.emit(
             "ssh:error",
@@ -927,6 +1725,7 @@ async def on_ssh_clone(sid, data):
         new_tab_id=new_tab_id,
         cols=cols,
         rows=rows,
+        owner_ldap_username=owner,
     )
 
 
@@ -973,6 +1772,19 @@ async def on_sftp_open(sid, data):
         )
         return
     if not await _require_auth(sid, tab_id):
+        return
+    owner = await _owner_for_sid(sid)
+    if _ldap_enabled and (
+        await ssh_manager.get_session_target(
+            session_id, source_tab_id, owner_ldap_username=owner
+        )
+        is None
+    ):
+        await sio.emit(
+            "sftp:open:result",
+            {"tab_id": tab_id, "ok": False, "code": "session_owner_mismatch"},
+            to=sid,
+        )
         return
     ok = await sftp_manager.open_sftp(
         session_id, tab_id, ssh_manager, source_tab_id=source_tab_id
@@ -1029,6 +1841,8 @@ async def on_sftp_list(sid, data):
         return
     if not await _require_auth(sid, tab_id):
         return
+    if await _require_session_owner(sid, session_id, tab_id) is None:
+        return
     try:
         result = await sftp_manager.list_directory(tab_id, data.get("path", "."))
         await sio.emit("sftp:list:result", {"tab_id": tab_id, **result}, to=sid)
@@ -1046,6 +1860,8 @@ async def on_sftp_upload(sid, data):
     if not _valid_id(session_id) or not _valid_id(tab_id):
         return
     if not await _require_auth(sid, tab_id):
+        return
+    if await _require_session_owner(sid, session_id, tab_id) is None:
         return
     try:
         raw = base64.b64decode(data.get("data", ""), validate=True)
@@ -1076,6 +1892,8 @@ async def on_sftp_download(sid, data):
         return
     if not await _require_auth(sid, tab_id):
         return
+    if await _require_session_owner(sid, session_id, tab_id) is None:
+        return
     try:
         result = await sftp_manager.download_file(
             tab_id, data.get("path", ""), max_bytes=_SFTP_INLINE_TRANSFER_MAX
@@ -1091,6 +1909,8 @@ async def on_sftp_delete(sid, data):
     if not _valid_id(session_id) or not _valid_id(tab_id):
         return
     if not await _require_auth(sid, tab_id):
+        return
+    if await _require_session_owner(sid, session_id, tab_id) is None:
         return
     paths = (
         data.get("paths")
@@ -1128,6 +1948,8 @@ async def on_sftp_rename(sid, data):
         return
     if not await _require_auth(sid, tab_id):
         return
+    if await _require_session_owner(sid, session_id, tab_id) is None:
+        return
     try:
         result = await sftp_manager.rename(
             tab_id, data.get("old_path", ""), data.get("new_path", "")
@@ -1144,6 +1966,8 @@ async def on_sftp_mkdir(sid, data):
         return
     if not await _require_auth(sid, tab_id):
         return
+    if await _require_session_owner(sid, session_id, tab_id) is None:
+        return
     try:
         result = await sftp_manager.mkdir(tab_id, data.get("path", ""))
         await sio.emit("sftp:mkdir:result", {"tab_id": tab_id, **result}, to=sid)
@@ -1157,6 +1981,8 @@ async def on_sftp_chmod(sid, data):
     if not _valid_id(session_id) or not _valid_id(tab_id):
         return
     if not await _require_auth(sid, tab_id):
+        return
+    if await _require_session_owner(sid, session_id, tab_id) is None:
         return
     mode = data.get("mode")
     if isinstance(mode, bool) or not isinstance(mode, int) or not 0 <= mode <= 0o7777:
@@ -1189,6 +2015,8 @@ async def on_sftp_chown(sid, data):
     if not _valid_id(session_id) or not _valid_id(tab_id):
         return
     if not await _require_auth(sid, tab_id):
+        return
+    if await _require_session_owner(sid, session_id, tab_id) is None:
         return
     uid = data.get("uid")
     gid = data.get("gid")
@@ -1229,6 +2057,8 @@ async def on_sftp_accounts(sid, data):
     if not _valid_id(session_id) or not _valid_id(tab_id):
         return
     if not await _require_auth(sid, tab_id):
+        return
+    if await _require_session_owner(sid, session_id, tab_id) is None:
         return
     try:
         result = await sftp_manager.accounts(tab_id)
