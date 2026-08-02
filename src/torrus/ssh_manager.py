@@ -46,6 +46,8 @@ class _WarnThenAddPolicy(paramiko.MissingHostKeyPolicy):
             key.get_name(),
             fingerprint,
         )
+
+
 @dataclass
 class _ControlRequest:
     data: bytes
@@ -62,9 +64,7 @@ class SSHSession:
     port: int
     username: str
     owner_ldap_username: str | None = None
-    session_instance_id: str = field(
-        default_factory=lambda: secrets.token_urlsafe(18)
-    )
+    session_instance_id: str = field(default_factory=lambda: secrets.token_urlsafe(18))
     generation: int = 1
     created_at: float = field(default_factory=time.time)
     last_activity: float = field(default_factory=time.time)
@@ -164,7 +164,10 @@ class SSHManager:
 
         async with self._lock:
             existing = self._sessions.get(key)
-            if existing is not None and existing.owner_ldap_username != owner_ldap_username:
+            if (
+                existing is not None
+                and existing.owner_ldap_username != owner_ldap_username
+            ):
                 logger.warning(
                     "Rejected cross-owner session key reuse for %s/%s",
                     session_id,
@@ -458,7 +461,9 @@ class SSHManager:
             if session.input_queue_bytes + len(data) > INPUT_QUEUE_MAX_BYTES:
                 return "queue_full"
             for offset in range(0, len(data), INPUT_CHUNK_BYTES):
-                session.input_queue.put_nowait(data[offset : offset + INPUT_CHUNK_BYTES])
+                session.input_queue.put_nowait(
+                    data[offset : offset + INPUT_CHUNK_BYTES]
+                )
             session.input_queue_bytes += len(data)
             session.input_available.set()
         session.last_activity = time.time()
@@ -631,7 +636,10 @@ class SSHManager:
             return "unknown"
         await self.sio.emit(
             "ssh:closed",
-            {"tab_id": session.tab_id, "reason": "Session terminated by administrator."},
+            {
+                "tab_id": session.tab_id,
+                "reason": "Session terminated by administrator.",
+            },
             room=_room(session.session_id, session.tab_id),
         )
         return (
@@ -653,7 +661,10 @@ class SSHManager:
             ]
         closed = 0
         for session_instance_id, generation in identities:
-            if await self.terminate_session(session_instance_id, generation) == "closed":
+            if (
+                await self.terminate_session(session_instance_id, generation)
+                == "closed"
+            ):
                 closed += 1
         return closed
 
@@ -873,6 +884,7 @@ class SSHManager:
             },
             to=sid,
         )
+
     def set_sid_owner(self, sid: str, owner_ldap_username: str | None) -> None:
         self._sid_owners[sid] = owner_ldap_username
 
@@ -986,7 +998,9 @@ class SSHManager:
                     for wait_task in (control_wait, input_wait):
                         if not wait_task.done():
                             wait_task.cancel()
-                    await asyncio.gather(control_wait, input_wait, return_exceptions=True)
+                    await asyncio.gather(
+                        control_wait, input_wait, return_exceptions=True
+                    )
                 continue
 
             payload = request.data if request is not None else data

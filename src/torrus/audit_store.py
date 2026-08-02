@@ -101,7 +101,12 @@ def init_db() -> None:
             "ON admin_actions (actor, action, idempotency_key)"
         )
         # Existing early audit databases are upgraded in place.
-        for column in ("ssh_host TEXT", "ssh_port INTEGER", "ssh_username TEXT", "event_kind TEXT NOT NULL DEFAULT 'terminal_input'"):
+        for column in (
+            "ssh_host TEXT",
+            "ssh_port INTEGER",
+            "ssh_username TEXT",
+            "event_kind TEXT NOT NULL DEFAULT 'terminal_input'",
+        ):
             try:
                 db.execute(f"ALTER TABLE terminal_input_events ADD COLUMN {column}")
             except sqlite3.OperationalError:
@@ -206,7 +211,9 @@ def _action_row(row: sqlite3.Row | tuple | None) -> dict | None:
         return None
     values = dict(row)
     try:
-        values["result"] = json.loads(values.pop("result_json")) if values.get("result_json") else None
+        values["result"] = (
+            json.loads(values.pop("result_json")) if values.get("result_json") else None
+        )
     except (TypeError, json.JSONDecodeError):
         values["result"] = None
     values.pop("result_json", None)
@@ -266,11 +273,19 @@ def complete_admin_action(
         db.execute(
             "UPDATE admin_actions SET status = ?, result_json = ?, error = ?, updated_at = ? "
             "WHERE action_id = ?",
-            (status, action_payload(result) if result is not None else None, error, now, action_id),
+            (
+                status,
+                action_payload(result) if result is not None else None,
+                error,
+                now,
+                action_id,
+            ),
         )
         db.row_factory = sqlite3.Row
         return _action_row(
-            db.execute("SELECT * FROM admin_actions WHERE action_id = ?", (action_id,)).fetchone()
+            db.execute(
+                "SELECT * FROM admin_actions WHERE action_id = ?", (action_id,)
+            ).fetchone()
         )
 
 
@@ -279,7 +294,9 @@ def get_admin_action(action_id: str) -> dict | None:
     with _connect() as db:
         db.row_factory = sqlite3.Row
         return _action_row(
-            db.execute("SELECT * FROM admin_actions WHERE action_id = ?", (action_id,)).fetchone()
+            db.execute(
+                "SELECT * FROM admin_actions WHERE action_id = ?", (action_id,)
+            ).fetchone()
         )
 
 
@@ -294,6 +311,7 @@ def count_terminal_input_events(older_than_days: int) -> int:
                 (cutoff,),
             ).fetchone()[0]
         )
+
 
 def purge_terminal_input_events(older_than_days: int) -> int:
     cutoff = (datetime.now(timezone.utc) - timedelta(days=older_than_days)).isoformat()

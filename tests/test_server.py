@@ -681,10 +681,11 @@ class TestSocketDisconnect:
         assert server_module._input_buffers[("sid-2", "session-1", "tab-1")] == b"keep"
 
 
-
 class TestAdminUserRevocation:
     @pytest.mark.asyncio
-    async def test_disable_is_feature_disabled_without_user_revocation(self, monkeypatch):
+    async def test_disable_is_feature_disabled_without_user_revocation(
+        self, monkeypatch
+    ):
         import torrus.server as server_module
 
         monkeypatch.setattr(

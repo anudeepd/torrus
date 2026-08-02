@@ -464,10 +464,11 @@ class TestReadLoopCleanup:
             await _cleanup_manager(manager)
 
 
-
 class TestOwnerBinding:
     @pytest.mark.asyncio
-    async def test_session_target_restore_and_input_reject_foreign_owner(self, mock_sio):
+    async def test_session_target_restore_and_input_reject_foreign_owner(
+        self, mock_sio
+    ):
         from torrus.ssh_manager import SSHManager, SSHSession
 
         manager = SSHManager(mock_sio)

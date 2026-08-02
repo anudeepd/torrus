@@ -57,7 +57,9 @@ class LDAPPolicyStore:
 
             document = yaml.safe_load(raw) or {}
         except ImportError as exc:
-            raise PolicyUnavailable("PyYAML is required for LDAP policy mutation") from exc
+            raise PolicyUnavailable(
+                "PyYAML is required for LDAP policy mutation"
+            ) from exc
         except Exception as exc:
             raise PolicyError("LDAP configuration is not valid YAML") from exc
         if not isinstance(document, dict) or not isinstance(document.get("ldap"), dict):
@@ -69,15 +71,27 @@ class LDAPPolicyStore:
 
     def snapshot(self) -> dict[str, Any]:
         _raw, document, fingerprint = self._read()
-        allowed = tuple(str(item).strip() for item in document["ldap"].get("allowed_users", []) if str(item).strip())
+        allowed = tuple(
+            str(item).strip()
+            for item in document["ldap"].get("allowed_users", [])
+            if str(item).strip()
+        )
         return {"fingerprint": fingerprint, "allowed_users": list(allowed)}
 
-    def mutate(self, username: str, enabled: bool, expected_fingerprint: str | None) -> PolicyMutation:
+    def mutate(
+        self, username: str, enabled: bool, expected_fingerprint: str | None
+    ) -> PolicyMutation:
         with self._lock:
             raw, document, current_fingerprint = self._read()
             if expected_fingerprint and expected_fingerprint != current_fingerprint:
-                raise PolicyConflict("LDAP configuration changed; reload policy before retrying")
-            allowed = [str(item).strip() for item in document["ldap"].get("allowed_users", []) if str(item).strip()]
+                raise PolicyConflict(
+                    "LDAP configuration changed; reload policy before retrying"
+                )
+            allowed = [
+                str(item).strip()
+                for item in document["ldap"].get("allowed_users", [])
+                if str(item).strip()
+            ]
             folded = username.casefold()
             if enabled:
                 if not any(item.casefold() == folded for item in allowed):
@@ -88,18 +102,26 @@ class LDAPPolicyStore:
             try:
                 import yaml
 
-                rendered = yaml.safe_dump(document, sort_keys=False, allow_unicode=True).encode("utf-8")
+                rendered = yaml.safe_dump(
+                    document, sort_keys=False, allow_unicode=True
+                ).encode("utf-8")
             except ImportError as exc:
-                raise PolicyUnavailable("PyYAML is required for LDAP policy mutation") from exc
+                raise PolicyUnavailable(
+                    "PyYAML is required for LDAP policy mutation"
+                ) from exc
             except Exception as exc:
                 raise PolicyError("LDAP configuration could not be rendered") from exc
-            backup_id = f"{self.path.name}.bak-{int(time.time())}-{current_fingerprint[:12]}"
+            backup_id = (
+                f"{self.path.name}.bak-{int(time.time())}-{current_fingerprint[:12]}"
+            )
             backup = self.path.with_name(backup_id)
             try:
                 mode = self.path.stat().st_mode & 0o777
                 shutil.copyfile(self.path, backup)
                 os.chmod(backup, mode & 0o600 or 0o600)
-                fd, temp_name = tempfile.mkstemp(prefix=f".{self.path.name}.", dir=self.path.parent)
+                fd, temp_name = tempfile.mkstemp(
+                    prefix=f".{self.path.name}.", dir=self.path.parent
+                )
                 try:
                     os.fchmod(fd, mode & 0o600 or 0o600)
                     with os.fdopen(fd, "wb") as temp:
@@ -111,7 +133,9 @@ class LDAPPolicyStore:
                     if os.path.exists(temp_name):
                         os.unlink(temp_name)
             except OSError as exc:
-                raise PolicyUnavailable("LDAP configuration could not be replaced safely") from exc
+                raise PolicyUnavailable(
+                    "LDAP configuration could not be replaced safely"
+                ) from exc
             new_fingerprint = hashlib.sha256(rendered).hexdigest()
             return PolicyMutation(new_fingerprint, backup_id, tuple(allowed))
 
