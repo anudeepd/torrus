@@ -228,14 +228,26 @@ async def record_sensitive_event(
         )
 
 
+def _contains_pattern(value: str) -> str:
+    escaped = value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
+
+
 def list_terminal_input_events(
-    *, username: str | None = None, since: str | None = None, limit: int = 100
+    *,
+    username: str | None = None,
+    input_query: str | None = None,
+    since: str | None = None,
+    limit: int = 100,
 ) -> list[dict]:
     clauses: list[str] = []
     values: list[object] = []
     if username:
-        clauses.append("ldap_username = ? COLLATE NOCASE")
-        values.append(username)
+        clauses.append("ldap_username LIKE ? COLLATE NOCASE ESCAPE '\\'")
+        values.append(_contains_pattern(username))
+    if input_query:
+        clauses.append("CAST(input_data AS TEXT) LIKE ? COLLATE NOCASE ESCAPE '\\'")
+        values.append(_contains_pattern(input_query))
     if since:
         clauses.append("occurred_at >= ?")
         values.append(since)

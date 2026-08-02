@@ -52,6 +52,37 @@ async def test_record_command_event_stores_cleaned_command(monkeypatch, tmp_path
     assert events[0]["ssh_host"] == "git.example.com"
 
 
+@pytest.mark.asyncio
+async def test_terminal_input_search_matches_partial_username_and_command(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("TORRUS_AUDIT_DB", str(tmp_path / "audit.db"))
+    from torrus import audit_store
+
+    audit_store.init_db()
+    await audit_store.record_terminal_input(
+        ldap_username="alice",
+        session_id="sess-1",
+        tab_id="tab-1",
+        input_data="git status --short",
+    )
+    await audit_store.record_terminal_input(
+        ldap_username="bob",
+        session_id="sess-2",
+        tab_id="tab-2",
+        input_data="kubectl get pods",
+    )
+
+    assert [
+        event["ldap_username"]
+        for event in audit_store.list_terminal_input_events(username="lic")
+    ] == ["alice"]
+    assert [
+        event["ldap_username"]
+        for event in audit_store.list_terminal_input_events(input_query="TATUs")
+    ] == ["alice"]
+
+
 def test_sensitive_command_detection():
     from torrus.audit_store import is_sensitive_command
 

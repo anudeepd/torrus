@@ -131,16 +131,17 @@ describe('AdminConsole', () => {
     })
   })
 
-  it('passes activity user and since filters to the API', async () => {
+  it('passes partial user and command filters when the activity form is submitted by keyboard', async () => {
     const { fetchMock } = await renderAdmin()
 
     fireEvent.click(screen.getByRole('button', { name: 'Submitted input' }))
-    fireEvent.change(screen.getByLabelText('User'), { target: { value: 'alice' } })
+    fireEvent.change(screen.getByLabelText('User'), { target: { value: 'ali' } })
+    fireEvent.change(screen.getByLabelText('Command'), { target: { value: 'status' } })
     fireEvent.change(screen.getByLabelText('Since'), { target: { value: '2026-08-01' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Apply filters' }))
+    fireEvent.submit(screen.getByLabelText('Command').closest('form')!)
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
-      '/api/admin/activity?limit=100&username=alice&since=2026-08-01',
+      '/api/admin/activity?limit=100&username=ali&input=status&since=2026-08-01',
       expect.anything(),
     ))
   })

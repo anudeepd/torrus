@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.2.31] - 2026-08-02
+
+### Added
+
+- Support partial, case-insensitive username and command search in the Admin Console's Submitted input view, including Enter-key submission.
+
+### Fixed
+
+- Apply LDAP user disable and re-enable changes immediately without a Torrus restart.
+- Animate terminal-to-admin navigation without skipped-transition errors or page flashes.
+
+
 ## [0.2.30] - 2026-08-02
 
 ### Added

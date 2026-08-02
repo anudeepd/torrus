@@ -58,7 +58,7 @@ Set `TORRUS_ADMIN_USERS` to a comma-separated list of LDAP usernames allowed to 
 ```bash
 TORRUS_ADMIN_USERS=alice,bob torrus serve --ldap-config /path/to/ldapgate.yaml
 ```
-Session controls use immutable session identity plus generation checks. New user allowlist entries apply immediately without restarting Torrus; disabling a user revokes known LDAP cookies and closes that user's active SSH tabs first, while its policy change remains queued for restart. Policy mutation requires LDAPGate user-wide revocation support (0.1.22+); older deployments fail closed without changing policy.
+Session controls use immutable session identity plus generation checks. New user allowlist entries and disable/re-enable changes apply immediately without restarting Torrus; disabling a user revokes known LDAP cookies and closes that user's active SSH tabs. Policy mutation requires LDAPGate user-wide revocation support (0.1.22+); older deployments fail closed without changing policy.
 
 ### Terminal input audit
 

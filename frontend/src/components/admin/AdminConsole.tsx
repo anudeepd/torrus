@@ -50,6 +50,7 @@ type RetentionInfo = {
 type View = 'sessions' | 'users' | 'activity' | 'retention'
 type ActivityFilters = {
   username: string
+  input: string
   since: string
 }
 
@@ -89,7 +90,7 @@ export default function AdminConsole({ onClose }: { onClose?: () => void }) {
   const [sessions, setSessions] = useState<AdminSession[]>([])
   const [users, setUsers] = useState<AdminUser[]>([])
   const [activity, setActivity] = useState<ActivityEvent[]>([])
-  const [activityFilters, setActivityFilters] = useState<ActivityFilters>({ username: '', since: '' })
+  const [activityFilters, setActivityFilters] = useState<ActivityFilters>({ username: '', input: '', since: '' })
   const [retention, setRetention] = useState<RetentionInfo | null>(null)
   const [policyFingerprint, setPolicyFingerprint] = useState('')
   const [loading, setLoading] = useState(true)
@@ -102,7 +103,7 @@ export default function AdminConsole({ onClose }: { onClose?: () => void }) {
   const csrfRef = useRef('')
   const refreshTimerRef = useRef<number | null>(null)
   const socketRef = useRef<Socket | null>(null)
-  const activityFiltersRef = useRef<ActivityFilters>({ username: '', since: '' })
+  const activityFiltersRef = useRef<ActivityFilters>({ username: '', input: '', since: '' })
   const refreshGenerationRef = useRef(0)
 
   const loadCsrf = useCallback(async () => {
@@ -118,6 +119,7 @@ export default function AdminConsole({ onClose }: { onClose?: () => void }) {
     try {
       const activityQuery = new URLSearchParams({ limit: '100' })
       if (filters.username.trim()) activityQuery.set('username', filters.username.trim())
+      if (filters.input.trim()) activityQuery.set('input', filters.input.trim())
       if (filters.since) activityQuery.set('since', filters.since)
       const [sessionData, userData, activityData, retentionData, policyData] = await Promise.all([
         requestJson('/api/admin/sessions?limit=100'),
@@ -446,9 +448,9 @@ function UsersTable({ users, fingerprint, onAction, onRequestAction }: { users: 
                   <td className="px-3 py-3 text-slate-400">{user.active_sessions}</td>
                   <td className="px-3 py-3 text-amber-300">{user.policy_state}</td>
                   <td className="px-3 py-3 text-right">
-                    {user.policy_state === 'pending_disable'
-                      ? <button type="button" onClick={() => onRequestAction({ title: 'Enable LDAP user?', description: `Queue ${user.username} for re-enable. The policy change takes effect after restart.`, expected: `ENABLE ${user.username}`, confirmLabel: 'Enable user', action: async () => { await onAction(`/api/admin/users/${encodeURIComponent(user.username)}/enable`, { expected_fingerprint: fingerprint }, 'Enable queued for restart.') } })} className="rounded border border-green-900/60 px-2 py-1 text-[11px] text-green-300 transition-colors hover:bg-green-950/40">Enable</button>
-                      : <button type="button" onClick={() => onRequestAction({ title: 'Disable LDAP user?', description: `Revoke ${user.username}'s cookies and active tabs, then queue the policy change for restart.`, expected: `DISABLE ${user.username}`, confirmLabel: 'Disable user', destructive: true, action: async () => { await onAction(`/api/admin/users/${encodeURIComponent(user.username)}/disable`, { expected_fingerprint: fingerprint }, 'Disable queued; active sessions revoked.') } })} className="rounded border border-red-900/60 px-2 py-1 text-[11px] text-red-300 transition-colors hover:bg-red-950/40">Disable</button>}
+                    {user.policy_state === 'disabled'
+                      ? <button type="button" onClick={() => onRequestAction({ title: 'Enable LDAP user?', description: `Re-enable ${user.username} immediately.`, expected: `ENABLE ${user.username}`, confirmLabel: 'Enable user', action: async () => { await onAction(`/api/admin/users/${encodeURIComponent(user.username)}/enable`, { expected_fingerprint: fingerprint }, 'User enabled; no restart required.') } })} className="rounded border border-green-900/60 px-2 py-1 text-[11px] text-green-300 transition-colors hover:bg-green-950/40">Enable</button>
+                      : <button type="button" onClick={() => onRequestAction({ title: 'Disable LDAP user?', description: `Revoke ${user.username}'s cookies and active tabs, then disable the user immediately.`, expected: `DISABLE ${user.username}`, confirmLabel: 'Disable user', destructive: true, action: async () => { await onAction(`/api/admin/users/${encodeURIComponent(user.username)}/disable`, { expected_fingerprint: fingerprint }, 'User disabled; no restart required.') } })} className="rounded border border-red-900/60 px-2 py-1 text-[11px] text-red-300 transition-colors hover:bg-red-950/40">Disable</button>}
                   </td>
                 </tr>
               ))}
@@ -481,24 +483,30 @@ function ActivityInput({ value, kind }: { value: string; kind: string }) {
 }
 function ActivityFiltersForm({ filters, onApply }: { filters: ActivityFilters; onApply: (filters: ActivityFilters) => void }) {
   const [username, setUsername] = useState(filters.username)
+  const [input, setInput] = useState(filters.input)
   const [since, setSince] = useState(filters.since)
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    onApply({ username, since })
+    onApply({ username, input, since })
   }
 
   const clear = () => {
     setUsername('')
+    setInput('')
     setSince('')
-    onApply({ username: '', since: '' })
+    onApply({ username: '', input: '', since: '' })
   }
 
   return (
     <form onSubmit={submit} className="mb-4 flex flex-col gap-2 rounded-lg border border-surface-800 bg-surface-900 p-3 sm:flex-row sm:items-end">
       <div>
         <label htmlFor="activity-user" className="block text-[11px] font-medium text-slate-400">User</label>
-        <input id="activity-user" value={username} onChange={event => setUsername(event.target.value)} autoComplete="off" spellCheck={false} placeholder="All users" className="mt-1 w-full rounded border border-surface-700 bg-surface-950 px-2.5 py-1.5 text-xs text-slate-200 outline-none placeholder:text-slate-700 focus:border-brand-500 sm:w-44" />
+        <input id="activity-user" type="search" value={username} onChange={event => setUsername(event.target.value)} autoComplete="off" spellCheck={false} enterKeyHint="search" placeholder="All users" className="mt-1 w-full rounded border border-surface-700 bg-surface-950 px-2.5 py-1.5 text-xs text-slate-200 outline-none placeholder:text-slate-700 focus:border-brand-500 sm:w-44" />
+      </div>
+      <div>
+        <label htmlFor="activity-input" className="block text-[11px] font-medium text-slate-400">Command</label>
+        <input id="activity-input" type="search" value={input} onChange={event => setInput(event.target.value)} autoComplete="off" spellCheck={false} enterKeyHint="search" placeholder="Search command text" className="mt-1 w-full rounded border border-surface-700 bg-surface-950 px-2.5 py-1.5 text-xs text-slate-200 outline-none placeholder:text-slate-700 focus:border-brand-500 sm:w-56" />
       </div>
       <div>
         <label htmlFor="activity-since" className="block text-[11px] font-medium text-slate-400">Since</label>

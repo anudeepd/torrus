@@ -980,6 +980,9 @@ class TestAdminUserRevocation:
         result = await server_module.admin_disable_user("bob", MagicMock())
 
         assert result["ok"] is True
+        assert result["policy_state"] == "disabled"
+        assert result["restart_required"] is False
+        assert result["message"] == "User disabled; no restart required."
         assert result["revoked_cookies"] == 2
         assert result["closed_tabs"] == 3
         assert "bob" in server_module._PENDING_DISABLED_USERS

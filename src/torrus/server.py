@@ -627,7 +627,7 @@ async def admin_policy(request: Request):
         "fingerprint": snapshot["fingerprint"],
         "allowed_users": snapshot["allowed_users"],
         "pending_users": sorted(_PENDING_DISABLED_USERS),
-        "restart_required": bool(_PENDING_DISABLED_USERS),
+        "restart_required": False,
     }
 
 
@@ -682,6 +682,7 @@ async def admin_users(request: Request):
         for session in sessions
         if session["owner_ldap_username"]
     )
+    users.update(_PENDING_DISABLED_USERS)
     return {
         "items": [
             {
@@ -691,9 +692,7 @@ async def admin_users(request: Request):
                     for session in sessions
                 ),
                 "policy_state": (
-                    "pending_disable"
-                    if username in _PENDING_DISABLED_USERS
-                    else "allowed"
+                    "disabled" if username in _PENDING_DISABLED_USERS else "allowed"
                 ),
             }
             for username in sorted(users)
@@ -738,9 +737,11 @@ async def admin_activity(request: Request):
     except ValueError:
         limit = 100
     username = request.query_params.get("username") or None
+    input_query = request.query_params.get("input") or None
     events = await asyncio.to_thread(
         audit_store.list_terminal_input_events,
         username=username,
+        input_query=input_query,
         since=request.query_params.get("since") or None,
         limit=limit,
     )
@@ -1057,15 +1058,16 @@ async def admin_disable_user(username: str, request: Request):
         )
         return JSONResponse(status_code=503, content=payload)
     _PENDING_DISABLED_USERS.add(normalized)
+    _apply_live_ldap_allowlist(policy["allowed_users"])
     payload = {
         "ok": True,
-        "policy_state": "pending_restart",
-        "restart_required": True,
+        "policy_state": "disabled",
+        "restart_required": False,
         "revoked_cookies": revoked_cookies,
         "closed_tabs": closed_tabs,
         "fingerprint": policy["fingerprint"],
         "backup_id": policy["backup_id"],
-        "message": "LDAP allowlist change queued; restart LDAPGate to enforce it.",
+        "message": "User disabled; no restart required.",
     }
     return await _admin_action_response(
         record or {},
@@ -1119,12 +1121,14 @@ async def admin_enable_user(username: str, request: Request):
         )
         return JSONResponse(status_code=503, content=payload)
     _PENDING_DISABLED_USERS.discard(normalized)
+    _apply_live_ldap_allowlist(policy["allowed_users"])
     payload = {
         "ok": True,
-        "policy_state": "pending_restart",
-        "restart_required": True,
+        "policy_state": "allowed",
+        "restart_required": False,
         "fingerprint": policy["fingerprint"],
         "backup_id": policy["backup_id"],
+        "message": "User enabled; no restart required.",
     }
     return await _admin_action_response(
         record or {},
