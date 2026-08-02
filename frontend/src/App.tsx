@@ -21,5 +21,7 @@ export default function App() {
     onIdle: redirectToLdapLogin,
   }), [ldapEnabled, ldapIdleTimeout])
 
-  return isAdminRoute ? <AdminConsole /> : <AppLayout />
+  return isAdminRoute
+    ? <AdminConsole onClose={() => window.location.assign('/')} />
+    : <AppLayout />
 }

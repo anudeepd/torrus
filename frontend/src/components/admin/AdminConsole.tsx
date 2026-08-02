@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { io, type Socket } from 'socket.io-client'
 import { Activity, Check, ChevronLeft, CircleStop, RefreshCw, Shield, Terminal, UserRound, X } from 'lucide-react'
+import AdminConfirmModal, { type AdminConfirmationRequest } from './AdminConfirmModal'
+import { uuid } from '@/utils/uuid'
+import * as m from 'motion/react-m'
+import { AnimatePresence } from 'motion/react'
+import { surfaceTransition } from '@/motion/tokens'
 
 type AdminSession = {
   session_instance_id: string
@@ -30,6 +35,7 @@ type ActivityEvent = {
   ssh_port: number | null
   ssh_username: string | null
   kind: string
+  input: string
   bytes: number
 }
 
@@ -68,7 +74,7 @@ async function requestJson(path: string, init?: RequestInit) {
 }
 
 function idempotencyKey() {
-  return `admin-${crypto.randomUUID()}`
+  return `admin-${uuid()}`
 }
 
 export default function AdminConsole({ onClose }: { onClose?: () => void }) {
@@ -84,6 +90,7 @@ export default function AdminConsole({ onClose }: { onClose?: () => void }) {
   const [lastUpdated, setLastUpdated] = useState(0)
   const [streamState, setStreamState] = useState<'Live' | 'Reconnecting' | 'Polling'>('Polling')
   const [selectedSession, setSelectedSession] = useState<AdminSession | null>(null)
+  const [confirmation, setConfirmation] = useState<AdminConfirmationRequest | null>(null)
   const csrfRef = useRef('')
   const refreshTimerRef = useRef<number | null>(null)
   const socketRef = useRef<Socket | null>(null)
@@ -153,7 +160,7 @@ export default function AdminConsole({ onClose }: { onClose?: () => void }) {
     }
   }, [refresh])
 
-  const act = useCallback(async (path: string, body: Record<string, unknown>, message: string) => {
+  const act = useCallback(async (path: string, body: Record<string, unknown>, message: string): Promise<boolean> => {
     setNotice('')
     setError(null)
     const send = async (token: string) => {
@@ -186,8 +193,10 @@ export default function AdminConsole({ onClose }: { onClose?: () => void }) {
       }
       setNotice(message)
       await refresh()
+      return true
     } catch (cause) {
       setError(cause instanceof Error ? cause as RequestFailure : new Error('Action failed.'))
+      return false
     }
   }, [loadCsrf, refresh])
 
@@ -213,16 +222,21 @@ export default function AdminConsole({ onClose }: { onClose?: () => void }) {
   }
 
   return (
-    <div className="flex min-h-screen flex-col bg-surface-950 text-slate-200">
+    <m.div
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={surfaceTransition}
+      className="flex min-h-screen flex-col bg-surface-950 text-slate-200"
+    >
       <header className="flex min-h-14 shrink-0 items-center gap-3 border-b border-surface-800 bg-surface-900 px-4 sm:px-5">
-        {onClose && <button type="button" onClick={onClose} className="rounded-md p-1.5 text-slate-500 hover:bg-surface-800 hover:text-slate-200" aria-label="Back to terminal"><ChevronLeft className="h-4 w-4" /></button>}
+        {onClose && <button type="button" onClick={onClose} className="rounded-md p-1.5 text-slate-500 transition-colors hover:bg-surface-800 hover:text-slate-200" aria-label="Back to terminal"><ChevronLeft className="h-4 w-4" /></button>}
         <Shield className="h-4 w-4 text-brand-400" />
         <div className="min-w-0 flex-1">
           <h1 className="text-sm font-semibold">Admin Console</h1>
-          <p className="text-[11px] text-slate-500">Owner-bound sessions, submitted-input metadata, and policy controls</p>
+          <p className="text-[11px] text-slate-500">Owner-bound sessions, submitted input, and policy controls</p>
         </div>
         <span className={`hidden text-[11px] sm:inline ${stale ? 'text-amber-300' : 'text-slate-500'}`} aria-live="polite">{stale ? 'Stale' : `Updated ${lastUpdated ? age(lastUpdated / 1000) : '—'}`} · {streamState}</span>
-        <button type="button" onClick={() => void refresh()} disabled={loading} className="flex items-center gap-1.5 rounded-md border border-surface-700 px-2.5 py-1.5 text-xs text-slate-400 hover:bg-surface-800 hover:text-slate-200 disabled:opacity-50"><RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} /> Refresh</button>
+        <button type="button" onClick={() => void refresh()} disabled={loading} className="flex items-center gap-1.5 rounded-md border border-surface-700 px-2.5 py-1.5 text-xs text-slate-400 transition-colors hover:bg-surface-800 hover:text-slate-200 disabled:opacity-50"><RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} /> Refresh</button>
       </header>
 
       <div className="flex min-h-0 flex-1">
@@ -234,7 +248,7 @@ export default function AdminConsole({ onClose }: { onClose?: () => void }) {
             ['activity', Activity, 'Submitted input'],
             ['retention', CircleStop, 'Retention'],
           ] as const).map(([key, Icon, label]) => (
-            <button key={key} type="button" aria-current={view === key ? 'page' : undefined} onClick={() => setView(key)} className={`mb-1 flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-xs ${view === key ? 'bg-brand-500/10 text-brand-300' : 'text-slate-500 hover:bg-surface-800 hover:text-slate-300'}`}><Icon className="h-3.5 w-3.5" /> {label}</button>
+            <button key={key} type="button" aria-current={view === key ? 'page' : undefined} onClick={() => setView(key)} className={`mb-1 flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-xs transition-colors ${view === key ? 'bg-brand-500/10 text-brand-300' : 'text-slate-500 hover:bg-surface-800 hover:text-slate-300'}`}><Icon className="h-3.5 w-3.5" /> {label}</button>
           ))}
           <div className="mt-6 rounded-md border border-surface-800 bg-surface-950/60 p-3 text-[11px] leading-relaxed text-slate-600">Controls are owner-bound. Interrupt is best-effort and does not guarantee remote process termination.</div>
         </nav>
@@ -242,40 +256,185 @@ export default function AdminConsole({ onClose }: { onClose?: () => void }) {
         <main className="min-w-0 flex-1 overflow-auto p-4 sm:p-6" aria-live="polite">
           <div className="mx-auto max-w-6xl">
             <div className="mb-4 flex gap-1 overflow-x-auto sm:hidden" role="tablist" aria-label="Admin views">
-              {(['sessions', 'users', 'activity', 'retention'] as View[]).map(key => <button key={key} type="button" role="tab" aria-selected={view === key} onClick={() => setView(key)} className={`rounded-md px-3 py-1.5 text-xs capitalize ${view === key ? 'bg-brand-500/10 text-brand-300' : 'text-slate-500'}`}>{key}</button>)}
+              {(['sessions', 'users', 'activity', 'retention'] as View[]).map(key => <button key={key} type="button" role="tab" aria-selected={view === key} onClick={() => setView(key)} className={`rounded-md px-3 py-1.5 text-xs capitalize transition-colors ${view === key ? 'bg-brand-500/10 text-brand-300' : 'text-slate-500'}`}>{key}</button>)}
             </div>
             {notice && <div className="mb-3 flex items-center gap-2 rounded-md border border-green-900/50 bg-green-950/30 px-3 py-2 text-xs text-green-300" role="status"><Check className="h-3.5 w-3.5" /> {notice}</div>}
             {error && <div className="mb-3 flex items-center gap-2 rounded-md border border-red-900/60 bg-red-950/30 px-3 py-2 text-xs text-red-300" role="alert"><X className="h-3.5 w-3.5" /> {error.message}</div>}
-            {view === 'sessions' && <SessionsTable sessions={sessions} selected={selectedSession} onSelect={setSelectedSession} onAction={act} />}
-            {view === 'users' && <UsersTable users={users} fingerprint={policyFingerprint} onAction={act} />}
+            {view === 'sessions' && <SessionsTable sessions={sessions} selected={selectedSession} onSelect={setSelectedSession} onAction={act} onRequestAction={request => setConfirmation(request)} />}
+            {view === 'users' && <UsersTable users={users} fingerprint={policyFingerprint} onAction={act} onRequestAction={request => setConfirmation(request)} />}
             {view === 'activity' && <ActivityTable events={activity} />}
-            {view === 'retention' && <RetentionPanel retention={retention} onAction={act} />}
+            {view === 'retention' && <RetentionPanel retention={retention} onAction={act} onRequestAction={request => setConfirmation(request)} />}
           </div>
         </main>
       </div>
-    </div>
+
+      <AnimatePresence initial={false}>
+        {confirmation && <AdminConfirmModal key={`${confirmation.title}:${confirmation.expected}`} request={confirmation} onClose={() => setConfirmation(null)} />}
+      </AnimatePresence>
+    </m.div>
   )
 }
 
-type Action = (path: string, body: Record<string, unknown>, message: string) => Promise<void>
+type Action = (path: string, body: Record<string, unknown>, message: string) => Promise<boolean>
+type RequestAction = (request: AdminConfirmationRequest) => void
 
-function SessionsTable({ sessions, selected, onSelect, onAction }: { sessions: AdminSession[]; selected: AdminSession | null; onSelect: (session: AdminSession | null) => void; onAction: Action }) {
-  return <section aria-labelledby="sessions-title">
-    <div className="mb-3 flex items-end justify-between"><div><h2 id="sessions-title" className="text-base font-semibold">Session inventory</h2><p className="mt-1 text-xs text-slate-500">Active SSH channels only. Instance and generation prevent stale-target actions.</p></div><span className="text-xs text-slate-600">{sessions.length} active</span></div>
-    <div className="overflow-x-auto rounded-lg border border-surface-800 bg-surface-900"><table className="w-full min-w-[820px] text-left text-xs"><caption className="sr-only">Owner-bound active SSH sessions</caption><thead className="border-b border-surface-800 text-[10px] uppercase tracking-wider text-slate-600"><tr><th scope="col" className="px-3 py-2">Owner / target</th><th scope="col" className="px-3 py-2">State</th><th scope="col" className="px-3 py-2">Last activity</th><th scope="col" className="px-3 py-2">Identity</th><th scope="col" className="px-3 py-2 text-right">Controls</th></tr></thead><tbody>{sessions.length === 0 ? <tr><td colSpan={5} className="px-3 py-12 text-center text-slate-600">No active sessions.</td></tr> : sessions.map(session => <tr key={session.session_instance_id} className={`border-b border-surface-800/70 last:border-0 ${selected?.session_instance_id === session.session_instance_id ? 'bg-brand-500/5' : ''}`}><td className="px-3 py-3"><div className="flex items-center gap-2 font-medium text-slate-200"><span className="h-1.5 w-1.5 rounded-full bg-green-400" />{session.owner_ldap_username || 'local'}<button type="button" className="text-left text-slate-500 underline decoration-dotted underline-offset-2 hover:text-brand-300" onClick={() => onSelect(session)}>{session.host}:{session.port}</button></div><div className="mt-1 text-[11px] text-slate-600">SSH account {session.username} · tab {session.tab_id}</div></td><td className="px-3 py-3 text-green-300">Connected</td><td className="px-3 py-3 text-slate-400">{age(session.last_activity)}</td><td className="px-3 py-3 font-mono text-[10px] text-slate-600">gen {session.generation}<br />{session.session_instance_id}</td><td className="px-3 py-3 text-right"><div className="flex justify-end gap-1.5"><button type="button" onClick={() => { const confirmation = window.prompt(`Type INTERRUPT to signal Ctrl+C to ${session.username}@${session.host}`); if (confirmation === 'INTERRUPT') void onAction(`/api/admin/sessions/${encodeURIComponent(session.session_instance_id)}/interrupt`, { generation: session.generation }, 'Interrupt queued.') }} className="rounded border border-amber-900/60 px-2 py-1 text-[11px] text-amber-300 hover:bg-amber-950/40">Interrupt</button><button type="button" onClick={() => { const confirmation = window.prompt(`Type KICK to close ${session.owner_ldap_username} ${session.host}`); if (confirmation === 'KICK') void onAction(`/api/admin/sessions/${encodeURIComponent(session.session_instance_id)}/kick`, { generation: session.generation }, 'Session closed.') }} className="rounded border border-red-900/60 px-2 py-1 text-[11px] text-red-300 hover:bg-red-950/40">Kick</button></div></td></tr>)}</tbody></table></div>
-    {selected && <aside className="mt-3 rounded-lg border border-brand-900/50 bg-brand-950/10 p-4" aria-label="Session details"><div className="flex items-start justify-between"><div><h3 className="text-sm font-semibold">Session details</h3><p className="mt-1 text-xs text-slate-500">Stable target identity for action confirmation.</p></div><button type="button" onClick={() => onSelect(null)} className="text-slate-500 hover:text-slate-200" aria-label="Close session details">×</button></div><dl className="mt-3 grid gap-2 text-xs sm:grid-cols-2"><div><dt className="text-slate-600">Owner</dt><dd>{selected.owner_ldap_username || 'local'}</dd></div><div><dt className="text-slate-600">Target</dt><dd>{selected.host}:{selected.port}</dd></div><div><dt className="text-slate-600">SSH account</dt><dd>{selected.username}</dd></div><div><dt className="text-slate-600">Session instance</dt><dd className="font-mono text-[10px]">{selected.session_instance_id}</dd></div></dl></aside>}
-  </section>
+function SessionsTable({ sessions, selected, onSelect, onAction, onRequestAction }: { sessions: AdminSession[]; selected: AdminSession | null; onSelect: (session: AdminSession | null) => void; onAction: Action; onRequestAction: RequestAction }) {
+  return (
+    <section aria-labelledby="sessions-title">
+      <div className="mb-3 flex items-end justify-between">
+        <div>
+          <h2 id="sessions-title" className="text-base font-semibold">Session inventory</h2>
+          <p className="mt-1 text-xs text-slate-500">Active SSH channels only. Instance and generation prevent stale-target actions.</p>
+        </div>
+        <span className="text-xs text-slate-600">{sessions.length} active</span>
+      </div>
+      <div className="overflow-x-auto rounded-lg border border-surface-800 bg-surface-900">
+        <table className="w-full min-w-[820px] text-left text-xs">
+          <caption className="sr-only">Owner-bound active SSH sessions</caption>
+          <thead className="border-b border-surface-800 text-[10px] uppercase tracking-wider text-slate-600">
+            <tr><th scope="col" className="px-3 py-2">Owner / target</th><th scope="col" className="px-3 py-2">State</th><th scope="col" className="px-3 py-2">Last activity</th><th scope="col" className="px-3 py-2">Identity</th><th scope="col" className="px-3 py-2 text-right">Controls</th></tr>
+          </thead>
+          <tbody>
+            {sessions.length === 0
+              ? <tr><td colSpan={5} className="px-3 py-12 text-center text-slate-600">No active sessions.</td></tr>
+              : sessions.map(session => (
+                <tr key={session.session_instance_id} className={`border-b border-surface-800/70 last:border-0 ${selected?.session_instance_id === session.session_instance_id ? 'bg-brand-500/5' : ''}`}>
+                  <td className="px-3 py-3">
+                    <div className="flex items-center gap-2 font-medium text-slate-200">
+                      <span className="h-1.5 w-1.5 rounded-full bg-green-400" />
+                      {session.owner_ldap_username || 'local'}
+                      <button type="button" className="text-left text-slate-500 underline decoration-dotted underline-offset-2 transition-colors hover:text-brand-300" onClick={() => onSelect(session)}>{session.host}:{session.port}</button>
+                    </div>
+                    <div className="mt-1 text-[11px] text-slate-600">SSH account {session.username} · tab {session.tab_id}</div>
+                  </td>
+                  <td className="px-3 py-3 text-green-300">Connected</td>
+                  <td className="px-3 py-3 text-slate-400">{age(session.last_activity)}</td>
+                  <td className="px-3 py-3 font-mono text-[10px] text-slate-600">gen {session.generation}<br />{session.session_instance_id}</td>
+                  <td className="px-3 py-3 text-right">
+                    <div className="flex justify-end gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => onRequestAction({
+                          title: 'Interrupt SSH session?',
+                          description: `Send Ctrl+C to ${session.username}@${session.host}. This signals the current foreground process; it does not guarantee remote process termination.`,
+                          expected: 'INTERRUPT',
+                          confirmLabel: 'Send interrupt',
+                          action: async () => { await onAction(`/api/admin/sessions/${encodeURIComponent(session.session_instance_id)}/interrupt`, { generation: session.generation }, 'Interrupt queued.') },
+                        })}
+                        className="rounded border border-amber-900/60 px-2 py-1 text-[11px] text-amber-300 transition-colors hover:bg-amber-950/40"
+                      >Interrupt</button>
+                      <button
+                        type="button"
+                        onClick={() => onRequestAction({
+                          title: 'Close SSH session?',
+                          description: `Disconnect ${session.owner_ldap_username || 'local user'} from ${session.host}.`,
+                          expected: 'KICK',
+                          confirmLabel: 'Close session',
+                          destructive: true,
+                          action: async () => { await onAction(`/api/admin/sessions/${encodeURIComponent(session.session_instance_id)}/kick`, { generation: session.generation }, 'Session closed.') },
+                        })}
+                        className="rounded border border-red-900/60 px-2 py-1 text-[11px] text-red-300 transition-colors hover:bg-red-950/40"
+                      >Kick</button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+          </tbody>
+        </table>
+      </div>
+      {selected && (
+        <aside className="mt-3 rounded-lg border border-brand-900/50 bg-brand-950/10 p-4" aria-label="Session details">
+          <div className="flex items-start justify-between">
+            <div><h3 className="text-sm font-semibold">Session details</h3><p className="mt-1 text-xs text-slate-500">Stable target identity for action confirmation.</p></div>
+            <button type="button" onClick={() => onSelect(null)} className="text-slate-500 transition-colors hover:text-slate-200" aria-label="Close session details">×</button>
+          </div>
+          <dl className="mt-3 grid gap-2 text-xs sm:grid-cols-2">
+            <div><dt className="text-slate-600">Owner</dt><dd>{selected.owner_ldap_username || 'local'}</dd></div>
+            <div><dt className="text-slate-600">Target</dt><dd>{selected.host}:{selected.port}</dd></div>
+            <div><dt className="text-slate-600">SSH account</dt><dd>{selected.username}</dd></div>
+            <div><dt className="text-slate-600">Session instance</dt><dd className="font-mono text-[10px]">{selected.session_instance_id}</dd></div>
+          </dl>
+        </aside>
+      )}
+    </section>
+  )
 }
 
-function UsersTable({ users, fingerprint, onAction }: { users: AdminUser[]; fingerprint: string; onAction: Action }) {
-  return <section aria-labelledby="users-title"><div className="mb-3"><h2 id="users-title" className="text-base font-semibold">Users & policy</h2><p className="mt-1 text-xs text-slate-500">Allowlist changes use a fingerprinted atomic update and require restart. Disable also revokes cookies and active tabs.</p></div><div className="overflow-x-auto rounded-lg border border-surface-800 bg-surface-900"><table className="w-full min-w-[620px] text-left text-xs"><caption className="sr-only">LDAP users and policy state</caption><thead className="border-b border-surface-800 text-[10px] uppercase tracking-wider text-slate-600"><tr><th scope="col" className="px-3 py-2">Identity</th><th scope="col" className="px-3 py-2">Active sessions</th><th scope="col" className="px-3 py-2">Policy</th><th scope="col" className="px-3 py-2 text-right">Action</th></tr></thead><tbody>{users.length === 0 ? <tr><td colSpan={4} className="px-3 py-12 text-center text-slate-600">No configured users observed.</td></tr> : users.map(user => <tr key={user.username} className="border-b border-surface-800/70 last:border-0"><td className="px-3 py-3 font-medium">{user.username}</td><td className="px-3 py-3 text-slate-400">{user.active_sessions}</td><td className="px-3 py-3 text-amber-300">{user.policy_state}</td><td className="px-3 py-3 text-right">{user.policy_state === 'pending_disable' ? <button type="button" onClick={() => void onAction(`/api/admin/users/${encodeURIComponent(user.username)}/enable`, { expected_fingerprint: fingerprint }, 'Enable queued for restart.')} className="rounded border border-green-900/60 px-2 py-1 text-[11px] text-green-300 hover:bg-green-950/40">Enable</button> : <button type="button" onClick={() => { const confirmation = window.prompt(`Type DISABLE ${user.username} to revoke this user`); if (confirmation === `DISABLE ${user.username}`) void onAction(`/api/admin/users/${encodeURIComponent(user.username)}/disable`, { expected_fingerprint: fingerprint }, 'Disable queued; active sessions revoked.') }} className="rounded border border-red-900/60 px-2 py-1 text-[11px] text-red-300 hover:bg-red-950/40">Disable</button>}</td></tr>)}</tbody></table></div></section>
+
+function UsersTable({ users, fingerprint, onAction, onRequestAction }: { users: AdminUser[]; fingerprint: string; onAction: Action; onRequestAction: RequestAction }) {
+  return (
+    <section aria-labelledby="users-title">
+      <div className="mb-3">
+        <h2 id="users-title" className="text-base font-semibold">Users & policy</h2>
+        <p className="mt-1 text-xs text-slate-500">Allowlist changes use a fingerprinted atomic update and require restart. Disable also revokes cookies and active tabs.</p>
+      </div>
+      <div className="overflow-x-auto rounded-lg border border-surface-800 bg-surface-900">
+        <table className="w-full min-w-[620px] text-left text-xs">
+          <caption className="sr-only">LDAP users and policy state</caption>
+          <thead className="border-b border-surface-800 text-[10px] uppercase tracking-wider text-slate-600"><tr><th scope="col" className="px-3 py-2">Identity</th><th scope="col" className="px-3 py-2">Active sessions</th><th scope="col" className="px-3 py-2">Policy</th><th scope="col" className="px-3 py-2 text-right">Action</th></tr></thead>
+          <tbody>
+            {users.length === 0
+              ? <tr><td colSpan={4} className="px-3 py-12 text-center text-slate-600">No configured users observed.</td></tr>
+              : users.map(user => (
+                <tr key={user.username} className="border-b border-surface-800/70 last:border-0">
+                  <td className="px-3 py-3 font-medium">{user.username}</td>
+                  <td className="px-3 py-3 text-slate-400">{user.active_sessions}</td>
+                  <td className="px-3 py-3 text-amber-300">{user.policy_state}</td>
+                  <td className="px-3 py-3 text-right">
+                    {user.policy_state === 'pending_disable'
+                      ? <button type="button" onClick={() => onRequestAction({ title: 'Enable LDAP user?', description: `Queue ${user.username} for re-enable. The policy change takes effect after restart.`, expected: `ENABLE ${user.username}`, confirmLabel: 'Enable user', action: async () => { await onAction(`/api/admin/users/${encodeURIComponent(user.username)}/enable`, { expected_fingerprint: fingerprint }, 'Enable queued for restart.') } })} className="rounded border border-green-900/60 px-2 py-1 text-[11px] text-green-300 transition-colors hover:bg-green-950/40">Enable</button>
+                      : <button type="button" onClick={() => onRequestAction({ title: 'Disable LDAP user?', description: `Revoke ${user.username}'s cookies and active tabs, then queue the policy change for restart.`, expected: `DISABLE ${user.username}`, confirmLabel: 'Disable user', destructive: true, action: async () => { await onAction(`/api/admin/users/${encodeURIComponent(user.username)}/disable`, { expected_fingerprint: fingerprint }, 'Disable queued; active sessions revoked.') } })} className="rounded border border-red-900/60 px-2 py-1 text-[11px] text-red-300 transition-colors hover:bg-red-950/40">Disable</button>}
+                  </td>
+                </tr>
+              ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  )
 }
 
 function ActivityTable({ events }: { events: ActivityEvent[] }) {
-  return <section aria-labelledby="activity-title"><div className="mb-3"><h2 id="activity-title" className="text-base font-semibold">Submitted-input metadata</h2><p className="mt-1 text-xs text-slate-500">Command text and terminal bytes are never displayed here.</p></div><div className="overflow-x-auto rounded-lg border border-surface-800 bg-surface-900"><table className="w-full min-w-[760px] text-left text-xs"><caption className="sr-only">Metadata for completed terminal input events</caption><thead className="border-b border-surface-800 text-[10px] uppercase tracking-wider text-slate-600"><tr><th scope="col" className="px-3 py-2">When</th><th scope="col" className="px-3 py-2">Actor</th><th scope="col" className="px-3 py-2">Target</th><th scope="col" className="px-3 py-2">Kind</th><th scope="col" className="px-3 py-2 text-right">Bytes</th></tr></thead><tbody>{events.length === 0 ? <tr><td colSpan={5} className="px-3 py-12 text-center text-slate-600">No submitted input events.</td></tr> : events.map(event => <tr key={event.event_id} className="border-b border-surface-800/70 last:border-0"><td className="px-3 py-3 text-slate-400">{new Date(event.occurred_at).toLocaleString()}</td><td className="px-3 py-3">{event.ldap_username}</td><td className="px-3 py-3">{event.ssh_host || '—'}:{event.ssh_port || '—'} <span className="text-slate-600">({event.ssh_username || '—'})</span></td><td className="px-3 py-3 text-slate-400">{event.kind}</td><td className="px-3 py-3 text-right text-slate-400">{event.bytes}</td></tr>)}</tbody></table></div></section>
+  return (
+    <section aria-labelledby="activity-title">
+      <div className="mb-3">
+        <h2 id="activity-title" className="text-base font-semibold">Submitted input</h2>
+        <p className="mt-1 text-xs text-slate-500">Completed terminal input is shown exactly as captured. Terminal output and SSH connection passwords are not recorded.</p>
+      </div>
+      <div className="overflow-x-auto rounded-lg border border-surface-800 bg-surface-900">
+        <table className="w-full min-w-[980px] text-left text-xs">
+          <caption className="sr-only">Submitted terminal input events</caption>
+          <thead className="border-b border-surface-800 text-[10px] uppercase tracking-wider text-slate-600"><tr><th scope="col" className="px-3 py-2">When</th><th scope="col" className="px-3 py-2">Actor</th><th scope="col" className="px-3 py-2">Target</th><th scope="col" className="px-3 py-2">Input</th><th scope="col" className="px-3 py-2">Kind</th><th scope="col" className="px-3 py-2 text-right">Bytes</th></tr></thead>
+          <tbody>
+            {events.length === 0
+              ? <tr><td colSpan={6} className="px-3 py-12 text-center text-slate-600">No submitted input events.</td></tr>
+              : events.map(event => (
+                <tr key={event.event_id} className="border-b border-surface-800/70 last:border-0">
+                  <td className="whitespace-nowrap px-3 py-3 text-slate-400">{new Date(event.occurred_at).toLocaleString()}</td>
+                  <td className="px-3 py-3">{event.ldap_username}</td>
+                  <td className="px-3 py-3">{event.ssh_host || '—'}:{event.ssh_port || '—'} <span className="text-slate-600">({event.ssh_username || '—'})</span></td>
+                  <td className="max-w-[32rem] whitespace-pre-wrap break-words px-3 py-3 font-mono text-[11px] text-slate-200">{event.input || '—'}</td>
+                  <td className="px-3 py-3 text-slate-400">{event.kind}</td>
+                  <td className="px-3 py-3 text-right text-slate-400">{event.bytes}</td>
+                </tr>
+              ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  )
 }
 
-function RetentionPanel({ retention, onAction }: { retention: RetentionInfo | null; onAction: Action }) {
+function RetentionPanel({ retention, onAction, onRequestAction }: { retention: RetentionInfo | null; onAction: Action; onRequestAction: RequestAction }) {
   const [days, setDays] = useState(retention?.cutoff_days || 30)
-  return <section aria-labelledby="retention-title" className="max-w-xl"><h2 id="retention-title" className="text-base font-semibold">Manual audit cleanup</h2><p className="mt-1 text-xs leading-relaxed text-slate-500">Only terminal input rows older than the cutoff are deleted. Durable admin action records remain.</p><label className="mt-5 block text-xs text-slate-400" htmlFor="retention-days">Retention age in days</label><input id="retention-days" type="number" min={7} max={3650} value={days} onChange={event => setDays(Number(event.target.value))} className="mt-1 w-32 rounded border border-surface-700 bg-surface-900 px-2 py-1.5 text-sm" /><div className="mt-4 rounded border border-surface-800 bg-surface-900 p-3 text-xs text-slate-400">Eligible rows: <strong className="text-slate-200">{retention?.eligible_count ?? '—'}</strong><br />Minimum age: {retention?.minimum_age_days ?? 7} days<br />Admin records retained: yes</div><button type="button" onClick={() => { const confirmation = window.prompt(`Type PURGE to delete terminal rows older than ${days} days`); if (confirmation === 'PURGE') void onAction('/api/admin/retention/purge', { older_than_days: days, confirmation }, 'Terminal audit rows purged; admin actions retained.') }} className="mt-4 rounded border border-red-900/60 px-3 py-2 text-xs text-red-300 hover:bg-red-950/40">Purge eligible terminal rows</button></section>
+  return (
+    <section aria-labelledby="retention-title" className="max-w-xl">
+      <h2 id="retention-title" className="text-base font-semibold">Manual audit cleanup</h2>
+      <p className="mt-1 text-xs leading-relaxed text-slate-500">Only terminal input rows older than the cutoff are deleted. Durable admin action records remain.</p>
+      <label className="mt-5 block text-xs text-slate-400" htmlFor="retention-days">Retention age in days</label>
+      <input id="retention-days" type="number" min={7} max={3650} value={days} onChange={event => setDays(Number(event.target.value))} className="mt-1 w-32 rounded border border-surface-700 bg-surface-900 px-2 py-1.5 text-sm text-slate-200 outline-none focus:border-brand-500" />
+      <div className="mt-4 rounded border border-surface-800 bg-surface-900 p-3 text-xs text-slate-400">Eligible rows: <strong className="text-slate-200">{retention?.eligible_count ?? '—'}</strong><br />Minimum age: {retention?.minimum_age_days ?? 7} days<br />Admin records retained: yes</div>
+      <button type="button" onClick={() => onRequestAction({ title: 'Purge audit rows?', description: `Delete terminal input rows older than ${days} days. Durable admin action records remain.`, expected: 'PURGE', confirmLabel: 'Purge rows', destructive: true, action: async () => { await onAction('/api/admin/retention/purge', { older_than_days: days, confirmation: 'PURGE' }, 'Terminal audit rows purged; admin actions retained.') } })} className="mt-4 rounded border border-red-900/60 px-3 py-2 text-xs text-red-300 transition-colors hover:bg-red-950/40">Purge eligible terminal rows</button>
+    </section>
+  )
 }

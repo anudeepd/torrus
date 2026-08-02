@@ -154,7 +154,7 @@ function SaveSessionDialog({ state, onSave, onClose }: {
 export default function TabBar({ onAddTab, onCloseTab, onCloneTab, onOpenSftpTab, onDuplicateTab, onCloseAllTabs, onOpenSettings, onOpenAdmin, onOpenSplitPicker, onOpenBroadcastPicker, onExitSplit, onSetActiveTab, inSplitMode, compactSidebar = false, sidebarOpen = false, onToggleSidebar, onOpenCommandPalette }: TabBarProps) {
   const { tabs, activeTabId, renameTab } = useTerminalStore()
   const addServer = useSavedServerStore(s => s.addServer)
-  const ldapEnabled = useServerConfigStore(s => s.ldapEnabled)
+  const { ldapEnabled, isAdmin } = useServerConfigStore()
   const { enabled: broadcastEnabled } = useBroadcastStore()
   const connectedCount = useMemo(() => tabs.filter(t => t.type === 'terminal' && t.status === 'connected').length, [tabs])
   const [editingTabId, setEditingTabId] = useState<string | null>(null)
@@ -414,7 +414,7 @@ export default function TabBar({ onAddTab, onCloseTab, onCloneTab, onOpenSftpTab
       >
         <Settings className="w-3.5 h-3.5" />
       </button>}
-      {ldapEnabled && (
+      {ldapEnabled && isAdmin && (
         <button
           onClick={() => onOpenAdmin?.()}
           title="Admin console"

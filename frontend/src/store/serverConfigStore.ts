@@ -3,12 +3,14 @@ import { redirectToLdapLogin } from '@/utils/authRedirect'
 
 interface ServerConfigState {
   ldapEnabled: boolean
+  isAdmin: boolean
   ldapIdleTimeout: number
   load: () => Promise<void>
 }
 
 export const useServerConfigStore = create<ServerConfigState>((set) => ({
   ldapEnabled: false,
+  isAdmin: false,
   ldapIdleTimeout: 0,
   load: async () => {
     const controller = new AbortController()
@@ -25,6 +27,7 @@ export const useServerConfigStore = create<ServerConfigState>((set) => ({
       const idleTimeout = Number(config.ldap_idle_timeout)
       set({
         ldapEnabled: Boolean(config.ldap_enabled),
+        isAdmin: Boolean(config.is_admin),
         ldapIdleTimeout: Number.isFinite(idleTimeout) ? Math.max(0, idleTimeout) : 0,
       })
     } catch {

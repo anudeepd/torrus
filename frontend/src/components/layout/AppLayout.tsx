@@ -15,7 +15,6 @@ import SettingsDialog from '@/components/settings/SettingsDialog'
 import Logo from '@/components/ui/Logo'
 import AuthRedirectOverlay from '@/components/ui/AuthRedirectOverlay'
 import CommandPalette from '@/components/ui/CommandPalette'
-import AdminConsole from '@/components/admin/AdminConsole'
 import { useModalFocus } from '@/hooks/useModalFocus'
 import { AUTH_REDIRECT_EVENT, redirectToLdapLogin } from '@/utils/authRedirect'
 import type { PaneNode } from '@/store/layoutStore'
@@ -96,7 +95,6 @@ export default function AppLayout() {
     return () => window.removeEventListener('keydown', closeOnEscape)
   }, [isCompactViewport, sidebarOpen])
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const [adminOpen, setAdminOpen] = useState(false)
   const [splitPickerOpen, setSplitPickerOpen] = useState(false)
   const [broadcastPickerOpen, setBroadcastPickerOpen] = useState(false)
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
@@ -500,7 +498,6 @@ export default function AppLayout() {
   return (
     <div className="flex h-full bg-surface-950">
       <AuthRedirectOverlay />
-      {adminOpen && <AdminConsole onClose={() => setAdminOpen(false)} />}
       <AnimatePresence initial={false}>
         {(!isCompactViewport || sidebarOpen) && (
           <SessionSidebar
@@ -529,7 +526,7 @@ export default function AppLayout() {
           onDuplicateTab={handleDuplicateTab}
           onCloseAllTabs={handleCloseAllTabs}
           onOpenSettings={() => setSettingsOpen(true)}
-          onOpenAdmin={() => setAdminOpen(true)}
+          onOpenAdmin={() => window.location.assign('/admin')}
           onOpenSplitPicker={() => setSplitPickerOpen(true)}
           onOpenBroadcastPicker={() => setBroadcastPickerOpen(true)}
           onExitSplit={() => { exitSplitMode(); setSplitOwnedByBroadcast(false) }}

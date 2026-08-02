@@ -270,15 +270,17 @@ async def favicon():
 
 
 @fastapi_app.get("/api/config", include_in_schema=False)
-async def api_config():
+async def api_config(request: Request):
     ldap_enabled = bool(os.getenv("TORRUS_LDAP_CONFIG"))
     idle_timeout = _safe_int(
         getattr(getattr(_ldap_config, "proxy", None), "idle_timeout", 0),
         0,
     )
+    owner = _http_owner(request)
     return {
         "ldap_enabled": ldap_enabled,
         "ldap_idle_timeout": max(0, idle_timeout) if ldap_enabled else 0,
+        "is_admin": bool(owner and owner.casefold() in _ADMIN_USERS),
     }
 
 
@@ -608,6 +610,14 @@ async def admin_sessions(request: Request):
     return {"items": page, "next_cursor": next_cursor, "observed_at": time.time()}
 
 
+def _display_audit_input(value: bytes | str | None) -> str:
+    raw = (
+        value.decode("utf-8", errors="replace")
+        if isinstance(value, (bytes, bytearray))
+        else str(value or "")
+    )
+    return audit_store.strip_escape(raw).replace("\r", "↵").replace("\n", "↵")
+
 @fastapi_app.get("/api/admin/activity", include_in_schema=False)
 async def admin_activity(request: Request):
     _actor, error = await _admin_guard(request)
@@ -624,7 +634,6 @@ async def admin_activity(request: Request):
         since=request.query_params.get("since") or None,
         limit=limit,
     )
-    # Deliberately omit input bytes. Admin view is metadata-only.
     return {
         "items": [
             {
@@ -637,6 +646,7 @@ async def admin_activity(request: Request):
                 "ssh_port": event["ssh_port"],
                 "ssh_username": event["ssh_username"],
                 "kind": event.get("event_kind", "terminal_input"),
+                "input": _display_audit_input(event.get("input_data")),
                 "bytes": len(event["input_data"] or b""),
             }
             for event in events
@@ -1290,7 +1300,7 @@ def _verify_ldap_socket_session(environ) -> str | None:
 
 @sio.on("admin:subscribe")
 async def on_admin_subscribe(sid, data):
-    """Subscribe an authenticated admin to metadata-only state updates."""
+    """Subscribe an authenticated admin to bounded state updates."""
     username = None
     if _ldap_enabled:
         username = _verify_ldap_socket_session(sio.get_environ(sid))

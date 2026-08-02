@@ -3,6 +3,7 @@ import type { Socket } from 'socket.io-client'
 import { useSFTPStore } from '@/store/sftpStore'
 import { useTerminalStore } from '@/store/terminalStore'
 import type { SFTPEntry, SFTPGroup, SFTPUser } from '@/types'
+import { uuid } from '@/utils/uuid'
 
 // Keep inline Socket.IO downloads below server memory/message limits. Larger
 // files automatically use streaming HTTP; users do not need to choose a path.
@@ -552,8 +553,7 @@ export function useSFTP(tabId: string, sourceTabId: string | undefined, socket: 
       pendingUploadsRef.current.set(transferId, {
         file,
         remotePath: joinPath(currentPath, file.name),
-        uploadId: globalThis.crypto?.randomUUID?.().replace(/-/g, '')
-          ?? `${Date.now()}${Math.random().toString(36).slice(2)}`,
+        uploadId: uuid().replace(/-/g, ''),
         offset: 0,
       })
       return transferId

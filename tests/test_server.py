@@ -12,6 +12,59 @@ def test_dev_socket_origins_allow_local_torrus_server():
     assert "http://127.0.0.1:8080" in origins
 
 
+class TestServerConfig:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("owner", "expected"),
+        [("alice", True), ("bob", False), (None, False)],
+    )
+    async def test_api_config_reports_admin_status(self, monkeypatch, owner, expected):
+        import torrus.server as server_module
+
+        monkeypatch.setenv("TORRUS_LDAP_CONFIG", "/tmp/ldapgate.yaml")
+        monkeypatch.setattr(server_module, "_ADMIN_USERS", {"alice"})
+        monkeypatch.setattr(server_module, "_http_owner", lambda _request: owner)
+
+        config = await server_module.api_config(MagicMock())
+
+        assert config["ldap_enabled"] is True
+        assert config["is_admin"] is expected
+
+    @pytest.mark.asyncio
+    async def test_admin_activity_includes_readable_submitted_input(self, monkeypatch):
+        import torrus.server as server_module
+
+        request = MagicMock()
+        request.query_params.get.side_effect = lambda name, default=None: (
+            "100" if name == "limit" else None
+        )
+        monkeypatch.setattr(
+            server_module,
+            "_admin_guard",
+            AsyncMock(return_value=("alice", None)),
+        )
+        monkeypatch.setattr(
+            server_module.audit_store,
+            "list_terminal_input_events",
+            lambda **_kwargs: [{
+                "id": 1,
+                "occurred_at": "2026-08-02T00:00:00+00:00",
+                "ldap_username": "alice",
+                "session_id": "sess",
+                "tab_id": "tab",
+                "ssh_host": "example.com",
+                "ssh_port": 22,
+                "ssh_username": "root",
+                "event_kind": "command",
+                "input_data": b"ls -la\r",
+            }],
+        )
+
+        result = await server_module.admin_activity(request)
+
+        assert result["items"][0]["input"] == "ls -la↵"
+
+
 class TestValidIdChecks:
     """Ensure malformed session/tab IDs are rejected at the handler level."""
 

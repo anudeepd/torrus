@@ -11,7 +11,7 @@ describe('TabBar', () => {
     cleanup()
     useTerminalStore.setState({ tabs: [], activeTabId: null })
     useBroadcastStore.setState({ enabled: false, excludedTabIds: [] })
-    useServerConfigStore.setState({ ldapEnabled: false })
+    useServerConfigStore.setState({ ldapEnabled: false, isAdmin: false })
   })
 
   it('prevents the right-button press from selecting tab text', () => {
@@ -92,4 +92,31 @@ describe('TabBar', () => {
     expect(tabList.scrollLeft).toBe(80)
     frame.mockRestore()
   })
+  it('shows the admin console button only to admin users', () => {
+    const props = {
+      onAddTab: () => {},
+      onCloseTab: () => {},
+      onCloneTab: () => {},
+      onOpenSftpTab: () => {},
+      onDuplicateTab: () => {},
+      onCloseAllTabs: () => {},
+      onOpenSettings: () => {},
+      onOpenAdmin: () => {},
+      onOpenSplitPicker: () => {},
+      onOpenBroadcastPicker: () => {},
+      onExitSplit: () => {},
+      onSetActiveTab: () => {},
+      inSplitMode: false,
+    }
+
+    useServerConfigStore.setState({ ldapEnabled: true, isAdmin: false })
+    const { unmount } = render(<TabBar {...props} />)
+    expect(screen.queryByRole('button', { name: 'Admin console' })).not.toBeInTheDocument()
+
+    unmount()
+    useServerConfigStore.setState({ ldapEnabled: true, isAdmin: true })
+    render(<TabBar {...props} />)
+    expect(screen.getByRole('button', { name: 'Admin console' })).toBeInTheDocument()
+  })
 })
+

@@ -16,7 +16,7 @@
 - **Saved servers** — save, edit, import, and export connection configs
 - **Works behind reverse proxies** — uses Socket.IO for reliable transport
 - **Session sidebar** — quick-connect to saved servers
-- **Admin console** — LDAP-admin session inventory, owner-bound controls, and metadata-only activity view
+- **Admin console** — LDAP-admin session inventory, owner-bound controls, and submitted-input activity view
 - **LDAP/AD authentication** — optional, via [ldapgate](https://github.com/anudeepd/ldapgate)
 
 ## Install
@@ -75,6 +75,8 @@ torrus audit purge --older-than 90
 `audit show` escapes control characters so viewing an event cannot replay its
 terminal escape sequences. Restrict access to the audit database: raw input may
 include commands, secrets pasted at a prompt, and other sensitive content.
+
+The Admin Console's **Submitted input** view displays completed command events to authorized admins; treat it as sensitive.
 
 ## Development
 

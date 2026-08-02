@@ -7,7 +7,7 @@
   - **Why:** Preserve incident context outside in-app retention windows and support handoff.
   - **Pros:** Better evidence review, collaboration, and post-incident reconstruction.
   - **Cons:** Adds sensitive-data export authorization, redaction, format, and retention obligations.
-  - **Context:** Baseline admin console provides bounded activity and durable mutation events only. Start after `event_kind` migration and redaction policy stabilize.
+  - **Context:** Baseline admin console provides bounded submitted-input and durable mutation events. Start after `event_kind` migration and redaction policy stabilize.
   - **Effort:** M human team → S with CC+gstack.
   - **Depends on / blocked by:** Stable admin-event schema and approved export policy.
 

@@ -39,9 +39,10 @@ def test_api_config_exposes_ldap_idle_timeout(monkeypatch):
         types.SimpleNamespace(proxy=types.SimpleNamespace(idle_timeout=900)),
     )
 
-    assert asyncio.run(api_config()) == {
+    assert asyncio.run(api_config(types.SimpleNamespace(scope={}, client=None))) == {
         "ldap_enabled": True,
         "ldap_idle_timeout": 900,
+        "is_admin": False,
     }
 
 
