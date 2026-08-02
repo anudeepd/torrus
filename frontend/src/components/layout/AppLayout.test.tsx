@@ -5,7 +5,10 @@ import { createMockSocket } from '@/test/mocks/socket'
 import { useTerminalStore } from '@/store/terminalStore'
 import { AUTH_REDIRECT_EVENT } from '@/utils/authRedirect'
 
-async function renderAppLayout({ strict = false }: { strict?: boolean } = {}) {
+async function renderAppLayout({
+  strict = false,
+  navigateToAdmin,
+}: { strict?: boolean; navigateToAdmin?: () => void } = {}) {
   vi.resetModules()
 
   const socket = createMockSocket()
@@ -21,10 +24,19 @@ async function renderAppLayout({ strict = false }: { strict?: boolean } = {}) {
     redirectToLdapLoginNow: vi.fn(),
   }))
   vi.doMock('./TabBar', () => ({
-    default: ({ onCloseAllTabs, onCloseTab }: { onCloseAllTabs: () => void; onCloseTab: (tabId: string) => void }) => (
+    default: ({
+      onCloseAllTabs,
+      onCloseTab,
+      onOpenAdmin,
+    }: {
+      onCloseAllTabs: () => void
+      onCloseTab: (tabId: string) => void
+      onOpenAdmin?: () => void
+    }) => (
       <>
         <button type="button" data-testid="tabbar" onClick={onCloseAllTabs}>Close All</button>
         <button type="button" data-testid="close-tab" onClick={() => onCloseTab('terminal-tab')}>Close Tab</button>
+        <button type="button" data-testid="open-admin" onClick={() => onOpenAdmin?.()}>Admin</button>
       </>
     ),
   }))
@@ -39,7 +51,7 @@ async function renderAppLayout({ strict = false }: { strict?: boolean } = {}) {
   }))
 
   const { default: AppLayout } = await import('./AppLayout')
-  render(strict ? <StrictMode><AppLayout /></StrictMode> : <AppLayout />)
+  render(strict ? <StrictMode><AppLayout navigateToAdmin={navigateToAdmin} /></StrictMode> : <AppLayout navigateToAdmin={navigateToAdmin} />)
 
     await waitFor(() => {
       expect(socket.on).toHaveBeenCalledWith('ssh:error', expect.any(Function))
@@ -132,6 +144,33 @@ describe('AppLayout LDAP auth handling', () => {
     const allowed = window.dispatchEvent(event)
 
     expect(allowed).toBe(true)
+    expect(event.defaultPrevented).toBe(false)
+  })
+
+  it('does not show the active-session unload warning when opening admin', async () => {
+    useTerminalStore.setState({
+      sessionId: 'test-session',
+      tabs: [{
+        id: 'tab-1',
+        type: 'terminal',
+        host: 'localhost',
+        port: 22,
+        username: 'alice',
+        label: null,
+        status: 'connected',
+        sessionKey: 'test-session:tab-1',
+      }],
+      activeTabId: 'tab-1',
+    })
+
+    const navigateToAdmin = vi.fn()
+    await renderAppLayout({ navigateToAdmin })
+    fireEvent.click(screen.getByTestId('open-admin'))
+
+    const event = new Event('beforeunload', { cancelable: true })
+    window.dispatchEvent(event)
+
+    expect(navigateToAdmin).toHaveBeenCalledOnce()
     expect(event.defaultPrevented).toBe(false)
   })
 

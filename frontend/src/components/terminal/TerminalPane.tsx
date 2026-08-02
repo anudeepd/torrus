@@ -30,6 +30,23 @@ const TERMINAL_REPLY_SEQUENCE = new RegExp(
   `${ANSI_ESCAPE}(?:\\[(?:\\?|>|!|=)?[0-9;]*[cRn]|\\][0-9;]*(?:;[^${ANSI_ESCAPE}\\x07]*)?(?:\\x07|${ANSI_ESCAPE}\\\\))`,
   'g'
 )
+const ANSI_OSC_PATTERN = new RegExp(
+  `${ANSI_ESCAPE}\\][^\\x07]*(?:\\x07|${ANSI_ESCAPE}\\\\)`,
+  'g',
+)
+const ANSI_CSI_PATTERN = new RegExp(`${ANSI_ESCAPE}\\[[0-?]*[ -/]*[@-~]`, 'g')
+
+function stripTerminalFormatting(data: string): string {
+  return data.replace(ANSI_OSC_PATTERN, '').replace(ANSI_CSI_PATTERN, '')
+}
+
+const SENSITIVE_PROMPT_PATTERN = /^(?:\[[^\]\r\n]*\]\s*)?(?:(?:enter|type|provide)\s+)?(?:sudo\s+)?(?:password|passphrase|passcode|pin|otp|one[- ]time password|verification code|security token|token|secret)(?:\s+for\b[^:\r\n]{0,80})?\s*[:?]\s*$/i
+
+function isSensitivePrompt(data: string): boolean {
+  const lastLine = stripTerminalFormatting(data).split(/[\r\n]/).pop()?.trim() ?? ''
+  return lastLine.length > 0 && lastLine.length <= 160 && SENSITIVE_PROMPT_PATTERN.test(lastLine)
+}
+
 const RESTORE_INPUT_SUPPRESSION_MS = 800
 const CONNECT_TIMEOUT_MS = 25_000
 
@@ -125,8 +142,18 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
   const [findResult, setFindResult] = useState<boolean | null>(null)
   // Suppress xterm onData during session restore to prevent terminal query
   // responses (OSC 11, DSR, DA) from being echoed back to the remote shell
-  const suppressInputRef = useRef(true)
+  const sensitiveInputPendingRef = useRef(false)
+  const sensitiveOutputTailRef = useRef('')
+  const suppressInputRef = useRef(false)
   const suppressInputTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const noteSensitivePrompt = useCallback((output: string) => {
+    const visible = stripTerminalFormatting(output)
+    sensitiveOutputTailRef.current = `${sensitiveOutputTailRef.current}${visible}`.slice(-200)
+    if (isSensitivePrompt(sensitiveOutputTailRef.current)) {
+      sensitiveInputPendingRef.current = true
+    }
+  }, [])
   const connectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // Tracks actual xterm.js keyboard focus — only the focused terminal broadcasts.
   // Prevents other panes' DA/DSR escape responses from leaking into all terminals.
@@ -178,16 +205,23 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
     const currentTab = useTerminalStore.getState().tabs.find(t => t.id === tabId)
     if (currentTab?.status !== 'connected') return
 
+    const sensitive = sensitiveInputPendingRef.current
+    const payload = sensitive
+      ? { session_id: sessionId, tab_id: tabId, data, sensitive: true }
+      : { session_id: sessionId, tab_id: tabId, data }
     const { enabled } = useBroadcastStore.getState()
 
     if (enabled && hasFocusRef.current && broadcastTargetIdsRef.current.size > 0) {
       for (const targetTabId of broadcastTargetIdsRef.current) {
         if (targetTabId !== tabId) {
-          socket.emit('ssh:input', { session_id: sessionId, tab_id: targetTabId, data })
+          socket.emit('ssh:input', { ...payload, tab_id: targetTabId })
         }
       }
     }
-    socket.emit('ssh:input', { session_id: sessionId, tab_id: tabId, data })
+    socket.emit('ssh:input', payload)
+    if (sensitive && /[\r\n]/.test(data)) {
+      sensitiveInputPendingRef.current = false
+    }
   }, [tabId, socket, sessionId])
   const emitInterrupt = useCallback(() => {
     if (suppressInputRef.current) return
@@ -609,11 +643,16 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
       }
       if (ArrayBuffer.isView(data)) {
         const bytes = new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
-        termRef.current.write(stripCtrlLClear(new TextDecoder().decode(bytes)) ?? bytes)
+        const output = new TextDecoder().decode(bytes)
+        noteSensitivePrompt(output)
+        termRef.current.write(stripCtrlLClear(output) ?? bytes)
       } else if (data instanceof ArrayBuffer) {
         const bytes = new Uint8Array(data)
-        termRef.current.write(stripCtrlLClear(new TextDecoder().decode(bytes)) ?? bytes)
+        const output = new TextDecoder().decode(bytes)
+        noteSensitivePrompt(output)
+        termRef.current.write(stripCtrlLClear(output) ?? bytes)
       } else if (typeof data === 'string') {
+        noteSensitivePrompt(data)
         termRef.current.write(stripCtrlLClear(data) ?? data)
       } else {
         console.warn('Received unexpected data type from ssh:output:', typeof data)
@@ -621,7 +660,7 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
     }
     socket.on('ssh:output', onOutput)
     return () => { socket.off('ssh:output', onOutput) }
-  }, [socket, tabId, setTabStatus])
+  }, [socket, tabId, setTabStatus, noteSensitivePrompt])
 
   // Session restore / ssh:connected / ssh:error / ssh:closed
   useEffect(() => {
@@ -649,7 +688,8 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
       clearConnectTimeout()
       errorRef.current = ''
       setConnectionError('')
-      setTabStatus(tabId, 'connected')
+      sensitiveInputPendingRef.current = false
+      sensitiveOutputTailRef.current = ''
       requestAnimationFrame(() => {
         if (!mounted) return
         if (termRef.current && fitRef.current) {
@@ -665,14 +705,16 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
       clearConnectTimeout()
       errorRef.current = message
       setConnectionError(message)
-      suppressInputRef.current = true
+      sensitiveInputPendingRef.current = false
+      sensitiveOutputTailRef.current = ''
       setTabStatus(tabId, 'dead')
     }
 
     const onClosed = ({ tab_id, reason }: { tab_id: string; reason: string }) => {
       if (tab_id !== tabId) return
       clearConnectTimeout()
-      suppressInputRef.current = true
+      sensitiveInputPendingRef.current = false
+      sensitiveOutputTailRef.current = ''
       setTabStatus(tabId, 'dead')
       termRef.current?.write(`\r\n\x1b[38;5;244m[torrus: ${reason}]\x1b[0m\r\n`)
     }
@@ -711,7 +753,8 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
   const handleConnect = useCallback((values: ConnectFormValues) => {
     clearConnectTimeout()
     errorRef.current = ''
-    setTabStatus(tabId, 'connecting')
+    sensitiveInputPendingRef.current = false
+    sensitiveOutputTailRef.current = ''
     setTabConnection(tabId, values.host, values.port, values.username)
     const term = termRef.current
     socket.emit('ssh:connect', {

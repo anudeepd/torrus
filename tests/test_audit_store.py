@@ -52,6 +52,36 @@ async def test_record_command_event_stores_cleaned_command(monkeypatch, tmp_path
     assert events[0]["ssh_host"] == "git.example.com"
 
 
+def test_sensitive_command_detection():
+    from torrus.audit_store import is_sensitive_command
+
+    assert is_sensitive_command("mysql --password hunter2")
+    assert is_sensitive_command("export API_TOKEN=abc123")
+    assert is_sensitive_command("mysql -phunter2")
+    assert not is_sensitive_command("git push origin main")
+
+
+@pytest.mark.asyncio
+async def test_record_sensitive_event_never_stores_secret(monkeypatch, tmp_path):
+    monkeypatch.setenv("TORRUS_AUDIT_DB", str(tmp_path / "audit.db"))
+    from torrus import audit_store
+
+    audit_store.init_db()
+    await audit_store.record_sensitive_event(
+        ldap_username="alice",
+        session_id="sess",
+        tab_id="tab",
+        ssh_host="example.com",
+        ssh_port=22,
+        ssh_username="root",
+    )
+
+    events = audit_store.list_terminal_input_events(username="alice")
+    assert events[0]["event_kind"] == "sensitive"
+    assert events[0]["input_data"] == audit_store.REDACTED_INPUT.encode()
+    assert b"secret" not in events[0]["input_data"].lower()
+
+
 def test_strip_escape_removes_ansi_sequences():
     from torrus.audit_store import strip_escape
 

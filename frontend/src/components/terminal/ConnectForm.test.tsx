@@ -28,4 +28,32 @@ describe('ConnectForm', () => {
     expect(password).toHaveValue('mistyped-password')
     expect(password).toHaveFocus()
   })
+
+  it('submits from Enter in both masked and visible password modes', () => {
+    const onConnect = vi.fn()
+    render(<ConnectForm onConnect={onConnect} />)
+
+    fireEvent.change(screen.getByTestId('host-input'), { target: { value: 'example.com' } })
+    fireEvent.change(screen.getByTestId('username-input'), { target: { value: 'alice' } })
+    const password = screen.getByTestId('password-input')
+    fireEvent.change(password, { target: { value: 'secret' } })
+
+    fireEvent.keyDown(password, { key: 'Enter' })
+    expect(onConnect).toHaveBeenCalledWith({
+      host: 'example.com',
+      port: 22,
+      username: 'alice',
+      password: 'secret',
+    })
+
+    onConnect.mockClear()
+    fireEvent.click(screen.getByRole('button', { name: 'Show password' }))
+    fireEvent.keyDown(password, { key: 'Enter' })
+    expect(onConnect).toHaveBeenCalledWith({
+      host: 'example.com',
+      port: 22,
+      username: 'alice',
+      password: 'secret',
+    })
+  })
 })

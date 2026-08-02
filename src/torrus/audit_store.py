@@ -18,6 +18,15 @@ _ANSI_RE = re.compile(
     r"|[\x00-\x07\x0b\x0c\x0e-\x1f]"  # control chars except tab(\t), BS(\b), CR(\r), LF(\n), DEL(\x7f)
 )
 
+REDACTED_INPUT = "[redacted sensitive input]"
+_SENSITIVE_COMMAND_RE = re.compile(
+    r"(?:(?:^|[^A-Za-z0-9])(?:password|passphrase|passcode|token|secret|api[_-]?key|access[_-]?key)"
+    r"\s*[:=]\s*\S+"
+    r"|--(?:password|passphrase|passcode|token|secret|api[_-]?key|access[_-]?key)(?:=|\s+)\S+"
+    r"|(?:^|\s)-p\S+)",
+    re.IGNORECASE,
+)
+
 
 def strip_escape(text: str) -> str:
     """Remove ANSI escape sequences and control characters from terminal text."""
@@ -30,6 +39,11 @@ def strip_escape(text: str) -> str:
         else:
             result.append(ch)
     return "".join(result)
+
+
+def is_sensitive_command(value: str) -> bool:
+    """Return whether command text contains an inline credential value."""
+    return bool(_SENSITIVE_COMMAND_RE.search(value))
 
 
 def _db_path() -> Path:
@@ -180,6 +194,36 @@ async def record_command_event(
                 ssh_username,
                 raw,
                 "command",
+            ),
+        )
+
+
+async def record_sensitive_event(
+    *,
+    ldap_username: str,
+    session_id: str,
+    tab_id: str,
+    ssh_host: str | None = None,
+    ssh_port: int | None = None,
+    ssh_username: str | None = None,
+) -> None:
+    """Store a redaction marker without persisting sensitive input bytes."""
+    occurred_at = datetime.now(timezone.utc).isoformat()
+    with _connect() as db:
+        db.execute(
+            "INSERT INTO terminal_input_events "
+            "(occurred_at, ldap_username, session_id, tab_id, ssh_host, ssh_port, ssh_username, input_data, event_kind) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                occurred_at,
+                ldap_username,
+                session_id,
+                tab_id,
+                ssh_host,
+                ssh_port,
+                ssh_username,
+                REDACTED_INPUT.encode("utf-8"),
+                "sensitive",
             ),
         )
 

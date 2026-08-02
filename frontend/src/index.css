@@ -117,6 +117,39 @@
   }
 }
 
+@view-transition {
+  navigation: auto;
+}
+
+::view-transition-old(root) {
+  animation: torrus-page-out 180ms ease-in both;
+}
+
+::view-transition-new(root) {
+  animation: torrus-page-in 280ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes torrus-page-out {
+  to {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+}
+
+@keyframes torrus-page-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-old(root),
+  ::view-transition-new(root) {
+    animation-duration: 0.01ms;
+  }
+}
+
 
 /* xterm.js — make terminal fill its container */
 .xterm {

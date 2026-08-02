@@ -52,7 +52,15 @@ export default function ConnectForm({
           <h2 className="torrus-connect-title whitespace-nowrap text-xs font-semibold text-slate-200">SSH Connection</h2>
         </div>
 
-        <form onSubmit={handleSubmit} className="flex flex-col gap-3">
+        <form
+          onSubmit={handleSubmit}
+          onKeyDown={event => {
+            if (event.key !== 'Enter' || !(event.target instanceof HTMLInputElement)) return
+            event.preventDefault()
+            event.currentTarget.requestSubmit()
+          }}
+          className="flex flex-col gap-3"
+        >
           <div className="torrus-connect-endpoint flex flex-col gap-2">
             <div className="min-w-0 flex-1">
               <Input

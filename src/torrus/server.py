@@ -169,6 +169,7 @@ _sid_client_ips: dict[str, str] = {}
 # a new socket id, so it cannot complete an unfinished command from another
 # authenticated browser session.
 _input_buffers: dict[tuple[str, str, str], bytearray] = {}
+_sensitive_input_buffers: dict[tuple[str, str, str], bytearray] = {}
 _input_buffer_lock = asyncio.Lock()
 _MAX_INPUT_BUFFER = 1_048_576
 _ADMIN_USERS = {
@@ -616,7 +617,7 @@ def _display_audit_input(value: bytes | str | None) -> str:
         if isinstance(value, (bytes, bytearray))
         else str(value or "")
     )
-    return audit_store.strip_escape(raw).replace("\r", "↵").replace("\n", "↵")
+    return audit_store.strip_escape(raw).replace("\r\n", "\n").replace("\r", "\n")
 
 
 @fastapi_app.get("/api/admin/activity", include_in_schema=False)
@@ -647,8 +648,16 @@ async def admin_activity(request: Request):
                 "ssh_port": event["ssh_port"],
                 "ssh_username": event["ssh_username"],
                 "kind": event.get("event_kind", "terminal_input"),
-                "input": _display_audit_input(event.get("input_data")),
-                "bytes": len(event["input_data"] or b""),
+                "input": (
+                    "Sensitive input redacted"
+                    if event.get("event_kind") == "sensitive"
+                    else _display_audit_input(event.get("input_data"))
+                ),
+                "bytes": (
+                    0
+                    if event.get("event_kind") == "sensitive"
+                    else len(event["input_data"] or b"")
+                ),
             }
             for event in events
         ],
@@ -1360,6 +1369,8 @@ async def on_disconnect(sid):
     async with _input_buffer_lock:
         for key in [key for key in _input_buffers if key[0] == sid]:
             del _input_buffers[key]
+        for key in [key for key in _sensitive_input_buffers if key[0] == sid]:
+            del _sensitive_input_buffers[key]
     _sid_client_ips.pop(sid, None)
     _admin_sids.discard(sid)
     logger.info("Client disconnected: %s", sid)
@@ -1608,6 +1619,27 @@ def _extract_commands(buffer: bytearray, incoming: bytes) -> list[str]:
     return commands
 
 
+def _extract_sensitive_line_count(buffer: bytearray, incoming: bytes) -> int:
+    """Consume complete sensitive-input lines without decoding their contents."""
+    if incoming:
+        buffer.extend(incoming)
+
+    count = 0
+    while True:
+        idx = -1
+        sep_len = 0
+        for sep in (b"\r\n", b"\n", b"\r"):
+            i = buffer.find(sep)
+            if i != -1 and (idx == -1 or i < idx):
+                idx = i
+                sep_len = len(sep)
+        if idx == -1:
+            break
+        del buffer[: idx + sep_len]
+        count += 1
+    return count
+
+
 @sio.on("ssh:input")
 async def on_ssh_input(sid, data):
     session_id = data.get("session_id", "")
@@ -1643,26 +1675,58 @@ async def on_ssh_input(sid, data):
             if isinstance(input_data, str)
             else input_data
         )
+        sensitive = data.get("sensitive") is True
         async with _input_buffer_lock:
             key = (sid, session_id, tab_id)
-            buf = _input_buffers.setdefault(key, bytearray())
-            if len(buf) + len(raw) > _MAX_INPUT_BUFFER:
-                buf.clear()
-            commands = _extract_commands(buf, raw)
-        for cmd in commands:
+            if sensitive:
+                _input_buffers.pop(key, None)
+                buf = _sensitive_input_buffers.setdefault(key, bytearray())
+                if len(buf) + len(raw) > _MAX_INPUT_BUFFER:
+                    buf.clear()
+                sensitive_lines = _extract_sensitive_line_count(buf, raw)
+                commands: list[str] = []
+            else:
+                _sensitive_input_buffers.pop(key, None)
+                buf = _input_buffers.setdefault(key, bytearray())
+                if len(buf) + len(raw) > _MAX_INPUT_BUFFER:
+                    buf.clear()
+                sensitive_lines = 0
+                commands = _extract_commands(buf, raw)
+        for _ in range(sensitive_lines):
             try:
-                await audit_store.record_command_event(
+                await audit_store.record_sensitive_event(
                     ldap_username=owner,
                     session_id=session_id,
                     tab_id=tab_id,
-                    command=cmd,
                     ssh_host=ssh_host,
                     ssh_port=ssh_port,
                     ssh_username=ssh_username,
                 )
             except Exception:
+                logger.exception("Failed to record sensitive input audit event")
+        for cmd in commands:
+            try:
+                if audit_store.is_sensitive_command(cmd):
+                    await audit_store.record_sensitive_event(
+                        ldap_username=owner,
+                        session_id=session_id,
+                        tab_id=tab_id,
+                        ssh_host=ssh_host,
+                        ssh_port=ssh_port,
+                        ssh_username=ssh_username,
+                    )
+                else:
+                    await audit_store.record_command_event(
+                        ldap_username=owner,
+                        session_id=session_id,
+                        tab_id=tab_id,
+                        command=cmd,
+                        ssh_host=ssh_host,
+                        ssh_port=ssh_port,
+                        ssh_username=ssh_username,
+                    )
+            except Exception:
                 logger.exception("Failed to record command audit event")
-
     status = await ssh_manager.handle_input(
         session_id, tab_id, input_data, owner_ldap_username=owner
     )
@@ -1732,7 +1796,9 @@ async def on_ssh_disconnect(sid, data):
         return
     await sftp_manager.close_sftp(tab_id)
     async with _input_buffer_lock:
-        _input_buffers.pop((sid, session_id, tab_id), None)
+        key = (sid, session_id, tab_id)
+        _input_buffers.pop(key, None)
+        _sensitive_input_buffers.pop(key, None)
 
 
 @sio.on("sftp:close")

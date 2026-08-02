@@ -62,10 +62,15 @@ Session controls use immutable session identity plus generation checks. User all
 
 ### Terminal input audit
 
-LDAP deployments persist every raw terminal-input chunk, including individual
-keystrokes and pasted text. It intentionally does not record terminal output
-or the password supplied while opening an SSH connection. Audit data is stored
-at `~/.local/share/torrus/audit.db` by default (or `TORRUS_AUDIT_DB` when set).
+LDAP deployments persist completed command lines after Enter, not raw
+keystrokes or terminal output. Pasted multiline input is split into submitted
+lines; the Admin Console's **Submitted input** table preserves embedded
+line breaks, wraps long values, and lets an admin expand truncated previews.
+Inputs entered after a detected password/passphrase/token prompt, plus command
+lines containing inline credential flags or assignments, are stored only as a
+`[redacted sensitive input]` marker. The password supplied while opening an
+SSH connection is never recorded. Audit data is stored at
+`~/.local/share/torrus/audit.db` by default (or `TORRUS_AUDIT_DB` when set).
 
 ```bash
 torrus audit show --user alice
@@ -73,10 +78,11 @@ torrus audit purge --older-than 90
 ```
 
 `audit show` escapes control characters so viewing an event cannot replay its
-terminal escape sequences. Restrict access to the audit database: raw input may
-include commands, secrets pasted at a prompt, and other sensitive content.
+terminal escape sequences. Command text can still contain secrets that do not
+match the sensitive-input detector; restrict access to the audit database.
 
-The Admin Console's **Submitted input** view displays completed command events to authorized admins; treat it as sensitive.
+The Admin Console's **Submitted input** view displays completed command events
+to authorized admins; sensitive events show only their redaction marker.
 
 ## Development
 

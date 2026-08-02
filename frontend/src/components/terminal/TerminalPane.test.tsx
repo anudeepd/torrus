@@ -120,6 +120,53 @@ describe('TerminalPane', () => {
     expect(socket.emit).not.toHaveBeenCalledWith('ssh:input', expect.anything())
   })
 
+  it('marks input after a password prompt as sensitive until Enter', async () => {
+    const tabId = 'tab-sensitive-input'
+    act(() => {
+      seedStores(tabId, 'connected')
+    })
+
+    const socket = createMockSocket()
+    render(
+      <TerminalPane
+        tabId={tabId}
+        isActive={true}
+        focused={true}
+        socket={socket as unknown as import('socket.io-client').Socket}
+      />
+    )
+
+    await waitFor(() => {
+      expect(mockTerminalInstances.length).toBeGreaterThan(0)
+    })
+
+    const term = mockTerminalInstances[mockTerminalInstances.length - 1]
+    socket.emit.mockClear()
+    act(() => {
+      socket._trigger('ssh:output', { tab_id: tabId, data: 'Pass' })
+      socket._trigger('ssh:output', { tab_id: tabId, data: 'word: ' })
+      term.simulateData('secret')
+      term.simulateData('\r')
+      term.simulateData('ls')
+    })
+
+    expect(socket.emit).toHaveBeenNthCalledWith(
+      1,
+      'ssh:input',
+      expect.objectContaining({ data: 'secret', sensitive: true }),
+    )
+    expect(socket.emit).toHaveBeenNthCalledWith(
+      2,
+      'ssh:input',
+      expect.objectContaining({ data: '\r', sensitive: true }),
+    )
+    expect(socket.emit).toHaveBeenNthCalledWith(
+      3,
+      'ssh:input',
+      expect.not.objectContaining({ sensitive: true }),
+    )
+  })
+
   it('keeps restore probe replies quiet before re-enabling user input', async () => {
     const tabId = 'tab-restore'
     act(() => {

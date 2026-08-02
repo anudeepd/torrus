@@ -48,6 +48,8 @@ type RetentionInfo = {
 }
 
 type View = 'sessions' | 'users' | 'activity' | 'retention'
+const ACTIVITY_INPUT_PREVIEW_LIMIT = 240
+
 
 type RequestFailure = Error & { status?: number; code?: string }
 
@@ -226,7 +228,7 @@ export default function AdminConsole({ onClose }: { onClose?: () => void }) {
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
       transition={surfaceTransition}
-      className="flex min-h-screen flex-col bg-surface-950 text-slate-200"
+      className="flex h-dvh min-h-0 flex-col overflow-hidden bg-surface-950 text-slate-200"
     >
       <header className="flex min-h-14 shrink-0 items-center gap-3 border-b border-surface-800 bg-surface-900 px-4 sm:px-5">
         {onClose && <button type="button" onClick={onClose} className="rounded-md p-1.5 text-slate-500 transition-colors hover:bg-surface-800 hover:text-slate-200" aria-label="Back to terminal"><ChevronLeft className="h-4 w-4" /></button>}
@@ -253,17 +255,27 @@ export default function AdminConsole({ onClose }: { onClose?: () => void }) {
           <div className="mt-6 rounded-md border border-surface-800 bg-surface-950/60 p-3 text-[11px] leading-relaxed text-slate-600">Controls are owner-bound. Interrupt is best-effort and does not guarantee remote process termination.</div>
         </nav>
 
-        <main className="min-w-0 flex-1 overflow-auto p-4 sm:p-6" aria-live="polite">
+        <main className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto p-4 sm:p-6" aria-live="polite">
           <div className="mx-auto max-w-6xl">
             <div className="mb-4 flex gap-1 overflow-x-auto sm:hidden" role="tablist" aria-label="Admin views">
               {(['sessions', 'users', 'activity', 'retention'] as View[]).map(key => <button key={key} type="button" role="tab" aria-selected={view === key} onClick={() => setView(key)} className={`rounded-md px-3 py-1.5 text-xs capitalize transition-colors ${view === key ? 'bg-brand-500/10 text-brand-300' : 'text-slate-500'}`}>{key}</button>)}
             </div>
             {notice && <div className="mb-3 flex items-center gap-2 rounded-md border border-green-900/50 bg-green-950/30 px-3 py-2 text-xs text-green-300" role="status"><Check className="h-3.5 w-3.5" /> {notice}</div>}
             {error && <div className="mb-3 flex items-center gap-2 rounded-md border border-red-900/60 bg-red-950/30 px-3 py-2 text-xs text-red-300" role="alert"><X className="h-3.5 w-3.5" /> {error.message}</div>}
-            {view === 'sessions' && <SessionsTable sessions={sessions} selected={selectedSession} onSelect={setSelectedSession} onAction={act} onRequestAction={request => setConfirmation(request)} />}
-            {view === 'users' && <UsersTable users={users} fingerprint={policyFingerprint} onAction={act} onRequestAction={request => setConfirmation(request)} />}
-            {view === 'activity' && <ActivityTable events={activity} />}
-            {view === 'retention' && <RetentionPanel retention={retention} onAction={act} onRequestAction={request => setConfirmation(request)} />}
+            <AnimatePresence mode="wait" initial={false}>
+              <m.div
+                key={view}
+                initial={{ opacity: 0, x: 8 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -8 }}
+                transition={surfaceTransition}
+              >
+                {view === 'sessions' && <SessionsTable sessions={sessions} selected={selectedSession} onSelect={setSelectedSession} onAction={act} onRequestAction={request => setConfirmation(request)} />}
+                {view === 'users' && <UsersTable users={users} fingerprint={policyFingerprint} onAction={act} onRequestAction={request => setConfirmation(request)} />}
+                {view === 'activity' && <ActivityTable events={activity} />}
+                {view === 'retention' && <RetentionPanel retention={retention} onAction={act} onRequestAction={request => setConfirmation(request)} />}
+              </m.div>
+            </AnimatePresence>
           </div>
         </main>
       </div>
@@ -394,12 +406,33 @@ function UsersTable({ users, fingerprint, onAction, onRequestAction }: { users: 
   )
 }
 
+function ActivityInput({ value, kind }: { value: string; kind: string }) {
+  const [expanded, setExpanded] = useState(false)
+  if (kind === 'sensitive') {
+    return <span className="text-amber-300">Sensitive input redacted</span>
+  }
+  if (!value) return <span>—</span>
+  if (value.length <= ACTIVITY_INPUT_PREVIEW_LIMIT) {
+    return <span className="whitespace-pre-wrap break-words">{value}</span>
+  }
+
+  return (
+    <details className="max-w-[32rem]" onToggle={event => setExpanded(event.currentTarget.open)}>
+      <summary className="cursor-pointer whitespace-pre-wrap break-words text-slate-200 marker:text-slate-500">
+        {value.slice(0, ACTIVITY_INPUT_PREVIEW_LIMIT)}…
+        <span className="mt-1 block text-[10px] text-brand-300">Show full input ({value.length} characters)</span>
+      </summary>
+      {expanded && <pre className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap break-words text-slate-200">{value}</pre>}
+    </details>
+  )
+}
+
 function ActivityTable({ events }: { events: ActivityEvent[] }) {
   return (
     <section aria-labelledby="activity-title">
       <div className="mb-3">
         <h2 id="activity-title" className="text-base font-semibold">Submitted input</h2>
-        <p className="mt-1 text-xs text-slate-500">Completed terminal input is shown exactly as captured. Terminal output and SSH connection passwords are not recorded.</p>
+        <p className="mt-1 text-xs text-slate-500">Completed terminal input is shown line-by-line with multiline text preserved. Sensitive prompts are recorded only as redaction markers. Terminal output and SSH connection passwords are not recorded.</p>
       </div>
       <div className="overflow-x-auto rounded-lg border border-surface-800 bg-surface-900">
         <table className="w-full min-w-[980px] text-left text-xs">
@@ -413,8 +446,8 @@ function ActivityTable({ events }: { events: ActivityEvent[] }) {
                   <td className="whitespace-nowrap px-3 py-3 text-slate-400">{new Date(event.occurred_at).toLocaleString()}</td>
                   <td className="px-3 py-3">{event.ldap_username}</td>
                   <td className="px-3 py-3">{event.ssh_host || '—'}:{event.ssh_port || '—'} <span className="text-slate-600">({event.ssh_username || '—'})</span></td>
-                  <td className="max-w-[32rem] whitespace-pre-wrap break-words px-3 py-3 font-mono text-[11px] text-slate-200">{event.input || '—'}</td>
-                  <td className="px-3 py-3 text-slate-400">{event.kind}</td>
+                  <td className="px-3 py-3 font-mono text-[11px] text-slate-200"><ActivityInput value={event.input} kind={event.kind} /></td>
+                  <td className="px-3 py-3 text-slate-400">{event.kind === 'sensitive' ? 'Sensitive (redacted)' : event.kind}</td>
                   <td className="px-3 py-3 text-right text-slate-400">{event.bytes}</td>
                 </tr>
               ))}

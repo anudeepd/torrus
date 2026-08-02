@@ -66,7 +66,11 @@ function getCloseMessage(tab: Tab | undefined): string {
   return `Closing ${getTabDisplayName(tab)} will disconnect its SSH session.`
 }
 
-export default function AppLayout() {
+type AppLayoutProps = {
+  navigateToAdmin?: () => void
+}
+
+export default function AppLayout({ navigateToAdmin = () => window.location.assign('/admin') }: AppLayoutProps = {}) {
   const { tabs, activeTabId, addTab, addSftpTab, closeTab, closeAllTabs, setActiveTab, sessionId } = useTerminalStore()
   const { root: layoutRoot, closePane, exitSplitMode, applyLayout } = useLayoutStore()
   const { enabled: broadcastEnabled, excludedTabIds, disable: disableBroadcast } = useBroadcastStore()
@@ -104,7 +108,7 @@ export default function AppLayout() {
   const pendingCloseCancelRef = useRef<HTMLButtonElement>(null)
   const dismissPendingClose = useCallback(() => setPendingClose(null), [])
   const pendingCloseDialogRef = useModalFocus(Boolean(pendingClose), dismissPendingClose, pendingCloseCancelRef)
-  const authRedirectingRef = useRef(false)
+  const skipBeforeUnloadRef = useRef(false)
 
   const shouldWarnBeforeClosingTab = useCallback((tabId: string) => {
     const tab = useTerminalStore.getState().tabs.find(t => t.id === tabId)
@@ -125,7 +129,7 @@ export default function AppLayout() {
   // Warn before close/reload if any active SSH sessions
   useEffect(() => {
     const handler = (e: BeforeUnloadEvent) => {
-      if (authRedirectingRef.current) return
+      if (skipBeforeUnloadRef.current) return
       const hasActive = useTerminalStore.getState().tabs.some(t => t.type === 'terminal' && t.status === 'connected')
       if (!hasActive) return
       e.preventDefault()
@@ -138,7 +142,7 @@ export default function AppLayout() {
 
   useEffect(() => {
     const onAuthRedirect = () => {
-      authRedirectingRef.current = true
+      skipBeforeUnloadRef.current = true
     }
     window.addEventListener(AUTH_REDIRECT_EVENT, onAuthRedirect)
     return () => window.removeEventListener(AUTH_REDIRECT_EVENT, onAuthRedirect)
@@ -526,7 +530,10 @@ export default function AppLayout() {
           onDuplicateTab={handleDuplicateTab}
           onCloseAllTabs={handleCloseAllTabs}
           onOpenSettings={() => setSettingsOpen(true)}
-          onOpenAdmin={() => window.location.assign('/admin')}
+          onOpenAdmin={() => {
+            skipBeforeUnloadRef.current = true
+            navigateToAdmin()
+          }}
           onOpenSplitPicker={() => setSplitPickerOpen(true)}
           onOpenBroadcastPicker={() => setBroadcastPickerOpen(true)}
           onExitSplit={() => { exitSplitMode(); setSplitOwnedByBroadcast(false) }}

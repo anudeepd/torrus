@@ -64,7 +64,7 @@ class TestServerConfig:
 
         result = await server_module.admin_activity(request)
 
-        assert result["items"][0]["input"] == "ls -la↵"
+        assert result["items"][0]["input"] == "ls -la\n"
 
 
 class TestValidIdChecks:
@@ -505,6 +505,65 @@ class TestLdapAuthGating:
             ssh_username="root",
         )
 
+    @pytest.mark.asyncio
+    async def test_sensitive_input_records_only_a_redaction_marker(self):
+        from torrus.server import on_ssh_input
+
+        import torrus.server as server_module
+
+        server_module._authenticated_sids.add("auth-sid")
+        server_module._authenticated_users["auth-sid"] = "alice"
+        server_module._ldap_session_manager = MagicMock()
+        server_module._ldap_session_manager.verify_session.return_value = "alice"
+        sio_mock = MagicMock()
+        sio_mock.get_environ.return_value = {
+            "REMOTE_ADDR": "1.2.3.4",
+            "HTTP_COOKIE": "ldapgate_session=abc",
+        }
+        with (
+            patch("torrus.server.sio", sio_mock),
+            patch.object(server_module.ssh_manager, "handle_input", AsyncMock()),
+            patch.object(
+                server_module.ssh_manager,
+                "get_session_target",
+                AsyncMock(return_value=("db.example", 22, "root")),
+            ),
+            patch(
+                "torrus.server.audit_store.record_sensitive_event", AsyncMock()
+            ) as record_sensitive,
+            patch(
+                "torrus.server.audit_store.record_command_event", AsyncMock()
+            ) as record_command,
+        ):
+            result = await on_ssh_input(
+                "auth-sid",
+                {
+                    "session_id": "sess1",
+                    "tab_id": "tab1",
+                    "data": "hunter2\r",
+                    "sensitive": True,
+                },
+            )
+            result = await on_ssh_input(
+                "auth-sid",
+                {
+                    "session_id": "sess1",
+                    "tab_id": "tab1",
+                    "data": "mysql --password hunter2\r",
+                },
+            )
+        assert result == {"ok": True}
+        assert record_sensitive.await_count == 2
+        record_sensitive.assert_awaited_with(
+            ldap_username="alice",
+            session_id="sess1",
+            tab_id="tab1",
+            ssh_host="db.example",
+            ssh_port=22,
+            ssh_username="root",
+        )
+        record_command.assert_not_awaited()
+
 
 class TestSessionRateLimit:
     """Per-sid session count limits must be enforced."""
@@ -726,6 +785,9 @@ class TestSocketDisconnect:
         server_module._input_buffers[("sid-1", "session-1", "tab-1")] = bytearray(
             b"git sta"
         )
+        server_module._sensitive_input_buffers[("sid-1", "session-1", "tab-1")] = (
+            bytearray(b"secret")
+        )
         server_module._input_buffers[("sid-2", "session-1", "tab-1")] = bytearray(
             b"keep"
         )
@@ -733,6 +795,11 @@ class TestSocketDisconnect:
             await server_module.on_disconnect("sid-1")
 
         assert ("sid-1", "session-1", "tab-1") not in server_module._input_buffers
+        assert (
+            "sid-1",
+            "session-1",
+            "tab-1",
+        ) not in server_module._sensitive_input_buffers
         assert server_module._input_buffers[("sid-2", "session-1", "tab-1")] == b"keep"
 
 
