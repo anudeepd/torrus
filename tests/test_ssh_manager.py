@@ -522,3 +522,41 @@ class TestLifecyclePriority:
             assert session.input_queue.get_nowait() == b"ordinary"
         finally:
             await manager.stop_background_tasks()
+
+    @pytest.mark.asyncio
+    async def test_large_input_streams_through_bounded_queue(self, mock_sio):
+        from torrus.ssh_manager import INPUT_QUEUE_MAX_BYTES, SSHManager, SSHSession
+
+        manager = SSHManager(mock_sio)
+        payload = b"x" * (INPUT_QUEUE_MAX_BYTES + 128) + b"\r"
+        sent = bytearray()
+        sent_event = asyncio.Event()
+        channel = MagicMock(closed=False)
+
+        def send(data):
+            sent.extend(bytes(data))
+            if len(sent) == len(payload):
+                sent_event.set()
+            return len(data)
+
+        channel.send.side_effect = send
+        channel.close.side_effect = lambda: setattr(channel, "closed", True)
+        session = SSHSession(
+            session_id="sess1",
+            tab_id="tab1",
+            client=MagicMock(),
+            channel=channel,
+            host="example.com",
+            port=22,
+            username="alice",
+            owner_ldap_username="alice",
+        )
+        manager._sessions[("sess1", "tab1")] = session
+        session.write_task = asyncio.create_task(manager._write_loop(session))
+
+        try:
+            assert await manager.handle_input("sess1", "tab1", payload) == "queued"
+            await asyncio.wait_for(sent_event.wait(), timeout=2)
+            assert bytes(sent) == payload
+        finally:
+            await manager.stop_background_tasks()

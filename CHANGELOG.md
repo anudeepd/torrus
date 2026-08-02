@@ -1,10 +1,11 @@
 # Changelog
 
-## Unreleased
+## [0.2.30] - 2026-08-02
 
 ### Added
 
 - Apply permission and ownership changes to multiple selected SFTP entries from the file context menu.
+- Add admin-console user allowlist entries without requiring a Torrus restart.
 
 ### Fixed
 
@@ -15,6 +16,9 @@
 - Refresh the current SFTP directory after successful uploads, retried uploads, permission changes, and ownership changes.
 - Remove cross-document view transitions from terminal/admin navigation, eliminating skipped-transition errors and page flashes.
 - Restore SSH connection state transitions so retries clear stale authentication errors and successful connections leave the form.
+- Animate terminal workspace entry when returning from the admin console.
+- Preserve browser text selection while confirmation modals remain open.
+- Improve retention cleanup copy and make irreversible deletion scope explicit.
 
 ### Changed
 

@@ -234,7 +234,7 @@ def list_terminal_input_events(
     clauses: list[str] = []
     values: list[object] = []
     if username:
-        clauses.append("ldap_username = ?")
+        clauses.append("ldap_username = ? COLLATE NOCASE")
         values.append(username)
     if since:
         clauses.append("occurred_at >= ?")

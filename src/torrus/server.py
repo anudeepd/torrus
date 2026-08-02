@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+from dataclasses import dataclass, field
 from http.cookies import SimpleCookie
 import ipaddress
 import logging
@@ -14,6 +15,7 @@ import time
 from contextlib import asynccontextmanager
 from importlib.resources import files
 from pathlib import Path
+from tempfile import SpooledTemporaryFile
 from urllib.parse import quote, urlparse
 
 import socketio
@@ -30,7 +32,7 @@ from torrus.admin_state import (
 )
 from torrus.logging_utils import configure_logging, suppress_routine_polling_logs
 from torrus.sftp_manager import SFTPError, SFTPManager
-from torrus.ssh_manager import INPUT_QUEUE_MAX_BYTES, SSHManager
+from torrus.ssh_manager import SSHManager
 
 logger = logging.getLogger("torrus.server")
 
@@ -167,11 +169,104 @@ _sid_client_ips: dict[str, str] = {}
 
 # Per-socket/session/tab input buffers for command-level audit. A reconnect gets
 # a new socket id, so it cannot complete an unfinished command from another
-# authenticated browser session.
-_input_buffers: dict[tuple[str, str, str], bytearray] = {}
-_sensitive_input_buffers: dict[tuple[str, str, str], bytearray] = {}
+# authenticated browser session. Command content is bounded; oversized
+# commands emit a marker instead of retaining unbounded input.
+_INPUT_BUFFER_MEMORY_LIMIT = 1_048_576
+_INPUT_BUFFER_MAX_BYTES = 4 * 1024 * 1024
+_OVERSIZED_INPUT_MARKER = "[input omitted: command exceeded audit limit]"
+
+
+@dataclass
+class _CommandInputBuffer:
+    spool: SpooledTemporaryFile = field(
+        default_factory=lambda: SpooledTemporaryFile(
+            max_size=_INPUT_BUFFER_MEMORY_LIMIT,
+            mode="w+b",
+        )
+    )
+    skip_lf: bool = False
+    size: int = 0
+    overflowed: bool = False
+
+    def _append(self, incoming: bytes) -> None:
+        if not incoming or self.overflowed:
+            return
+        remaining = _INPUT_BUFFER_MAX_BYTES - self.size
+        if remaining <= 0:
+            self.overflowed = True
+            return
+        retained = incoming[:remaining]
+        self.spool.write(retained)
+        self.size += len(retained)
+        if len(retained) < len(incoming):
+            self.overflowed = True
+
+    def _reset(self) -> None:
+        self.spool.seek(0)
+        self.spool.truncate(0)
+        self.size = 0
+        self.overflowed = False
+
+    def extract(self, incoming: bytes) -> list[str]:
+        commands: list[str] = []
+        start = 0
+        for index, value in enumerate(incoming):
+            if self.skip_lf:
+                self.skip_lf = False
+                if value == 0x0A:
+                    start = index + 1
+                    continue
+            if value not in (0x0A, 0x0D):
+                continue
+            if start < index:
+                self._append(incoming[start:index])
+            if self.overflowed:
+                command = _OVERSIZED_INPUT_MARKER
+            else:
+                self.spool.seek(0)
+                command = self.spool.read().decode("utf-8", errors="replace")
+            self._reset()
+            cleaned = audit_store.strip_escape(command).strip()
+            if cleaned:
+                commands.append(cleaned)
+            start = index + 1
+            self.skip_lf = value == 0x0D
+        if start < len(incoming):
+            self._append(incoming[start:])
+        return commands
+
+    def close(self) -> None:
+        self.spool.close()
+
+
+def _close_command_buffer(buffer) -> None:
+    close = getattr(buffer, "close", None)
+    if close is not None:
+        close()
+
+
+@dataclass
+class _SensitiveInputBuffer:
+    skip_lf: bool = False
+
+    def count_lines(self, incoming: bytes) -> int:
+        count = 0
+        for value in incoming:
+            if self.skip_lf:
+                self.skip_lf = False
+                if value == 0x0A:
+                    continue
+            if value == 0x0D:
+                count += 1
+                self.skip_lf = True
+            elif value == 0x0A:
+                count += 1
+        return count
+
+
+_input_buffers: dict[tuple[str, str, str], _CommandInputBuffer] = {}
+_sensitive_input_buffers: dict[tuple[str, str, str], _SensitiveInputBuffer] = {}
 _input_buffer_lock = asyncio.Lock()
-_MAX_INPUT_BUFFER = 1_048_576
 _ADMIN_USERS = {
     value.strip().lower()
     for value in os.getenv("TORRUS_ADMIN_USERS", "").split(",")
@@ -189,10 +284,23 @@ _admin_stream_lock = asyncio.Lock()
 app = socketio.ASGIApp(sio, other_asgi_app=fastapi_app)
 
 _IO_WORKERS = max(32, min(128, (os.cpu_count() or 4) * 8))
+
+
+async def _cleanup_ssh_input_buffer(session_id: str, tab_id: str) -> None:
+    async with _input_buffer_lock:
+        key_suffix = (session_id, tab_id)
+        for key in [key for key in _input_buffers if key[1:] == key_suffix]:
+            buffer = _input_buffers.pop(key)
+            _close_command_buffer(buffer)
+        for key in [key for key in _sensitive_input_buffers if key[1:] == key_suffix]:
+            _sensitive_input_buffers.pop(key)
+
+
 sftp_manager = SFTPManager(max_workers=max(16, min(64, (os.cpu_count() or 4) * 4)))
 ssh_manager = SSHManager(
     sio,
     on_disconnect=sftp_manager.on_ssh_disconnect,
+    on_tab_disconnect=_cleanup_ssh_input_buffer,
     max_workers=_IO_WORKERS,
 )
 
@@ -794,6 +902,94 @@ async def _policy_mutation(
     }
 
 
+def _apply_live_ldap_allowlist(allowed_users: list[str]) -> None:
+    """Apply policy mutation without re-enabling pending-disabled users."""
+    ldap_settings = getattr(_ldap_config, "ldap", None)
+    if ldap_settings is None:
+        return
+    pending = {username.casefold() for username in _PENDING_DISABLED_USERS}
+    live_users: list[str] = []
+    seen: set[str] = set()
+    for username in allowed_users:
+        normalized = str(username).strip()
+        folded = normalized.casefold()
+        if not normalized or folded in pending or folded in seen:
+            continue
+        seen.add(folded)
+        live_users.append(normalized)
+    for username in getattr(ldap_settings, "allowed_users", None) or []:
+        normalized = str(username).strip()
+        folded = normalized.casefold()
+        if normalized and folded in pending and folded not in seen:
+            seen.add(folded)
+            live_users.append(normalized)
+    ldap_settings.allowed_users = live_users
+
+
+@fastapi_app.post("/api/admin/users", include_in_schema=False)
+async def admin_add_user(request: Request):
+    actor, error = await _admin_guard(request, mutate=True)
+    if error:
+        return error
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    username = body.get("username", "") if isinstance(body, dict) else ""
+    normalized = username.strip().casefold() if isinstance(username, str) else ""
+    if not _valid_admin_identity(normalized):
+        return JSONResponse(
+            status_code=400, content={"ok": False, "code": "invalid_request"}
+        )
+    if not _ldap_config_path:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "ok": False,
+                "code": "policy_unavailable",
+                "message": "LDAP configuration path is not configured.",
+            },
+        )
+    expected = body.get("expected_fingerprint") if isinstance(body, dict) else None
+    record, replayed, error = await _begin_admin_action(
+        request, actor or "", "add_user", normalized
+    )
+    if error:
+        return error
+    if replayed:
+        return _replayed_action(record or {})
+    try:
+        policy = await _policy_mutation(normalized, True, expected)
+        _PENDING_DISABLED_USERS.discard(normalized)
+        _apply_live_ldap_allowlist(policy["allowed_users"])
+    except PolicyConflict as exc:
+        payload = {"ok": False, "code": "policy_conflict", "message": str(exc)}
+        await _finish_admin_action(
+            record or {}, status="failed", result=payload, error=str(exc)
+        )
+        return JSONResponse(status_code=409, content=payload)
+    except (PolicyError, OSError) as exc:
+        payload = {"ok": False, "code": "policy_unavailable", "message": str(exc)}
+        await _finish_admin_action(
+            record or {}, status="failed", result=payload, error=str(exc)
+        )
+        return JSONResponse(status_code=503, content=payload)
+    payload = {
+        "ok": True,
+        "policy_state": "allowed",
+        "restart_required": False,
+        "fingerprint": policy["fingerprint"],
+        "backup_id": policy["backup_id"],
+        "message": "User added; no restart required.",
+    }
+    return await _admin_action_response(
+        record or {},
+        status="succeeded",
+        result=payload,
+        event_kind="policy",
+    )
+
+
 async def _restore_ldap_user(username: str) -> None:
     restore = getattr(_ldap_session_manager, "restore_user_sessions", None)
     if not callable(restore):
@@ -957,7 +1153,7 @@ async def admin_purge(request: Request):
             content={
                 "ok": False,
                 "code": "confirmation_required",
-                "message": "Use confirmation PURGE and retention between 7 and 3650 days.",
+                "message": "Type PURGE and choose retention between 7 and 3650 days.",
             },
         )
     record, replayed, error = await _begin_admin_action(
@@ -1368,9 +1564,11 @@ async def on_disconnect(sid):
         _authenticated_users.pop(sid, None)
     async with _input_buffer_lock:
         for key in [key for key in _input_buffers if key[0] == sid]:
-            del _input_buffers[key]
+            buffer = _input_buffers.pop(key)
+            _close_command_buffer(buffer)
         for key in [key for key in _sensitive_input_buffers if key[0] == sid]:
-            del _sensitive_input_buffers[key]
+            _sensitive_input_buffers.pop(key)
+
     _sid_client_ips.pop(sid, None)
     _admin_sids.discard(sid)
     logger.info("Client disconnected: %s", sid)
@@ -1585,59 +1783,71 @@ async def on_ssh_connect(sid, data):
     )
 
 
-def _extract_commands(buffer: bytearray, incoming: bytes) -> list[str]:
-    """Append incoming bytes to *buffer* and extract complete command lines.
-
-    Lines are delimited by ``\\r\\n``, ``\\n``, or ``\\r``.  Each extracted line
-    has ANSI escape sequences stripped before being returned.  Partial lines
-    remain in *buffer* for the next chunk.
-    """
-    if incoming:
-        buffer.extend(incoming)
-
-    commands: list[str] = []
-    while True:
-        idx = -1
-        sep_len = 0
-        for sep in (b"\r\n", b"\n", b"\r"):
-            i = buffer.find(sep)
-            if i != -1 and (idx == -1 or i < idx):
-                idx = i
-                sep_len = len(sep)
-
-        if idx == -1:
-            break
-
-        cmd_bytes = buffer[:idx]
-        del buffer[: idx + sep_len]
-
-        cmd_text = cmd_bytes.decode("utf-8", errors="replace")
-        cleaned = audit_store.strip_escape(cmd_text).strip()
-        if cleaned:
-            commands.append(cleaned)
-
-    return commands
-
-
-def _extract_sensitive_line_count(buffer: bytearray, incoming: bytes) -> int:
-    """Consume complete sensitive-input lines without decoding their contents."""
-    if incoming:
-        buffer.extend(incoming)
-
-    count = 0
-    while True:
-        idx = -1
-        sep_len = 0
-        for sep in (b"\r\n", b"\n", b"\r"):
-            i = buffer.find(sep)
-            if i != -1 and (idx == -1 or i < idx):
-                idx = i
-                sep_len = len(sep)
-        if idx == -1:
-            break
-        del buffer[: idx + sep_len]
-        count += 1
-    return count
+async def _record_ssh_input_audit(
+    *,
+    sid: str,
+    session_id: str,
+    tab_id: str,
+    input_data: str | bytes,
+    target: tuple[str, int, str],
+    owner: str,
+    sensitive: bool,
+) -> None:
+    ssh_host, ssh_port, ssh_username = target
+    raw = (
+        input_data.encode("utf-8", errors="replace")
+        if isinstance(input_data, str)
+        else input_data
+    )
+    async with _input_buffer_lock:
+        key = (sid, session_id, tab_id)
+        if sensitive:
+            previous = _input_buffers.pop(key, None)
+            if previous is not None:
+                _close_command_buffer(previous)
+            buf = _sensitive_input_buffers.setdefault(key, _SensitiveInputBuffer())
+            sensitive_lines = buf.count_lines(raw)
+            commands: list[str] = []
+        else:
+            _sensitive_input_buffers.pop(key, None)
+            buf = _input_buffers.setdefault(key, _CommandInputBuffer())
+            sensitive_lines = 0
+            commands = buf.extract(raw)
+    for _ in range(sensitive_lines):
+        try:
+            await audit_store.record_sensitive_event(
+                ldap_username=owner,
+                session_id=session_id,
+                tab_id=tab_id,
+                ssh_host=ssh_host,
+                ssh_port=ssh_port,
+                ssh_username=ssh_username,
+            )
+        except Exception:
+            logger.exception("Failed to record sensitive input audit event")
+    for cmd in commands:
+        try:
+            if audit_store.is_sensitive_command(cmd):
+                await audit_store.record_sensitive_event(
+                    ldap_username=owner,
+                    session_id=session_id,
+                    tab_id=tab_id,
+                    ssh_host=ssh_host,
+                    ssh_port=ssh_port,
+                    ssh_username=ssh_username,
+                )
+            else:
+                await audit_store.record_command_event(
+                    ldap_username=owner,
+                    session_id=session_id,
+                    tab_id=tab_id,
+                    command=cmd,
+                    ssh_host=ssh_host,
+                    ssh_port=ssh_port,
+                    ssh_username=ssh_username,
+                )
+        except Exception:
+            logger.exception("Failed to record command audit event")
 
 
 @sio.on("ssh:input")
@@ -1649,97 +1859,66 @@ async def on_ssh_input(sid, data):
         return {"ok": False, "error": "Invalid session or tab ID."}
     if not await _require_auth(sid, tab_id):
         return {"ok": False, "error": "Authentication required."}
-    if isinstance(input_data, (str, bytes)) and len(input_data) > INPUT_QUEUE_MAX_BYTES:
-        return {"ok": False, "error": "Input too large.", "code": "input_too_large"}
 
     owner = await _owner_for_sid(sid)
-    if (
-        await ssh_manager.get_session_target(
-            session_id, tab_id, owner_ldap_username=owner
-        )
-        is None
-    ):
+    target = await ssh_manager.get_session_target(
+        session_id, tab_id, owner_ldap_username=owner
+    )
+    if target is None:
         return {
             "ok": False,
             "error": "Session is not available to this user.",
             "code": "session_owner_mismatch",
         }
 
+    accepted_any = False
+    on_input_accepted = None
     if _ldap_enabled and isinstance(input_data, (str, bytes)) and owner:
-        target = await ssh_manager.get_session_target(
-            session_id, tab_id, owner_ldap_username=owner
-        )
-        ssh_host, ssh_port, ssh_username = target or (None, None, None)
-        raw = (
+
+        async def record_accepted(chunk: bytes) -> None:
+            nonlocal accepted_any
+            accepted_any = True
+            await _record_ssh_input_audit(
+                sid=sid,
+                session_id=session_id,
+                tab_id=tab_id,
+                input_data=chunk,
+                target=target,
+                owner=owner,
+                sensitive=data.get("sensitive") is True,
+            )
+
+        on_input_accepted = record_accepted
+
+    status = await ssh_manager.handle_input(
+        session_id,
+        tab_id,
+        input_data,
+        owner_ldap_username=owner,
+        on_input_accepted=on_input_accepted,
+    )
+    # Test doubles and older manager adapters may not invoke the callback.
+    # Preserve audit behavior for those adapters without auditing a real
+    # partial submission that returned a string status.
+    if (
+        on_input_accepted is not None
+        and not accepted_any
+        and not isinstance(status, str)
+    ):
+        await on_input_accepted(
             input_data.encode("utf-8", errors="replace")
             if isinstance(input_data, str)
             else input_data
         )
-        sensitive = data.get("sensitive") is True
-        async with _input_buffer_lock:
-            key = (sid, session_id, tab_id)
-            if sensitive:
-                _input_buffers.pop(key, None)
-                buf = _sensitive_input_buffers.setdefault(key, bytearray())
-                if len(buf) + len(raw) > _MAX_INPUT_BUFFER:
-                    buf.clear()
-                sensitive_lines = _extract_sensitive_line_count(buf, raw)
-                commands: list[str] = []
-            else:
-                _sensitive_input_buffers.pop(key, None)
-                buf = _input_buffers.setdefault(key, bytearray())
-                if len(buf) + len(raw) > _MAX_INPUT_BUFFER:
-                    buf.clear()
-                sensitive_lines = 0
-                commands = _extract_commands(buf, raw)
-        for _ in range(sensitive_lines):
-            try:
-                await audit_store.record_sensitive_event(
-                    ldap_username=owner,
-                    session_id=session_id,
-                    tab_id=tab_id,
-                    ssh_host=ssh_host,
-                    ssh_port=ssh_port,
-                    ssh_username=ssh_username,
-                )
-            except Exception:
-                logger.exception("Failed to record sensitive input audit event")
-        for cmd in commands:
-            try:
-                if audit_store.is_sensitive_command(cmd):
-                    await audit_store.record_sensitive_event(
-                        ldap_username=owner,
-                        session_id=session_id,
-                        tab_id=tab_id,
-                        ssh_host=ssh_host,
-                        ssh_port=ssh_port,
-                        ssh_username=ssh_username,
-                    )
-                else:
-                    await audit_store.record_command_event(
-                        ldap_username=owner,
-                        session_id=session_id,
-                        tab_id=tab_id,
-                        command=cmd,
-                        ssh_host=ssh_host,
-                        ssh_port=ssh_port,
-                        ssh_username=ssh_username,
-                    )
-            except Exception:
-                logger.exception("Failed to record command audit event")
-    status = await ssh_manager.handle_input(
-        session_id, tab_id, input_data, owner_ldap_username=owner
-    )
-    if not isinstance(status, str) or status in {"queued", "sent"}:
-        return (
-            {"ok": True, "status": status} if isinstance(status, str) else {"ok": True}
-        )
-    return {
-        "ok": False,
-        "status": status,
-        "code": "input_queue_full" if status == "queue_full" else status,
-        "error": "Input was not accepted.",
-    }
+    if isinstance(status, str) and status not in {"queued", "sent"}:
+        return {
+            "ok": False,
+            "status": status,
+            "code": status,
+            "error": "Input was not accepted.",
+        }
+
+    return {"ok": True, "status": status} if isinstance(status, str) else {"ok": True}
 
 
 @sio.on("ssh:interrupt")
@@ -1797,7 +1976,9 @@ async def on_ssh_disconnect(sid, data):
     await sftp_manager.close_sftp(tab_id)
     async with _input_buffer_lock:
         key = (sid, session_id, tab_id)
-        _input_buffers.pop(key, None)
+        buffer = _input_buffers.pop(key, None)
+        if buffer is not None:
+            _close_command_buffer(buffer)
         _sensitive_input_buffers.pop(key, None)
 
 

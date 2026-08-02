@@ -115,17 +115,48 @@ describe('AdminConsole', () => {
     })
   })
 
+  it('adds an LDAP user without a restart', async () => {
+    const { fetchMock } = await renderAdmin()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Users & policy' }))
+    fireEvent.change(screen.getByLabelText('Add LDAP user'), { target: { value: 'bob' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Add user' }))
+
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('User added; no restart required.'))
+    const postCall = fetchMock.mock.calls.find(([input, init]) => String(input) === '/api/admin/users' && init?.method === 'POST')
+    expect(postCall).toBeDefined()
+    expect(JSON.parse(String(postCall?.[1]?.body))).toMatchObject({
+      username: 'bob',
+      expected_fingerprint: 'fingerprint-1',
+    })
+  })
+
+  it('passes activity user and since filters to the API', async () => {
+    const { fetchMock } = await renderAdmin()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Submitted input' }))
+    fireEvent.change(screen.getByLabelText('User'), { target: { value: 'alice' } })
+    fireEvent.change(screen.getByLabelText('Since'), { target: { value: '2026-08-01' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Apply filters' }))
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      '/api/admin/activity?limit=100&username=alice&since=2026-08-01',
+      expect.anything(),
+    ))
+  })
+
   it('uses internal purge confirmation and HTTP-safe idempotency keys', async () => {
     const { fetchMock } = await renderAdmin()
 
     fireEvent.click(screen.getByRole('tab', { name: 'retention' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Purge eligible terminal rows' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Review deletion' }))
     expect(screen.getByRole('dialog')).toBeInTheDocument()
+    expect(screen.getByText(/This cannot be undone/)).toBeInTheDocument()
 
     fireEvent.change(screen.getByLabelText('Type PURGE to confirm'), { target: { value: 'PURGE' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Purge rows' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Delete rows' }))
 
-    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Terminal audit rows purged'))
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Deleted terminal input older than 30 days'))
     const postCall = fetchMock.mock.calls.find(([, init]) => init?.method === 'POST')
     const headers = postCall?.[1]?.headers as Record<string, string>
     expect(headers['Idempotency-Key']).toMatch(/^admin-[0-9a-z-]+$/)

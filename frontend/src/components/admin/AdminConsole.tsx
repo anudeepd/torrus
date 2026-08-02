@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import { io, type Socket } from 'socket.io-client'
 import { Activity, Check, ChevronLeft, CircleStop, RefreshCw, Shield, Terminal, UserRound, X } from 'lucide-react'
 import AdminConfirmModal, { type AdminConfirmationRequest } from './AdminConfirmModal'
@@ -48,6 +48,11 @@ type RetentionInfo = {
 }
 
 type View = 'sessions' | 'users' | 'activity' | 'retention'
+type ActivityFilters = {
+  username: string
+  since: string
+}
+
 const ACTIVITY_INPUT_PREVIEW_LIMIT = 240
 
 
@@ -84,6 +89,7 @@ export default function AdminConsole({ onClose }: { onClose?: () => void }) {
   const [sessions, setSessions] = useState<AdminSession[]>([])
   const [users, setUsers] = useState<AdminUser[]>([])
   const [activity, setActivity] = useState<ActivityEvent[]>([])
+  const [activityFilters, setActivityFilters] = useState<ActivityFilters>({ username: '', since: '' })
   const [retention, setRetention] = useState<RetentionInfo | null>(null)
   const [policyFingerprint, setPolicyFingerprint] = useState('')
   const [loading, setLoading] = useState(true)
@@ -96,6 +102,8 @@ export default function AdminConsole({ onClose }: { onClose?: () => void }) {
   const csrfRef = useRef('')
   const refreshTimerRef = useRef<number | null>(null)
   const socketRef = useRef<Socket | null>(null)
+  const activityFiltersRef = useRef<ActivityFilters>({ username: '', since: '' })
+  const refreshGenerationRef = useRef(0)
 
   const loadCsrf = useCallback(async () => {
     const body = await requestJson('/api/admin/csrf')
@@ -103,17 +111,22 @@ export default function AdminConsole({ onClose }: { onClose?: () => void }) {
     return csrfRef.current
   }, [])
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (filters: ActivityFilters = activityFiltersRef.current) => {
+    const generation = ++refreshGenerationRef.current
     setLoading(true)
     setError(null)
     try {
+      const activityQuery = new URLSearchParams({ limit: '100' })
+      if (filters.username.trim()) activityQuery.set('username', filters.username.trim())
+      if (filters.since) activityQuery.set('since', filters.since)
       const [sessionData, userData, activityData, retentionData, policyData] = await Promise.all([
         requestJson('/api/admin/sessions?limit=100'),
         requestJson('/api/admin/users'),
-        requestJson('/api/admin/activity?limit=100'),
+        requestJson(`/api/admin/activity?${activityQuery.toString()}`),
         requestJson('/api/admin/retention?older_than_days=30'),
         requestJson('/api/admin/policy').catch(() => ({} as Record<string, unknown>)),
       ])
+      if (generation !== refreshGenerationRef.current) return
       setSessions((sessionData.items || []) as AdminSession[])
       setUsers((userData.items || []) as AdminUser[])
       setActivity((activityData.items || []) as ActivityEvent[])
@@ -123,11 +136,18 @@ export default function AdminConsole({ onClose }: { onClose?: () => void }) {
         .filter((value): value is number => typeof value === 'number')
       setLastUpdated(observed.length ? Math.max(...observed) * 1000 : Date.now())
     } catch (cause) {
+      if (generation !== refreshGenerationRef.current) return
       setError(cause instanceof Error ? cause as RequestFailure : new Error('Admin data unavailable.'))
     } finally {
-      setLoading(false)
+      if (generation === refreshGenerationRef.current) setLoading(false)
     }
   }, [])
+
+  const applyActivityFilters = useCallback((filters: ActivityFilters) => {
+    activityFiltersRef.current = filters
+    setActivityFilters(filters)
+    void refresh(filters)
+  }, [refresh])
 
   useEffect(() => {
     const timer = window.setTimeout(() => { void refresh() }, 0)
@@ -254,7 +274,6 @@ export default function AdminConsole({ onClose }: { onClose?: () => void }) {
           ))}
           <div className="mt-6 rounded-md border border-surface-800 bg-surface-950/60 p-3 text-[11px] leading-relaxed text-slate-600">Controls are owner-bound. Interrupt is best-effort and does not guarantee remote process termination.</div>
         </nav>
-
         <main className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto p-4 sm:p-6" aria-live="polite">
           <div className="mx-auto max-w-6xl">
             <div className="mb-4 flex gap-1 overflow-x-auto sm:hidden" role="tablist" aria-label="Admin views">
@@ -272,7 +291,7 @@ export default function AdminConsole({ onClose }: { onClose?: () => void }) {
               >
                 {view === 'sessions' && <SessionsTable sessions={sessions} selected={selectedSession} onSelect={setSelectedSession} onAction={act} onRequestAction={request => setConfirmation(request)} />}
                 {view === 'users' && <UsersTable users={users} fingerprint={policyFingerprint} onAction={act} onRequestAction={request => setConfirmation(request)} />}
-                {view === 'activity' && <ActivityTable events={activity} />}
+                {view === 'activity' && <ActivityTable events={activity} filters={activityFilters} onApplyFilters={applyActivityFilters} />}
                 {view === 'retention' && <RetentionPanel retention={retention} onAction={act} onRequestAction={request => setConfirmation(request)} />}
               </m.div>
             </AnimatePresence>
@@ -373,13 +392,47 @@ function SessionsTable({ sessions, selected, onSelect, onAction, onRequestAction
 }
 
 
+function AddUserForm({ fingerprint, onAction }: { fingerprint: string; onAction: Action }) {
+  const [username, setUsername] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    const normalized = username.trim()
+    if (!normalized || submitting) return
+    setSubmitting(true)
+    try {
+      const ok = await onAction(
+        '/api/admin/users',
+        { username: normalized, expected_fingerprint: fingerprint },
+        'User added; no restart required.',
+      )
+      if (ok) setUsername('')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <form onSubmit={submit} className="mb-4 flex flex-col gap-2 rounded-lg border border-surface-800 bg-surface-900 p-3 sm:flex-row sm:items-end">
+      <div className="min-w-0 flex-1">
+        <label htmlFor="admin-add-user" className="text-xs font-medium text-slate-300">Add LDAP user</label>
+        <p className="mt-1 text-[11px] text-slate-600">User must already exist in LDAP. Access applies immediately.</p>
+        <input id="admin-add-user" value={username} onChange={event => setUsername(event.target.value)} autoComplete="off" spellCheck={false} placeholder="username" className="mt-2 w-full rounded border border-surface-700 bg-surface-950 px-2.5 py-2 text-sm text-slate-200 outline-none placeholder:text-slate-700 focus:border-brand-500" />
+      </div>
+      <button type="submit" disabled={!username.trim() || submitting} className="rounded border border-brand-700/60 px-3 py-2 text-xs text-brand-300 transition-colors hover:bg-brand-950/40 disabled:opacity-50">{submitting ? 'Adding…' : 'Add user'}</button>
+    </form>
+  )
+}
+
 function UsersTable({ users, fingerprint, onAction, onRequestAction }: { users: AdminUser[]; fingerprint: string; onAction: Action; onRequestAction: RequestAction }) {
   return (
     <section aria-labelledby="users-title">
       <div className="mb-3">
         <h2 id="users-title" className="text-base font-semibold">Users & policy</h2>
-        <p className="mt-1 text-xs text-slate-500">Allowlist changes use a fingerprinted atomic update and require restart. Disable also revokes cookies and active tabs.</p>
+        <p className="mt-1 text-xs text-slate-500">Allowlist changes use a fingerprinted atomic update. New users apply immediately; disable also revokes cookies and active tabs.</p>
       </div>
+      <AddUserForm fingerprint={fingerprint} onAction={onAction} />
       <div className="overflow-x-auto rounded-lg border border-surface-800 bg-surface-900">
         <table className="w-full min-w-[620px] text-left text-xs">
           <caption className="sr-only">LDAP users and policy state</caption>
@@ -426,14 +479,48 @@ function ActivityInput({ value, kind }: { value: string; kind: string }) {
     </details>
   )
 }
+function ActivityFiltersForm({ filters, onApply }: { filters: ActivityFilters; onApply: (filters: ActivityFilters) => void }) {
+  const [username, setUsername] = useState(filters.username)
+  const [since, setSince] = useState(filters.since)
 
-function ActivityTable({ events }: { events: ActivityEvent[] }) {
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    onApply({ username, since })
+  }
+
+  const clear = () => {
+    setUsername('')
+    setSince('')
+    onApply({ username: '', since: '' })
+  }
+
+  return (
+    <form onSubmit={submit} className="mb-4 flex flex-col gap-2 rounded-lg border border-surface-800 bg-surface-900 p-3 sm:flex-row sm:items-end">
+      <div>
+        <label htmlFor="activity-user" className="block text-[11px] font-medium text-slate-400">User</label>
+        <input id="activity-user" value={username} onChange={event => setUsername(event.target.value)} autoComplete="off" spellCheck={false} placeholder="All users" className="mt-1 w-full rounded border border-surface-700 bg-surface-950 px-2.5 py-1.5 text-xs text-slate-200 outline-none placeholder:text-slate-700 focus:border-brand-500 sm:w-44" />
+      </div>
+      <div>
+        <label htmlFor="activity-since" className="block text-[11px] font-medium text-slate-400">Since</label>
+        <input id="activity-since" type="date" value={since} onChange={event => setSince(event.target.value)} className="mt-1 rounded border border-surface-700 bg-surface-950 px-2.5 py-1.5 text-xs text-slate-200 outline-none focus:border-brand-500" />
+      </div>
+      <div className="flex gap-2">
+        <button type="submit" className="rounded border border-brand-700/60 px-3 py-1.5 text-xs text-brand-300 transition-colors hover:bg-brand-950/40">Apply filters</button>
+        <button type="button" onClick={clear} className="rounded border border-surface-700 px-3 py-1.5 text-xs text-slate-400 transition-colors hover:bg-surface-800 hover:text-slate-200">Clear</button>
+      </div>
+    </form>
+  )
+}
+
+
+function ActivityTable({ events, filters, onApplyFilters }: { events: ActivityEvent[]; filters: ActivityFilters; onApplyFilters: (filters: ActivityFilters) => void }) {
   return (
     <section aria-labelledby="activity-title">
       <div className="mb-3">
         <h2 id="activity-title" className="text-base font-semibold">Submitted input</h2>
         <p className="mt-1 text-xs text-slate-500">Completed terminal input is shown line-by-line with multiline text preserved. Sensitive prompts are recorded only as redaction markers. Terminal output and SSH connection passwords are not recorded.</p>
       </div>
+      <ActivityFiltersForm filters={filters} onApply={onApplyFilters} />
       <div className="overflow-x-auto rounded-lg border border-surface-800 bg-surface-900">
         <table className="w-full min-w-[980px] text-left text-xs">
           <caption className="sr-only">Submitted terminal input events</caption>
@@ -460,14 +547,21 @@ function ActivityTable({ events }: { events: ActivityEvent[] }) {
 
 function RetentionPanel({ retention, onAction, onRequestAction }: { retention: RetentionInfo | null; onAction: Action; onRequestAction: RequestAction }) {
   const [days, setDays] = useState(retention?.cutoff_days || 30)
+  const ageLabel = days === 1 ? '1 day' : `${days} days`
   return (
     <section aria-labelledby="retention-title" className="max-w-xl">
       <h2 id="retention-title" className="text-base font-semibold">Manual audit cleanup</h2>
-      <p className="mt-1 text-xs leading-relaxed text-slate-500">Only terminal input rows older than the cutoff are deleted. Durable admin action records remain.</p>
-      <label className="mt-5 block text-xs text-slate-400" htmlFor="retention-days">Retention age in days</label>
+      <p className="mt-1 text-xs leading-relaxed text-slate-500">Remove completed terminal input older than selected age. Administrator action records stay.</p>
+      <label className="mt-5 block text-xs text-slate-400" htmlFor="retention-days">Delete input older than</label>
       <input id="retention-days" type="number" min={7} max={3650} value={days} onChange={event => setDays(Number(event.target.value))} className="mt-1 w-32 rounded border border-surface-700 bg-surface-900 px-2 py-1.5 text-sm text-slate-200 outline-none focus:border-brand-500" />
-      <div className="mt-4 rounded border border-surface-800 bg-surface-900 p-3 text-xs text-slate-400">Eligible rows: <strong className="text-slate-200">{retention?.eligible_count ?? '—'}</strong><br />Minimum age: {retention?.minimum_age_days ?? 7} days<br />Admin records retained: yes</div>
-      <button type="button" onClick={() => onRequestAction({ title: 'Purge audit rows?', description: `Delete terminal input rows older than ${days} days. Durable admin action records remain.`, expected: 'PURGE', confirmLabel: 'Purge rows', destructive: true, action: async () => { await onAction('/api/admin/retention/purge', { older_than_days: days, confirmation: 'PURGE' }, 'Terminal audit rows purged; admin actions retained.') } })} className="mt-4 rounded border border-red-900/60 px-3 py-2 text-xs text-red-300 transition-colors hover:bg-red-950/40">Purge eligible terminal rows</button>
+      <div className="mt-4 rounded border border-surface-800 bg-surface-900 p-3 text-xs text-slate-400">
+        <dl className="grid gap-2 sm:grid-cols-3">
+          <div><dt className="text-slate-600">Eligible rows</dt><dd className="text-slate-200">{retention?.eligible_count ?? '—'}</dd></div>
+          <div><dt className="text-slate-600">Minimum age</dt><dd className="text-slate-200">{retention?.minimum_age_days ?? 7} days</dd></div>
+          <div><dt className="text-slate-600">Admin records</dt><dd className="text-slate-200">Kept</dd></div>
+        </dl>
+      </div>
+      <button type="button" onClick={() => onRequestAction({ title: 'Delete terminal input?', description: `Delete terminal input older than ${ageLabel}. This cannot be undone. Administrator action records will remain.`, expected: 'PURGE', confirmLabel: 'Delete rows', destructive: true, action: async () => { await onAction('/api/admin/retention/purge', { older_than_days: days, confirmation: 'PURGE' }, `Deleted terminal input older than ${ageLabel}. Administrator action records remain.`) } })} className="mt-4 rounded border border-red-900/60 px-3 py-2 text-xs text-red-300 transition-colors hover:bg-red-950/40">Review deletion</button>
     </section>
   )
 }

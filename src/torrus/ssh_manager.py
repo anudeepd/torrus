@@ -80,6 +80,9 @@ class SSHSession:
     )
     input_queue_bytes: int = 0
     input_available: asyncio.Event = field(default_factory=asyncio.Event)
+    input_space_available: asyncio.Event = field(default_factory=asyncio.Event)
+    input_closed: asyncio.Event = field(default_factory=asyncio.Event)
+    input_submit_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     control_available: asyncio.Event = field(default_factory=asyncio.Event)
     queue_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     output_buffer: bytearray = field(default_factory=bytearray)
@@ -95,10 +98,12 @@ class SSHManager:
         self,
         sio,
         on_disconnect: Callable[[str], Awaitable[None]] | None = None,
+        on_tab_disconnect: Callable[[str, str], Awaitable[None]] | None = None,
         max_workers: int | None = None,
     ):
         self.sio = sio
         self._on_disconnect = on_disconnect
+        self._on_tab_disconnect = on_tab_disconnect
         # (session_id, tab_id) -> SSHSession
         self._sessions: dict[tuple[str, str], SSHSession] = {}
         self._generation_counters: dict[tuple[str, str], int] = {}
@@ -439,12 +444,13 @@ class SSHManager:
         tab_id: str,
         data: str | bytes,
         owner_ldap_username: str | None = None,
+        on_input_accepted: Callable[[bytes], Awaitable[None]] | None = None,
     ) -> str:
-        """Queue bounded input; control traffic uses ``interrupt`` priority."""
+        """Queue input in bounded chunks while preserving submission order."""
         key = (session_id, tab_id)
         async with self._lock:
             session = self._sessions.get(key)
-        if session is None or session.channel.closed:
+        if session is None or session.channel.closed or session.input_closed.is_set():
             return "unknown"
         if (
             owner_ldap_username is not None
@@ -457,15 +463,52 @@ class SSHManager:
         if not data:
             return "sent"
 
-        async with session.queue_lock:
-            if session.input_queue_bytes + len(data) > INPUT_QUEUE_MAX_BYTES:
-                return "queue_full"
-            for offset in range(0, len(data), INPUT_CHUNK_BYTES):
-                session.input_queue.put_nowait(
-                    data[offset : offset + INPUT_CHUNK_BYTES]
-                )
-            session.input_queue_bytes += len(data)
-            session.input_available.set()
+        async with session.input_submit_lock:
+            offset = 0
+            while offset < len(data):
+                accepted_chunk: bytes | None = None
+                async with session.queue_lock:
+                    if session.channel.closed or session.input_closed.is_set():
+                        return "unknown"
+                    capacity = INPUT_QUEUE_MAX_BYTES - session.input_queue_bytes
+                    if capacity > 0:
+                        chunk_size = min(
+                            INPUT_CHUNK_BYTES, capacity, len(data) - offset
+                        )
+                        accepted_chunk = data[offset : offset + chunk_size]
+                        try:
+                            session.input_queue.put_nowait(accepted_chunk)
+                        except asyncio.QueueFull:
+                            accepted_chunk = None
+                            capacity = 0
+                        else:
+                            session.input_queue_bytes += chunk_size
+                            offset += chunk_size
+                            session.input_available.set()
+                            if session.input_queue_bytes >= INPUT_QUEUE_MAX_BYTES:
+                                session.input_space_available.clear()
+                            else:
+                                session.input_space_available.set()
+                if accepted_chunk is not None:
+                    if on_input_accepted is not None:
+                        await on_input_accepted(accepted_chunk)
+                    continue
+                space_wait = asyncio.create_task(session.input_space_available.wait())
+                closed_wait = asyncio.create_task(session.input_closed.wait())
+                try:
+                    done, _pending = await asyncio.wait(
+                        (space_wait, closed_wait),
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                finally:
+                    for wait_task in (space_wait, closed_wait):
+                        if not wait_task.done():
+                            wait_task.cancel()
+                    await asyncio.gather(
+                        space_wait, closed_wait, return_exceptions=True
+                    )
+                if closed_wait in done or session.input_closed.is_set():
+                    return "unknown"
         session.last_activity = time.time()
         return "queued"
 
@@ -940,6 +983,8 @@ class SSHManager:
                     {"tab_id": session.tab_id, "data": data},
                     room=room,
                 )
+        session.input_closed.set()
+        session.input_space_available.set()
 
         await self.sio.emit(
             "ssh:closed",
@@ -961,6 +1006,16 @@ class SSHManager:
                 removed.channel,
                 removed.client if removed.owns_client else None,
             )
+        if self._on_tab_disconnect is not None:
+            try:
+                await self._on_tab_disconnect(session.session_id, session.tab_id)
+            except Exception:
+                logger.warning(
+                    "Per-tab disconnect callback failed for %s/%s",
+                    session.session_id,
+                    session.tab_id,
+                    exc_info=True,
+                )
         if not still_connected and self._on_disconnect is not None:
             await self._on_disconnect(session.session_id)
 
@@ -980,6 +1035,7 @@ class SSHManager:
                     try:
                         data = session.input_queue.get_nowait()
                         session.input_queue_bytes -= len(data)
+                        session.input_space_available.set()
                         if session.input_queue.empty():
                             session.input_available.clear()
                     except asyncio.QueueEmpty:
@@ -1078,6 +1134,8 @@ class SSHManager:
         return session
 
     async def _close_session(self, session: SSHSession) -> None:
+        session.input_closed.set()
+        session.input_space_available.set()
         tasks = [
             task
             for task in (session.read_task, session.write_task)

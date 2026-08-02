@@ -1,6 +1,7 @@
 """Tests for torrus.server Socket.IO event handlers."""
 
 import pytest
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 
@@ -506,6 +507,66 @@ class TestLdapAuthGating:
         )
 
     @pytest.mark.asyncio
+    async def test_ssh_input_records_all_commands_and_spans_large_chunks(self):
+        from torrus.server import on_ssh_input
+
+        import torrus.server as server_module
+
+        server_module._authenticated_sids.add("auth-sid")
+        server_module._authenticated_users["auth-sid"] = "alice"
+        server_module._ldap_session_manager = MagicMock()
+        server_module._ldap_session_manager.verify_session.return_value = "alice"
+        server_module._ldap_enabled = True
+        sio_mock = MagicMock()
+        sio_mock.get_environ.return_value = {
+            "REMOTE_ADDR": "1.2.3.4",
+            "HTTP_COOKIE": "ldapgate_session=abc",
+        }
+        large_command = "x" * (server_module._INPUT_BUFFER_MEMORY_LIMIT + 128)
+        with (
+            patch("torrus.server.sio", sio_mock),
+            patch.object(server_module.ssh_manager, "handle_input", AsyncMock()),
+            patch.object(
+                server_module.ssh_manager,
+                "get_session_target",
+                AsyncMock(return_value=("db.example", 22, "root")),
+            ),
+            patch(
+                "torrus.server.audit_store.record_command_event", AsyncMock()
+            ) as record,
+        ):
+            result = await on_ssh_input(
+                "auth-sid",
+                {
+                    "session_id": "sess1",
+                    "tab_id": "tab1",
+                    "data": "one\r\ntwo\nthree\rfour\nfive\r\nsix\r",
+                },
+            )
+            assert result == {"ok": True}
+            assert [call.kwargs["command"] for call in record.await_args_list] == [
+                "one",
+                "two",
+                "three",
+                "four",
+                "five",
+                "six",
+            ]
+
+            await on_ssh_input(
+                "auth-sid",
+                {"session_id": "sess1", "tab_id": "tab1", "data": large_command},
+            )
+            assert record.await_count == 6
+            await on_ssh_input(
+                "auth-sid",
+                {"session_id": "sess1", "tab_id": "tab1", "data": "\r"},
+            )
+
+        assert record.await_count == 7
+        assert record.await_args_list[-1].kwargs["command"] == large_command
+
+    @pytest.mark.asyncio
     async def test_sensitive_input_records_only_a_redaction_marker(self):
         from torrus.server import on_ssh_input
 
@@ -758,6 +819,70 @@ class TestIpLogging:
         await server_module.on_disconnect("sid-ip-1")
         await server_module.on_connect("sid-ip-2", {"REMOTE_ADDR": "192.0.2.10"})
         assert await server_module._check_rate_limit("sid-ip-2", "tab") is False
+
+
+def test_live_ldap_allowlist_updates_loaded_authenticator_config(monkeypatch):
+    import torrus.server as server_module
+
+    ldap_settings = SimpleNamespace(allowed_users=["alice"])
+    monkeypatch.setattr(
+        server_module,
+        "_ldap_config",
+        SimpleNamespace(ldap=ldap_settings),
+    )
+
+    server_module._apply_live_ldap_allowlist(["alice", "bob"])
+
+    assert ldap_settings.allowed_users == ["alice", "bob"]
+
+
+@pytest.mark.asyncio
+async def test_add_user_updates_live_allowlist_without_restart(monkeypatch):
+    import torrus.server as server_module
+
+    ldap_settings = SimpleNamespace(allowed_users=["alice"])
+    monkeypatch.setattr(
+        server_module,
+        "_ldap_config",
+        SimpleNamespace(ldap=ldap_settings),
+    )
+    monkeypatch.setattr(server_module, "_ldap_config_path", "/tmp/ldap.yaml")
+    monkeypatch.setattr(
+        server_module,
+        "_admin_actor",
+        AsyncMock(return_value=("admin", None)),
+    )
+    monkeypatch.setattr(
+        server_module,
+        "_begin_admin_action",
+        AsyncMock(return_value=({"action_id": "action-1"}, False, None)),
+    )
+    monkeypatch.setattr(
+        server_module,
+        "_policy_mutation",
+        AsyncMock(
+            return_value={
+                "fingerprint": "new-fingerprint",
+                "backup_id": "backup-1",
+                "allowed_users": ["alice", "bob"],
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        server_module,
+        "_admin_action_response",
+        AsyncMock(side_effect=lambda _record, **kwargs: kwargs["result"]),
+    )
+    request = MagicMock()
+    request.json = AsyncMock(
+        return_value={"username": "Bob", "expected_fingerprint": "old-fingerprint"}
+    )
+
+    result = await server_module.admin_add_user(request)
+
+    assert result["ok"] is True
+    assert result["restart_required"] is False
+    assert ldap_settings.allowed_users == ["alice", "bob"]
 
 
 class TestSocketDisconnect:

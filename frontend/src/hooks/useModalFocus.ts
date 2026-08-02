@@ -16,6 +16,10 @@ export function useModalFocus(
 ) {
   const dialogRef = useRef<HTMLDivElement>(null)
   const returnFocusRef = useRef<HTMLElement | null>(null)
+  const onCloseRef = useRef(onClose)
+  useEffect(() => {
+    onCloseRef.current = onClose
+  }, [onClose])
 
   useEffect(() => {
     if (!active) return
@@ -28,8 +32,7 @@ export function useModalFocus(
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
-        event.preventDefault()
-        onClose()
+        onCloseRef.current()
         return
       }
       if (event.key !== 'Tab') return
@@ -55,7 +58,7 @@ export function useModalFocus(
       window.removeEventListener('keydown', onKeyDown)
       returnFocusRef.current?.focus()
     }
-  }, [active, initialFocus, onClose])
+  }, [active, initialFocus])
 
   return dialogRef
 }

@@ -21,7 +21,7 @@ import type { PaneNode } from '@/store/layoutStore'
 import type { SavedServer, Tab } from '@/types'
 import { AnimatePresence } from 'motion/react'
 import * as m from 'motion/react-m'
-import { fade, surface, surfaceSpring } from '@/motion/tokens'
+import { fade, surface, surfaceSpring, surfaceTransition } from '@/motion/tokens'
 
 const SESSION_RESTORE_RETRY_MS = 3_000
 
@@ -500,7 +500,12 @@ export default function AppLayout({ navigateToAdmin = () => window.location.assi
   }, [pendingClose, closePaneNow, closeTabNow, closeAllTabsNow])
 
   return (
-    <div className="flex h-full bg-surface-950">
+    <m.div
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={surfaceTransition}
+      className="flex h-full bg-surface-950"
+    >
       <AuthRedirectOverlay />
       <AnimatePresence initial={false}>
         {(!isCompactViewport || sidebarOpen) && (
@@ -654,6 +659,6 @@ export default function AppLayout({ navigateToAdmin = () => window.location.assi
           </m.div>
         </m.div>
       )}
-    </div>
+    </m.div>
   )
 }

@@ -57,6 +57,15 @@ def mock_paramiko_client():
     return client
 
 
+def _clear_audit_buffers(server_module):
+    for buffer in server_module._input_buffers.values():
+        close = getattr(buffer, "close", None)
+        if close is not None:
+            close()
+    server_module._input_buffers.clear()
+    server_module._sensitive_input_buffers.clear()
+
+
 @pytest.fixture(autouse=True)
 def reset_server_state():
     """Reset mutable module-level state in server.py before each test."""
@@ -65,8 +74,7 @@ def reset_server_state():
     original_ssh_manager = server_module.ssh_manager
     server_module._authenticated_sids.clear()
     server_module._authenticated_users.clear()
-    server_module._input_buffers.clear()
-    server_module._sensitive_input_buffers.clear()
+    _clear_audit_buffers(server_module)
     server_module._connection_attempts.clear()
     server_module._sid_client_ips.clear()
     server_module._ldap_enabled = False
@@ -75,8 +83,7 @@ def reset_server_state():
     yield
     server_module._authenticated_sids.clear()
     server_module._authenticated_users.clear()
-    server_module._input_buffers.clear()
-    server_module._sensitive_input_buffers.clear()
+    _clear_audit_buffers(server_module)
     server_module._connection_attempts.clear()
     server_module._sid_client_ips.clear()
     server_module._ldap_enabled = False
