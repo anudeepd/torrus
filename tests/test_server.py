@@ -46,18 +46,20 @@ class TestServerConfig:
         monkeypatch.setattr(
             server_module.audit_store,
             "list_terminal_input_events",
-            lambda **_kwargs: [{
-                "id": 1,
-                "occurred_at": "2026-08-02T00:00:00+00:00",
-                "ldap_username": "alice",
-                "session_id": "sess",
-                "tab_id": "tab",
-                "ssh_host": "example.com",
-                "ssh_port": 22,
-                "ssh_username": "root",
-                "event_kind": "command",
-                "input_data": b"ls -la\r",
-            }],
+            lambda **_kwargs: [
+                {
+                    "id": 1,
+                    "occurred_at": "2026-08-02T00:00:00+00:00",
+                    "ldap_username": "alice",
+                    "session_id": "sess",
+                    "tab_id": "tab",
+                    "ssh_host": "example.com",
+                    "ssh_port": 22,
+                    "ssh_username": "root",
+                    "event_kind": "command",
+                    "input_data": b"ls -la\r",
+                }
+            ],
         )
 
         result = await server_module.admin_activity(request)

@@ -618,6 +618,7 @@ def _display_audit_input(value: bytes | str | None) -> str:
     )
     return audit_store.strip_escape(raw).replace("\r", "↵").replace("\n", "↵")
 
+
 @fastapi_app.get("/api/admin/activity", include_in_schema=False)
 async def admin_activity(request: Request):
     _actor, error = await _admin_guard(request)
