@@ -688,6 +688,7 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
       clearConnectTimeout()
       errorRef.current = ''
       setConnectionError('')
+      setTabStatus(tabId, 'connected')
       sensitiveInputPendingRef.current = false
       sensitiveOutputTailRef.current = ''
       requestAnimationFrame(() => {
@@ -753,8 +754,10 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
   const handleConnect = useCallback((values: ConnectFormValues) => {
     clearConnectTimeout()
     errorRef.current = ''
+    setConnectionError('')
     sensitiveInputPendingRef.current = false
     sensitiveOutputTailRef.current = ''
+    setTabStatus(tabId, 'connecting')
     setTabConnection(tabId, values.host, values.port, values.username)
     const term = termRef.current
     socket.emit('ssh:connect', {

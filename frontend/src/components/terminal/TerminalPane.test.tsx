@@ -784,4 +784,47 @@ describe('TerminalPane', () => {
 
     expect(useTerminalStore.getState().tabs[0]?.status).toBe('connected')
   })
+
+  it('clears stale auth errors and completes a retried connection', async () => {
+    const tabId = 'tab-connect-retry'
+    act(() => {
+      seedStores(tabId, 'disconnected')
+    })
+
+    const socket = createMockSocket()
+    render(
+      <TerminalPane
+        tabId={tabId}
+        isActive={true}
+        focused={true}
+        socket={socket as unknown as import('socket.io-client').Socket}
+      />
+    )
+
+    fireEvent.change(screen.getByTestId('host-input'), { target: { value: 'example.com' } })
+    fireEvent.change(screen.getByTestId('username-input'), { target: { value: 'alice' } })
+    fireEvent.change(screen.getByTestId('password-input'), { target: { value: 'wrong' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Connect' }))
+
+    expect(useTerminalStore.getState().tabs[0]?.status).toBe('connecting')
+
+    act(() => {
+      socket._trigger('ssh:error', {
+        tab_id: tabId,
+        message: 'Authentication failed. Check username and password.',
+      })
+    })
+    expect(await screen.findByText('Authentication failed. Check username and password.')).toBeInTheDocument()
+
+    fireEvent.change(screen.getByTestId('password-input'), { target: { value: 'correct' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Connect' }))
+
+    expect(useTerminalStore.getState().tabs[0]?.status).toBe('connecting')
+    expect(screen.queryByText('Authentication failed. Check username and password.')).not.toBeInTheDocument()
+
+    act(() => {
+      socket._trigger('ssh:connected', { tab_id: tabId })
+    })
+    expect(useTerminalStore.getState().tabs[0]?.status).toBe('connected')
+  })
 })

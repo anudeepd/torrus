@@ -13,6 +13,8 @@
 - Label folder creation, rename, upload, download, listing, permission, ownership, and account-loading failures with operation context while preserving server details.
 - Close disconnected SSH tabs without showing the active-session confirmation.
 - Refresh the current SFTP directory after successful uploads, retried uploads, permission changes, and ownership changes.
+- Remove cross-document view transitions from terminal/admin navigation, eliminating skipped-transition errors and page flashes.
+- Restore SSH connection state transitions so retries clear stale authentication errors and successful connections leave the form.
 
 ### Changed
 
