@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
 import { io, type Socket } from 'socket.io-client'
 import { Activity, Check, ChevronLeft, CircleStop, RefreshCw, Shield, Terminal, UserRound, X } from 'lucide-react'
 import AdminConfirmModal, { type AdminConfirmationRequest } from './AdminConfirmModal'
@@ -55,6 +55,14 @@ type ActivityFilters = {
 }
 
 const ACTIVITY_INPUT_PREVIEW_LIMIT = 240
+const ADMIN_NOTICE_TIMEOUT_MS = 5_000
+
+function submitActivityFiltersOnEnter(event: KeyboardEvent<HTMLInputElement>) {
+  const form = event.currentTarget.form
+  if (event.key !== 'Enter' || event.nativeEvent.isComposing || !form) return
+  event.preventDefault()
+  form.requestSubmit()
+}
 
 
 type RequestFailure = Error & { status?: number; code?: string }
@@ -183,6 +191,13 @@ export default function AdminConsole({ onClose }: { onClose?: () => void }) {
       socketRef.current = null
     }
   }, [refresh])
+
+  useEffect(() => {
+    if (!notice) return
+    const timeout = window.setTimeout(() => setNotice(''), ADMIN_NOTICE_TIMEOUT_MS)
+    return () => window.clearTimeout(timeout)
+  }, [notice])
+
 
   const act = useCallback(async (path: string, body: Record<string, unknown>, message: string): Promise<boolean> => {
     setNotice('')
@@ -349,7 +364,7 @@ function SessionsTable({ sessions, selected, onSelect, onAction, onRequestAction
                         type="button"
                         onClick={() => onRequestAction({
                           title: 'Interrupt SSH session?',
-                          description: `Send Ctrl+C to ${session.username}@${session.host}. This signals the current foreground process; it does not guarantee remote process termination.`,
+                          description: `Send Ctrl+C to ${session.username}@${session.host}. This signals the current foreground process. It does not guarantee remote process termination.`,
                           expected: 'INTERRUPT',
                           confirmLabel: 'Send interrupt',
                           action: async () => { await onAction(`/api/admin/sessions/${encodeURIComponent(session.session_instance_id)}/interrupt`, { generation: session.generation }, 'Interrupt queued.') },
@@ -407,7 +422,7 @@ function AddUserForm({ fingerprint, onAction }: { fingerprint: string; onAction:
       const ok = await onAction(
         '/api/admin/users',
         { username: normalized, expected_fingerprint: fingerprint },
-        'User added; no restart required.',
+        'User added. No restart required.',
       )
       if (ok) setUsername('')
     } finally {
@@ -432,7 +447,7 @@ function UsersTable({ users, fingerprint, onAction, onRequestAction }: { users: 
     <section aria-labelledby="users-title">
       <div className="mb-3">
         <h2 id="users-title" className="text-base font-semibold">Users & policy</h2>
-        <p className="mt-1 text-xs text-slate-500">Allowlist changes use a fingerprinted atomic update. New users apply immediately; disable also revokes cookies and active tabs.</p>
+        <p className="mt-1 text-xs text-slate-500">Allowlist changes use a fingerprinted atomic update. New users apply immediately. Disable also revokes cookies and active tabs.</p>
       </div>
       <AddUserForm fingerprint={fingerprint} onAction={onAction} />
       <div className="overflow-x-auto rounded-lg border border-surface-800 bg-surface-900">
@@ -449,8 +464,8 @@ function UsersTable({ users, fingerprint, onAction, onRequestAction }: { users: 
                   <td className="px-3 py-3 text-amber-300">{user.policy_state}</td>
                   <td className="px-3 py-3 text-right">
                     {user.policy_state === 'disabled'
-                      ? <button type="button" onClick={() => onRequestAction({ title: 'Enable LDAP user?', description: `Re-enable ${user.username} immediately.`, expected: `ENABLE ${user.username}`, confirmLabel: 'Enable user', action: async () => { await onAction(`/api/admin/users/${encodeURIComponent(user.username)}/enable`, { expected_fingerprint: fingerprint }, 'User enabled; no restart required.') } })} className="rounded border border-green-900/60 px-2 py-1 text-[11px] text-green-300 transition-colors hover:bg-green-950/40">Enable</button>
-                      : <button type="button" onClick={() => onRequestAction({ title: 'Disable LDAP user?', description: `Revoke ${user.username}'s cookies and active tabs, then disable the user immediately.`, expected: `DISABLE ${user.username}`, confirmLabel: 'Disable user', destructive: true, action: async () => { await onAction(`/api/admin/users/${encodeURIComponent(user.username)}/disable`, { expected_fingerprint: fingerprint }, 'User disabled; no restart required.') } })} className="rounded border border-red-900/60 px-2 py-1 text-[11px] text-red-300 transition-colors hover:bg-red-950/40">Disable</button>}
+                      ? <button type="button" onClick={() => onRequestAction({ title: 'Enable LDAP user?', description: `Re-enable ${user.username} immediately.`, expected: `ENABLE ${user.username}`, confirmLabel: 'Enable user', action: async () => { await onAction(`/api/admin/users/${encodeURIComponent(user.username)}/enable`, { expected_fingerprint: fingerprint }, 'User enabled. No restart required.') } })} className="rounded border border-green-900/60 px-2 py-1 text-[11px] text-green-300 transition-colors hover:bg-green-950/40">Enable</button>
+                      : <button type="button" onClick={() => onRequestAction({ title: 'Disable LDAP user?', description: `Revoke ${user.username}'s cookies and active tabs, then disable the user immediately.`, expected: `DISABLE ${user.username}`, confirmLabel: 'Disable user', destructive: true, action: async () => { await onAction(`/api/admin/users/${encodeURIComponent(user.username)}/disable`, { expected_fingerprint: fingerprint }, 'User disabled. No restart required.') } })} className="rounded border border-red-900/60 px-2 py-1 text-[11px] text-red-300 transition-colors hover:bg-red-950/40">Disable</button>}
                   </td>
                 </tr>
               ))}
@@ -502,15 +517,15 @@ function ActivityFiltersForm({ filters, onApply }: { filters: ActivityFilters; o
     <form onSubmit={submit} className="mb-4 flex flex-col gap-2 rounded-lg border border-surface-800 bg-surface-900 p-3 sm:flex-row sm:items-end">
       <div>
         <label htmlFor="activity-user" className="block text-[11px] font-medium text-slate-400">User</label>
-        <input id="activity-user" type="search" value={username} onChange={event => setUsername(event.target.value)} autoComplete="off" spellCheck={false} enterKeyHint="search" placeholder="All users" className="mt-1 w-full rounded border border-surface-700 bg-surface-950 px-2.5 py-1.5 text-xs text-slate-200 outline-none placeholder:text-slate-700 focus:border-brand-500 sm:w-44" />
+        <input id="activity-user" type="search" value={username} onChange={event => setUsername(event.target.value)} onKeyDown={submitActivityFiltersOnEnter} autoComplete="off" spellCheck={false} enterKeyHint="search" placeholder="All users" className="mt-1 w-full rounded border border-surface-700 bg-surface-950 px-2.5 py-1.5 text-xs text-slate-200 outline-none placeholder:text-slate-700 focus:border-brand-500 sm:w-44" />
       </div>
       <div>
         <label htmlFor="activity-input" className="block text-[11px] font-medium text-slate-400">Command</label>
-        <input id="activity-input" type="search" value={input} onChange={event => setInput(event.target.value)} autoComplete="off" spellCheck={false} enterKeyHint="search" placeholder="Search command text" className="mt-1 w-full rounded border border-surface-700 bg-surface-950 px-2.5 py-1.5 text-xs text-slate-200 outline-none placeholder:text-slate-700 focus:border-brand-500 sm:w-56" />
+        <input id="activity-input" type="search" value={input} onChange={event => setInput(event.target.value)} onKeyDown={submitActivityFiltersOnEnter} autoComplete="off" spellCheck={false} enterKeyHint="search" placeholder="Search command text" className="mt-1 w-full rounded border border-surface-700 bg-surface-950 px-2.5 py-1.5 text-xs text-slate-200 outline-none placeholder:text-slate-700 focus:border-brand-500 sm:w-56" />
       </div>
       <div>
         <label htmlFor="activity-since" className="block text-[11px] font-medium text-slate-400">Since</label>
-        <input id="activity-since" type="date" value={since} onChange={event => setSince(event.target.value)} className="mt-1 rounded border border-surface-700 bg-surface-950 px-2.5 py-1.5 text-xs text-slate-200 outline-none focus:border-brand-500" />
+        <input id="activity-since" type="date" value={since} onChange={event => setSince(event.target.value)} onKeyDown={submitActivityFiltersOnEnter} className="mt-1 rounded border border-surface-700 bg-surface-950 px-2.5 py-1.5 text-xs text-slate-200 outline-none focus:border-brand-500" />
       </div>
       <div className="flex gap-2">
         <button type="submit" className="rounded border border-brand-700/60 px-3 py-1.5 text-xs text-brand-300 transition-colors hover:bg-brand-950/40">Apply filters</button>

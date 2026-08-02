@@ -433,10 +433,10 @@ describe('useSFTP', () => {
       })
     })
 
-    expect(useSFTPStore.getState().tabs[tabId].error).toBe('Deleted 1 item; failed to delete locked: Permission denied: /root/locked')
+    expect(useSFTPStore.getState().tabs[tabId].error).toBe('Deleted 1 item. Failed to delete locked: Permission denied: /root/locked')
     expect(useSFTPStore.getState().tabs[tabId].notice).toEqual({
       tone: 'error',
-      message: 'Deleted 1 item; failed to delete locked: Permission denied: /root/locked',
+      message: 'Deleted 1 item. Failed to delete locked: Permission denied: /root/locked',
     })
     expect(socket.emit).toHaveBeenCalledWith('sftp:list', expect.objectContaining({ path: '.' }))
   })

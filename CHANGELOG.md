@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.2.32] - 2026-08-02
+
+### Fixed
+
+- Auto-dismiss Admin Console success notices after five seconds.
+- Make Enter submit Submitted input filters reliably from keyboard.
+- Replace semicolon-separated admin and SFTP feedback with sentence-based copy.
+- Rebuild bundled frontend assets for the release.
+
 ## [0.2.31] - 2026-08-02
 
 ### Added

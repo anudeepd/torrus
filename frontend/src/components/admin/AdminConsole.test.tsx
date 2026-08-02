@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createMockSocket } from '@/test/mocks/socket'
 
@@ -122,7 +122,7 @@ describe('AdminConsole', () => {
     fireEvent.change(screen.getByLabelText('Add LDAP user'), { target: { value: 'bob' } })
     fireEvent.click(screen.getByRole('button', { name: 'Add user' }))
 
-    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('User added; no restart required.'))
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('User added. No restart required.'))
     const postCall = fetchMock.mock.calls.find(([input, init]) => String(input) === '/api/admin/users' && init?.method === 'POST')
     expect(postCall).toBeDefined()
     expect(JSON.parse(String(postCall?.[1]?.body))).toMatchObject({
@@ -138,12 +138,27 @@ describe('AdminConsole', () => {
     fireEvent.change(screen.getByLabelText('User'), { target: { value: 'ali' } })
     fireEvent.change(screen.getByLabelText('Command'), { target: { value: 'status' } })
     fireEvent.change(screen.getByLabelText('Since'), { target: { value: '2026-08-01' } })
-    fireEvent.submit(screen.getByLabelText('Command').closest('form')!)
+    fireEvent.keyDown(screen.getByLabelText('User'), { key: 'Enter' })
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
       '/api/admin/activity?limit=100&username=ali&input=status&since=2026-08-01',
       expect.anything(),
     ))
+  })
+
+  it('auto-dismisses admin success notices after five seconds', async () => {
+    const timeoutSpy = vi.spyOn(window, 'setTimeout')
+    await renderAdmin()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Users & policy' }))
+    fireEvent.change(screen.getByLabelText('Add LDAP user'), { target: { value: 'bob' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Add user' }))
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('User added. No restart required.'))
+
+    const noticeTimer = timeoutSpy.mock.calls.find(([, delay]) => delay === 5_000)
+    expect(noticeTimer).toBeDefined()
+    act(() => (noticeTimer?.[0] as () => void)())
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
   })
 
   it('uses internal purge confirmation and HTTP-safe idempotency keys', async () => {

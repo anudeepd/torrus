@@ -150,13 +150,13 @@ function deleteFailureMessage(payload: ListingPayload): string {
   const target = firstFailure?.path ? ` (${itemLabel(firstFailure.path)})` : ''
 
   if (failed.length > 1 && succeeded.length > 0) {
-    return `Deleted ${plural(succeeded.length, 'item')}; failed to delete ${plural(failed.length, 'item')}${target}: ${detail}`
+    return `Deleted ${plural(succeeded.length, 'item')}. Failed to delete ${plural(failed.length, 'item')}${target}: ${detail}`
   }
   if (failed.length > 1) {
     return `Failed to delete ${plural(failed.length, 'item')}${target}: ${detail}`
   }
   if (succeeded.length > 0) {
-    return `Deleted ${plural(succeeded.length, 'item')}; failed to delete ${itemLabel(firstFailure?.path)}: ${detail}`
+    return `Deleted ${plural(succeeded.length, 'item')}. Failed to delete ${itemLabel(firstFailure?.path)}: ${detail}`
   }
   return `Failed to delete ${itemLabel(firstFailure?.path)}: ${detail}`
 }
