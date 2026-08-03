@@ -7,6 +7,9 @@ ldap:
     allowed_users:
         - alice
         - bob
+    # Sized for login bursts across at least 200 active users.
+    timeout: 30
+    pool_size: 16
 proxy:
     backend_url: http://localhost:8080
     secret_key: Z9x#W8v$U7tR6s%Q5p!O4n@M3l^K2j*H1gF0dE
