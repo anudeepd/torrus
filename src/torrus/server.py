@@ -187,6 +187,7 @@ class _CommandInputBuffer:
     skip_lf: bool = False
     size: int = 0
     overflowed: bool = False
+    completion_pending: bool = False
 
     def _append(self, incoming: bytes) -> None:
         if not incoming or self.overflowed:
@@ -207,8 +208,22 @@ class _CommandInputBuffer:
         self.size = 0
         self.overflowed = False
 
+    def observe_output(self, incoming: bytes) -> None:
+        """Append inline shell-completion text while a Tab request is pending."""
+        if not self.completion_pending or not incoming:
+            return
+        if b"\r" in incoming or b"\n" in incoming:
+            return
+        completion = audit_store.strip_escape(
+            incoming.decode("utf-8", errors="replace")
+        ).replace("\t", "")
+        if completion:
+            self._append(completion.encode("utf-8", errors="replace"))
+
     def extract(self, incoming: bytes) -> list[str]:
         commands: list[str] = []
+        if incoming:
+            self.completion_pending = False
         start = 0
         for index, value in enumerate(incoming):
             if self.skip_lf:
@@ -216,6 +231,12 @@ class _CommandInputBuffer:
                 if value == 0x0A:
                     start = index + 1
                     continue
+            if value == 0x09:
+                if start < index:
+                    self._append(incoming[start:index])
+                self.completion_pending = True
+                start = index + 1
+                continue
             if value not in (0x0A, 0x0D):
                 continue
             if start < index:
@@ -296,11 +317,22 @@ async def _cleanup_ssh_input_buffer(session_id: str, tab_id: str) -> None:
             _sensitive_input_buffers.pop(key)
 
 
+async def _record_ssh_output_audit(
+    session_id: str, tab_id: str, output_data: bytes
+) -> None:
+    """Feed inline completion output to matching command audit buffers."""
+    async with _input_buffer_lock:
+        for key, buffer in _input_buffers.items():
+            if key[1:] == (session_id, tab_id):
+                buffer.observe_output(output_data)
+
+
 sftp_manager = SFTPManager(max_workers=max(16, min(64, (os.cpu_count() or 4) * 4)))
 ssh_manager = SSHManager(
     sio,
     on_disconnect=sftp_manager.on_ssh_disconnect,
     on_tab_disconnect=_cleanup_ssh_input_buffer,
+    on_output=_record_ssh_output_audit,
     max_workers=_IO_WORKERS,
 )
 

@@ -100,10 +100,12 @@ class SSHManager:
         on_disconnect: Callable[[str], Awaitable[None]] | None = None,
         on_tab_disconnect: Callable[[str, str], Awaitable[None]] | None = None,
         max_workers: int | None = None,
+        on_output: Callable[[str, str, bytes], Awaitable[None]] | None = None,
     ):
         self.sio = sio
         self._on_disconnect = on_disconnect
         self._on_tab_disconnect = on_tab_disconnect
+        self._on_output = on_output
         # (session_id, tab_id) -> SSHSession
         self._sessions: dict[tuple[str, str], SSHSession] = {}
         self._generation_counters: dict[tuple[str, str], int] = {}
@@ -978,6 +980,17 @@ class SSHManager:
                     del session.output_buffer[
                         : len(session.output_buffer) - OUTPUT_BUFFER_MAX
                     ]
+                if self._on_output is not None:
+                    try:
+                        await self._on_output(
+                            session.session_id, session.tab_id, bytes(data)
+                        )
+                    except Exception:
+                        logger.exception(
+                            "Output callback failed for %s/%s",
+                            session.session_id,
+                            session.tab_id,
+                        )
                 await self.sio.emit(
                     "ssh:output",
                     {"tab_id": session.tab_id, "data": data},
