@@ -27,6 +27,34 @@ async def test_inline_tab_completion_is_included_in_audited_command():
         buffer.close()
 
 
+def test_bracketed_bulk_paste_preserves_markers_and_literal_tabs():
+    """Bulk paste markers must not leak into or alter audited commands."""
+    import torrus.server as server_module
+
+    buffer = server_module._CommandInputBuffer()
+    try:
+        assert buffer.extract(b"\x1b[20") == []
+        assert buffer.extract(b'0~if true; then\recho\t"bulk"\rfi\x1b[201~\r') == [
+            "if true; then",
+            'echo\t"bulk"',
+            "fi",
+        ]
+    finally:
+        buffer.close()
+
+
+def test_bracketed_bulk_paste_state_spans_input_chunks():
+    """Split Socket.IO chunks must retain bracketed-paste state."""
+    import torrus.server as server_module
+
+    buffer = server_module._CommandInputBuffer()
+    try:
+        assert buffer.extract(b"\x1b[200~echo one\r") == ["echo one"]
+        assert buffer.extract(b"echo\t two\x1b[201~\r") == ["echo\t two"]
+    finally:
+        buffer.close()
+
+
 @pytest.mark.asyncio
 async def test_completion_listing_is_not_mistaken_for_command_text():
     """Multiline completion choices must stay terminal output, not audit input."""

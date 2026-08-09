@@ -31,6 +31,50 @@ async def test_sftp_list_event_emits_listing(reset_server_state):
 
 
 @pytest.mark.asyncio
+async def test_sftp_list_checks_source_ssh_tab_for_ldap_owner(reset_server_state):
+    from torrus.server import on_sftp_list
+    import torrus.server as server_module
+
+    sio_mock = MagicMock()
+    sio_mock.emit = AsyncMock()
+    server_module._ldap_enabled = True
+    server_module._authenticated_users["sid-1"] = "alice"
+    server_module.sftp_manager = MagicMock()
+    server_module.sftp_manager.get_source_tab_id.return_value = "terminal-tab"
+    server_module.sftp_manager.list_directory = AsyncMock(
+        return_value={"ok": True, "path": "/target", "entries": []}
+    )
+    server_module.ssh_manager = MagicMock()
+    server_module.ssh_manager.get_session_target = AsyncMock(
+        return_value=("server.example", 22, "deploy")
+    )
+
+    with (
+        patch("torrus.server.sio", sio_mock),
+        patch.object(server_module, "_require_auth", AsyncMock(return_value=True)),
+    ):
+        await on_sftp_list(
+            "sid-1",
+            {"session_id": "sess1", "tab_id": "sftp-tab", "path": "/target"},
+        )
+
+    server_module.sftp_manager.get_source_tab_id.assert_called_once_with(
+        "sftp-tab", expected_session_id="sess1"
+    )
+    server_module.ssh_manager.get_session_target.assert_awaited_once_with(
+        "sess1", "terminal-tab", owner_ldap_username="alice"
+    )
+    server_module.sftp_manager.list_directory.assert_awaited_once_with(
+        "sftp-tab", "/target"
+    )
+    sio_mock.emit.assert_awaited_once_with(
+        "sftp:list:result",
+        {"tab_id": "sftp-tab", "ok": True, "path": "/target", "entries": []},
+        to="sid-1",
+    )
+
+
+@pytest.mark.asyncio
 async def test_sftp_list_event_returns_structured_error(reset_server_state):
     from torrus.server import on_sftp_list
     from torrus.sftp_manager import SFTPError

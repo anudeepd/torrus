@@ -208,6 +208,7 @@ class SSHManager:
             self._generation_counters[key] = generation
         if old_session is not None:
             await self._close_session(old_session)
+            await self._notify_tab_disconnect(old_session)
 
         client: paramiko.SSHClient | None = None
         connection_succeeded = False
@@ -815,6 +816,7 @@ class SSHManager:
         source_key = (session_id, source_tab_id)
         new_key = (session_id, new_tab_id)
         room = _room(session_id, new_tab_id)
+        replaced_session: SSHSession | None = None
 
         async with self._lock:
             source = self._sessions.get(source_key)
@@ -854,6 +856,7 @@ class SSHManager:
                     return
                 await self._close_session(existing)
                 self._sessions.pop(new_key, None)
+                replaced_session = existing
 
             generation = self._generation_counters.get(new_key, 0) + 1
             self._generation_counters[new_key] = generation
@@ -907,6 +910,8 @@ class SSHManager:
             self._sessions[new_key] = session
             self._sid_map.setdefault(sid, set()).add(new_key)
 
+        if replaced_session is not None:
+            await self._notify_tab_disconnect(replaced_session)
         await self.sio.enter_room(sid, room)
         session.read_task = asyncio.create_task(self._read_loop(session))
         session.write_task = asyncio.create_task(self._write_loop(session))
@@ -1019,16 +1024,7 @@ class SSHManager:
                 removed.channel,
                 removed.client if removed.owns_client else None,
             )
-        if self._on_tab_disconnect is not None:
-            try:
-                await self._on_tab_disconnect(session.session_id, session.tab_id)
-            except Exception:
-                logger.warning(
-                    "Per-tab disconnect callback failed for %s/%s",
-                    session.session_id,
-                    session.tab_id,
-                    exc_info=True,
-                )
+        await self._notify_tab_disconnect(session)
         if not still_connected and self._on_disconnect is not None:
             await self._on_disconnect(session.session_id)
 
@@ -1113,7 +1109,21 @@ class SSHManager:
         if session is None:
             return False
         await self._close_session(session)
+        await self._notify_tab_disconnect(session)
         return True
+
+    async def _notify_tab_disconnect(self, session: SSHSession) -> None:
+        if self._on_tab_disconnect is None:
+            return
+        try:
+            await self._on_tab_disconnect(session.session_id, session.tab_id)
+        except Exception:
+            logger.warning(
+                "Per-tab disconnect callback failed for %s/%s",
+                session.session_id,
+                session.tab_id,
+                exc_info=True,
+            )
 
     def _pop_session_locked(
         self, key: tuple[str, str], cancel_current: bool = True
@@ -1203,10 +1213,10 @@ class SSHManager:
                 ]
                 sessions = [self._pop_session_locked(key) for key in to_remove]
             for session in sessions:
-                if session is not None:
-                    await self._close_session(session)
-            if to_remove:
-                logger.info("Cleaned up %d idle/dead sessions", len(to_remove))
+                if session is None:
+                    continue
+                await self._close_session(session)
+                await self._notify_tab_disconnect(session)
 
 
 def _open_tmux_channel(

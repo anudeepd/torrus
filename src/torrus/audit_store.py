@@ -12,7 +12,7 @@ from pathlib import Path
 from torrus.admin_state import action_payload, new_action_id
 
 _ANSI_RE = re.compile(
-    r"\x1B\[[\d;]*[A-Za-z]"  # CSI sequences
+    r"\x1B\[[0-?]*[ -/]*[@-~]"  # CSI sequences
     r"|\x1B\].*?(?:\x1B\\|\x07)"  # OSC sequences (ST or BEL terminated)
     r"|\x1B[\x40-\x5F]"  # 2-byte escape sequences
     r"|[\x00-\x07\x0b\x0c\x0e-\x1f]"  # control chars except tab(\t), BS(\b), CR(\r), LF(\n), DEL(\x7f)

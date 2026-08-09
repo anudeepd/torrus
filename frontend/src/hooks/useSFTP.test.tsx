@@ -58,6 +58,28 @@ describe('useSFTP', () => {
     expect(useTerminalStore.getState().tabs[0].status).toBe('dead')
   })
 
+  it('stops loading when a generic SFTP error reports a closed connection', () => {
+    const socket = createMockSocket()
+    const { result } = renderHook(() => useSFTP(tabId, 'terminal-tab', socket as unknown as Socket))
+
+    act(() => result.current.list('/root'))
+    expect(useSFTPStore.getState().tabs[tabId]?.loading).toBe(true)
+
+    act(() => {
+      socket._trigger('sftp:error', {
+        tab_id: tabId,
+        code: 'CONNECTION_CLOSED',
+        message: 'SSH connection lost. Reconnect to continue.',
+      })
+    })
+
+    expect(useSFTPStore.getState().tabs[tabId]).toMatchObject({
+      disconnected: true,
+      loading: false,
+      error: 'SSH connection lost. Reconnect to continue.',
+    })
+  })
+
   it('marks the tab dead when a mutation result reports a closed connection', () => {
     const socket = createMockSocket()
     renderHook(() => useSFTP(tabId, 'terminal-tab', socket as unknown as Socket))
@@ -92,6 +114,7 @@ describe('useSFTP', () => {
           username: 'deploy',
           label: 'deploy@server.example',
           status: 'connected',
+
           sessionKey: 'test-session:terminal-tab',
         },
         {
@@ -113,6 +136,47 @@ describe('useSFTP', () => {
 
     expect(useSFTPStore.getState().tabs[tabId]).toMatchObject({ disconnected: true })
     expect(useTerminalStore.getState().tabs.find(tab => tab.id === tabId)?.status).toBe('dead')
+  })
+
+  it('allows a new listing immediately after the source SSH session closes', () => {
+    const socket = createMockSocket()
+    useTerminalStore.setState({
+      sessionId: 'test-session',
+      activeTabId: tabId,
+      tabs: [
+        {
+          id: 'terminal-tab',
+          type: 'terminal',
+          host: 'server.example',
+          port: 22,
+          username: 'deploy',
+          label: 'deploy@server.example',
+          status: 'connected',
+          sessionKey: 'test-session:terminal-tab',
+        },
+        {
+          id: tabId,
+          type: 'sftp',
+          host: 'server.example',
+          port: 22,
+          username: 'deploy',
+          label: 'SFTP deploy@server.example',
+          status: 'connected',
+          sessionKey: 'test-session:sftp-tab',
+          sourceTabId: 'terminal-tab',
+        },
+      ],
+    })
+    const { result } = renderHook(() => useSFTP(tabId, 'terminal-tab', socket as unknown as Socket))
+    socket.emit.mockClear()
+
+    act(() => {
+      result.current.list('/root')
+      socket._trigger('ssh:closed', { tab_id: 'terminal-tab', reason: 'Connection closed.' })
+      result.current.list('/root')
+    })
+
+    expect(socket.emit.mock.calls.filter(call => call[0] === 'sftp:list')).toHaveLength(2)
   })
 
   it('shows reconnect immediately when a persisted source SSH tab is disconnected', () => {

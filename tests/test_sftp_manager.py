@@ -253,6 +253,13 @@ async def test_open_sftp_uses_source_tab_without_private_state_move():
         assert await manager.open_sftp(
             "sess1", "sftp-tab", ssh_manager, source_tab_id="terminal-tab"
         )
+        assert (
+            manager.get_source_tab_id("sftp-tab", expected_session_id="sess1")
+            == "terminal-tab"
+        )
+        assert (
+            manager.get_source_tab_id("sftp-tab", expected_session_id="other") is None
+        )
     finally:
         await manager.shutdown()
 
@@ -680,4 +687,25 @@ async def test_ssh_disconnect_cleans_matching_sftp_sessions():
     await manager.on_ssh_disconnect("sess1")
 
     assert "tab1" not in manager._sessions
+    assert sftp.closed is True
+
+
+@pytest.mark.asyncio
+async def test_ssh_tab_disconnect_cleans_dependent_sftp_sessions():
+    from torrus.sftp_manager import SFTPManager
+
+    sftp = FakeSFTP()
+    manager = SFTPManager()
+    try:
+        assert await manager.open_sftp(
+            "sess1",
+            "sftp-tab",
+            FakeSSHManager(sftp),
+            source_tab_id="terminal-tab",
+        )
+        await manager.on_ssh_tab_disconnect("sess1", "terminal-tab")
+    finally:
+        await manager.shutdown()
+
+    assert "sftp-tab" not in manager._sessions
     assert sftp.closed is True

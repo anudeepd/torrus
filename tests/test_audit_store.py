@@ -124,3 +124,9 @@ def test_strip_escape_removes_ansi_sequences():
     assert strip_escape("plain text") == "plain text"
     assert strip_escape("ls --color") == "ls --color"
     assert strip_escape("a\x03b") == "ab"
+
+
+def test_strip_escape_removes_bracketed_paste_markers():
+    from torrus.audit_store import strip_escape
+
+    assert strip_escape("\x1b[200~echo one\x1b[201~") == "echo one"

@@ -333,6 +333,9 @@ export function useSFTP(tabId: string, sourceTabId: string | undefined, socket: 
     }
     const onSourceClosed = (payload: { tab_id?: string }) => {
       if (payload.tab_id !== sourceTabId) return
+      clearListingTimeout()
+      pendingListingPathRef.current = null
+      queuedSamePathRefreshRef.current = false
       setDisconnected(tabId, true)
       setTabStatus(tabId, 'dead')
     }
@@ -348,7 +351,7 @@ export function useSFTP(tabId: string, sourceTabId: string | undefined, socket: 
       socket.off('ssh:closed', onSourceClosed)
       socket.off('ssh:error', onSourceClosed)
     }
-  }, [open, setDisconnected, setTabStatus, socket, sourceStatus, sourceTabId, tabId])
+  }, [clearListingTimeout, open, setDisconnected, setTabStatus, socket, sourceStatus, sourceTabId, tabId])
 
   useEffect(() => {
     const onListing = (payload: ListingPayload) => {
@@ -396,6 +399,11 @@ export function useSFTP(tabId: string, sourceTabId: string | undefined, socket: 
     }
     const onError = (payload: SFTPErrorPayload) => {
       if (payload.tab_id !== tabId) return
+      if (payload.operation === undefined) {
+        clearListingTimeout()
+        pendingListingPathRef.current = null
+        queuedSamePathRefreshRef.current = false
+      }
       showFailure(
         payload,
         payload.operation ? OPERATION_FAILURE_PREFIX[payload.operation] : undefined,

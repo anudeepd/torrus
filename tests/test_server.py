@@ -67,6 +67,38 @@ class TestServerConfig:
 
         assert result["items"][0]["input"] == "ls -la\n"
 
+    @pytest.mark.asyncio
+    async def test_admin_sessions_reports_total_with_cursor_page(self, monkeypatch):
+        import torrus.server as server_module
+
+        request = MagicMock()
+        request.query_params.get.side_effect = lambda name, default=None: {
+            "limit": "1"
+        }.get(name, default)
+        monkeypatch.setattr(
+            server_module,
+            "_admin_guard",
+            AsyncMock(return_value=("alice", None)),
+        )
+        monkeypatch.setattr(
+            server_module,
+            "ssh_manager",
+            SimpleNamespace(
+                list_sessions=AsyncMock(
+                    return_value=[
+                        {"session_instance_id": "sess-1", "created_at": 2},
+                        {"session_instance_id": "sess-2", "created_at": 1},
+                    ]
+                )
+            ),
+        )
+
+        result = await server_module.admin_sessions(request)
+
+        assert len(result["items"]) == 1
+        assert result["next_cursor"] == "1"
+        assert result["total"] == 2
+
 
 class TestValidIdChecks:
     """Ensure malformed session/tab IDs are rejected at the handler level."""
@@ -115,6 +147,39 @@ class TestValidIdChecks:
                     "sid-1", {"session_id": "sess1", "tab_id": "tab id!"}
                 )
                 mock_disconnect.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_ssh_disconnect_cleans_dependent_sftp_sessions_when_unknown(self):
+        import torrus.server as server_module
+        from torrus.server import on_ssh_disconnect, ssh_manager
+
+        sio_mock = MagicMock()
+        with patch("torrus.server.sio", sio_mock):
+            with patch.object(
+                ssh_manager, "disconnect_session", AsyncMock(return_value="unknown")
+            ) as mock_disconnect:
+                with patch.object(
+                    server_module.sftp_manager, "on_ssh_tab_disconnect", AsyncMock()
+                ) as mock_sftp_cleanup:
+                    await on_ssh_disconnect(
+                        "sid-1", {"session_id": "sess1", "tab_id": "terminal-tab"}
+                    )
+
+        mock_disconnect.assert_awaited_once_with(
+            "sess1", "terminal-tab", owner_ldap_username=None
+        )
+        mock_sftp_cleanup.assert_awaited_once_with("sess1", "terminal-tab")
+
+    @pytest.mark.asyncio
+    async def test_ssh_tab_disconnect_callback_closes_dependent_sftp_sessions(self):
+        import torrus.server as server_module
+
+        with patch.object(
+            server_module.sftp_manager, "on_ssh_tab_disconnect", AsyncMock()
+        ) as mock_sftp_cleanup:
+            await server_module._cleanup_ssh_input_buffer("sess1", "terminal-tab")
+
+        mock_sftp_cleanup.assert_awaited_once_with("sess1", "terminal-tab")
 
     @pytest.mark.asyncio
     async def test_session_register_rejects_invalid_ids(self):

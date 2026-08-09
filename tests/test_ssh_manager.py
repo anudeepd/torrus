@@ -231,7 +231,8 @@ class TestSessionLifecycle:
     async def test_destroy_session_cancels_tasks(self, mock_sio, mock_paramiko_client):
         from torrus.ssh_manager import SSHManager
 
-        manager = SSHManager(mock_sio)
+        on_tab_disconnect = AsyncMock()
+        manager = SSHManager(mock_sio, on_tab_disconnect=on_tab_disconnect)
         manager.start_background_tasks()
         try:
             with patch("torrus.ssh_manager.paramiko.SSHClient") as MockClient:
@@ -255,6 +256,7 @@ class TestSessionLifecycle:
             await asyncio.sleep(0.05)  # let cancellation propagate
             assert read_task.cancelled() or read_task.done()
             assert write_task.cancelled() or write_task.done()
+            on_tab_disconnect.assert_awaited_once_with("sess1", "tab1")
         finally:
             await _cleanup_manager(manager)
 
@@ -462,6 +464,33 @@ class TestReadLoopCleanup:
             assert write_task.cancelled() or write_task.done()
         finally:
             await _cleanup_manager(manager)
+
+    @pytest.mark.asyncio
+    async def test_idle_cleanup_notifies_tab_disconnect(
+        self, mock_sio, mock_paramiko_client
+    ):
+        from torrus.ssh_manager import SSHManager, SSHSession
+
+        on_tab_disconnect = AsyncMock()
+        manager = SSHManager(mock_sio, on_tab_disconnect=on_tab_disconnect)
+        session = SSHSession(
+            session_id="sess1",
+            tab_id="tab1",
+            client=mock_paramiko_client,
+            channel=MagicMock(closed=True),
+            host="example.com",
+            port=22,
+            username="user",
+        )
+        manager._sessions[("sess1", "tab1")] = session
+        sleep = AsyncMock(side_effect=[None, asyncio.CancelledError()])
+
+        with patch("torrus.ssh_manager.asyncio.sleep", sleep):
+            with pytest.raises(asyncio.CancelledError):
+                await manager._cleanup_loop()
+
+        on_tab_disconnect.assert_awaited_once_with("sess1", "tab1")
+        assert ("sess1", "tab1") not in manager._sessions
 
 
 class TestOwnerBinding:

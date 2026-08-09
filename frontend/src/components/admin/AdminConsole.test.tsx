@@ -16,7 +16,13 @@ async function renderAdmin() {
     const url = String(input)
     if (init?.method === 'POST') return response({ ok: true })
     if (url.includes('/api/admin/sessions')) return response({ items: [], observed_at: 1 })
-    if (url.includes('/api/admin/users')) return response({ items: [], observed_at: 1 })
+    if (url.includes('/api/admin/users')) return response({
+      items: [
+        { username: 'alice', active_sessions: 2, policy_state: 'allowed' },
+        { username: 'bob', active_sessions: 0, policy_state: 'disabled' },
+      ],
+      observed_at: 1,
+    })
     if (url.includes('/api/admin/activity')) {
       return response({
         items: [
@@ -114,6 +120,43 @@ describe('AdminConsole', () => {
       expect(screen.getByText(longInput)).toHaveClass('whitespace-pre-wrap')
     })
   })
+  it('keeps each admin table header fixed inside scrollable content', async () => {
+    await renderAdmin()
+
+    const expectFixedTable = (name: string) => {
+      const table = screen.getByRole('table', { name })
+      expect(table).toHaveClass('table-fixed')
+      expect(table.parentElement).toHaveClass('max-h-[70vh]', 'overflow-y-auto', 'overflow-x-hidden')
+      expect(table.parentElement?.parentElement).not.toHaveClass('overflow-hidden')
+      expect(table.querySelector('thead')).toHaveClass('sticky', 'top-0', 'z-10')
+    }
+
+    expect(screen.getByRole('banner')).toHaveClass('sticky', 'top-0', 'z-30')
+
+    expectFixedTable('Owner-bound active SSH sessions')
+    fireEvent.click(screen.getByRole('button', { name: 'Expand Session inventory vertically' }))
+    expect(screen.getByRole('table', { name: 'Owner-bound active SSH sessions' }).parentElement).toHaveClass('max-h-[calc(100dvh-11rem)]')
+    fireEvent.click(screen.getByRole('button', { name: 'Users & policy' }))
+    expectFixedTable('LDAP users and policy state')
+    fireEvent.click(screen.getByRole('button', { name: 'Expand Users and policy vertically' }))
+    expect(screen.getByRole('table', { name: 'LDAP users and policy state' }).parentElement).toHaveClass('max-h-[calc(100dvh-11rem)]')
+    fireEvent.click(screen.getByRole('button', { name: 'Submitted input' }))
+    expectFixedTable('Submitted terminal input events')
+    fireEvent.click(screen.getByRole('button', { name: 'Expand Submitted input vertically' }))
+    expect(screen.getByRole('table', { name: 'Submitted terminal input events' }).parentElement).toHaveClass('max-h-[calc(100dvh-11rem)]')
+  })
+
+  it('shows live admin counts in stats view', async () => {
+    await renderAdmin()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Stats' }))
+    expect(screen.getByRole('heading', { name: 'Admin stats' })).toBeInTheDocument()
+    expect(screen.getByText('Active users')).toBeInTheDocument()
+    expect(screen.getByText('Configured users')).toBeInTheDocument()
+    expect(screen.getByText('Requests loaded')).toBeInTheDocument()
+    expect(screen.getByText('2')).toBeInTheDocument()
+  })
+
 
   it('adds an LDAP user without a restart', async () => {
     const { fetchMock } = await renderAdmin()

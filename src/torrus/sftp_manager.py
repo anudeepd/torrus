@@ -146,6 +146,14 @@ class SFTPManager:
             if session.session_id == session_id:
                 await self.close_sftp(tab_id)
 
+    async def on_ssh_tab_disconnect(self, session_id: str, source_tab_id: str) -> None:
+        for tab_id, session in list(self._sessions.items()):
+            if (
+                session.session_id == session_id
+                and session.source_tab_id == source_tab_id
+            ):
+                await self.close_sftp(tab_id)
+
     async def list_directory(self, tab_id: str, path: str = ".") -> dict[str, Any]:
         lock = self._locks.setdefault(tab_id, asyncio.Lock())
         async with lock:
@@ -521,6 +529,19 @@ class SFTPManager:
                 "PERMISSION_DENIED", "SFTP tab is not available for this session."
             )
         return session
+
+    def get_source_tab_id(
+        self, tab_id: str, expected_session_id: str | None = None
+    ) -> str | None:
+        session = self._sessions.get(tab_id)
+        if session is None:
+            return None
+        if (
+            expected_session_id is not None
+            and session.session_id != expected_session_id
+        ):
+            return None
+        return session.source_tab_id
 
     def _list_directory_sync(self, session: SFTPSession, path: str) -> dict[str, Any]:
         resolved = _resolve_remote_path(session.cwd, path, session.home)

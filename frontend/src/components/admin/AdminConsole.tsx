@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from 'react'
 import { io, type Socket } from 'socket.io-client'
 import { Activity, Check, ChevronLeft, CircleStop, RefreshCw, Shield, Terminal, UserRound, X } from 'lucide-react'
 import AdminConfirmModal, { type AdminConfirmationRequest } from './AdminConfirmModal'
@@ -47,7 +47,7 @@ type RetentionInfo = {
   admin_events_retained: boolean
 }
 
-type View = 'sessions' | 'users' | 'activity' | 'retention'
+type View = 'sessions' | 'users' | 'activity' | 'stats' | 'retention'
 type ActivityFilters = {
   username: string
   input: string
@@ -96,6 +96,7 @@ function idempotencyKey() {
 export default function AdminConsole({ onClose }: { onClose?: () => void }) {
   const [view, setView] = useState<View>('sessions')
   const [sessions, setSessions] = useState<AdminSession[]>([])
+  const [sessionTotal, setSessionTotal] = useState(0)
   const [users, setUsers] = useState<AdminUser[]>([])
   const [activity, setActivity] = useState<ActivityEvent[]>([])
   const [activityFilters, setActivityFilters] = useState<ActivityFilters>({ username: '', input: '', since: '' })
@@ -137,7 +138,9 @@ export default function AdminConsole({ onClose }: { onClose?: () => void }) {
         requestJson('/api/admin/policy').catch(() => ({} as Record<string, unknown>)),
       ])
       if (generation !== refreshGenerationRef.current) return
-      setSessions((sessionData.items || []) as AdminSession[])
+      const sessionItems = (sessionData.items || []) as AdminSession[]
+      setSessions(sessionItems)
+      setSessionTotal(typeof sessionData.total === 'number' ? sessionData.total : sessionItems.length)
       setUsers((userData.items || []) as AdminUser[])
       setActivity((activityData.items || []) as ActivityEvent[])
       setRetention((retentionData || null) as RetentionInfo | null)
@@ -239,7 +242,7 @@ export default function AdminConsole({ onClose }: { onClose?: () => void }) {
     }
   }, [loadCsrf, refresh])
 
-  const currentCount = sessions.length
+  const currentCount = sessionTotal
   const [now, setNow] = useState(0)
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 1000)
@@ -267,7 +270,7 @@ export default function AdminConsole({ onClose }: { onClose?: () => void }) {
       transition={surfaceTransition}
       className="flex h-dvh min-h-0 flex-col overflow-hidden bg-surface-950 text-slate-200"
     >
-      <header className="flex min-h-14 shrink-0 items-center gap-3 border-b border-surface-800 bg-surface-900 px-4 sm:px-5">
+      <header className="sticky top-0 z-30 flex min-h-14 shrink-0 items-center gap-3 border-b border-surface-800 bg-surface-900 px-4 sm:px-5">
         {onClose && <button type="button" onClick={onClose} className="rounded-md p-1.5 text-slate-500 transition-colors hover:bg-surface-800 hover:text-slate-200" aria-label="Back to terminal"><ChevronLeft className="h-4 w-4" /></button>}
         <Shield className="h-4 w-4 text-brand-400" />
         <div className="min-w-0 flex-1">
@@ -285,6 +288,7 @@ export default function AdminConsole({ onClose }: { onClose?: () => void }) {
             ['sessions', Terminal, `Sessions (${currentCount})`],
             ['users', UserRound, 'Users & policy'],
             ['activity', Activity, 'Submitted input'],
+            ['stats', Activity, 'Stats'],
             ['retention', CircleStop, 'Retention'],
           ] as const).map(([key, Icon, label]) => (
             <button key={key} type="button" aria-current={view === key ? 'page' : undefined} onClick={() => setView(key)} className={`mb-1 flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-xs transition-colors ${view === key ? 'bg-brand-500/10 text-brand-300' : 'text-slate-500 hover:bg-surface-800 hover:text-slate-300'}`}><Icon className="h-3.5 w-3.5" /> {label}</button>
@@ -293,8 +297,8 @@ export default function AdminConsole({ onClose }: { onClose?: () => void }) {
         </nav>
         <main className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto p-4 sm:p-6" aria-live="polite">
           <div className="mx-auto max-w-6xl">
-            <div className="mb-4 flex gap-1 overflow-x-auto sm:hidden" role="tablist" aria-label="Admin views">
-              {(['sessions', 'users', 'activity', 'retention'] as View[]).map(key => <button key={key} type="button" role="tab" aria-selected={view === key} onClick={() => setView(key)} className={`rounded-md px-3 py-1.5 text-xs capitalize transition-colors ${view === key ? 'bg-brand-500/10 text-brand-300' : 'text-slate-500'}`}>{key}</button>)}
+            <div className="mb-4 flex flex-wrap gap-1 sm:hidden" role="tablist" aria-label="Admin views">
+              {(['sessions', 'users', 'activity', 'stats', 'retention'] as View[]).map(key => <button key={key} type="button" role="tab" aria-selected={view === key} onClick={() => setView(key)} className={`rounded-md px-3 py-1.5 text-xs capitalize transition-colors ${view === key ? 'bg-brand-500/10 text-brand-300' : 'text-slate-500'}`}>{key}</button>)}
             </div>
             {notice && <div className="mb-3 flex items-center gap-2 rounded-md border border-green-900/50 bg-green-950/30 px-3 py-2 text-xs text-green-300" role="status"><Check className="h-3.5 w-3.5" /> {notice}</div>}
             {error && <div className="mb-3 flex items-center gap-2 rounded-md border border-red-900/60 bg-red-950/30 px-3 py-2 text-xs text-red-300" role="alert"><X className="h-3.5 w-3.5" /> {error.message}</div>}
@@ -306,9 +310,10 @@ export default function AdminConsole({ onClose }: { onClose?: () => void }) {
                 exit={{ opacity: 0, x: -8 }}
                 transition={surfaceTransition}
               >
-                {view === 'sessions' && <SessionsTable sessions={sessions} selected={selectedSession} onSelect={setSelectedSession} onAction={act} onRequestAction={request => setConfirmation(request)} />}
+                {view === 'sessions' && <SessionsTable sessions={sessions} total={sessionTotal} selected={selectedSession} onSelect={setSelectedSession} onAction={act} onRequestAction={request => setConfirmation(request)} />}
                 {view === 'users' && <UsersTable users={users} fingerprint={policyFingerprint} onAction={act} onRequestAction={request => setConfirmation(request)} />}
                 {view === 'activity' && <ActivityTable events={activity} filters={activityFilters} onApplyFilters={applyActivityFilters} />}
+                {view === 'stats' && <StatsPanel sessionTotal={sessionTotal} users={users} activity={activity} retention={retention} />}
                 {view === 'retention' && <RetentionPanel retention={retention} onAction={act} onRequestAction={request => setConfirmation(request)} />}
               </m.div>
             </AnimatePresence>
@@ -325,8 +330,33 @@ export default function AdminConsole({ onClose }: { onClose?: () => void }) {
 
 type Action = (path: string, body: Record<string, unknown>, message: string) => Promise<boolean>
 type RequestAction = (request: AdminConfirmationRequest) => void
+function AdminTableViewport({ label, children }: { label: string; children: ReactNode }) {
+  const [expanded, setExpanded] = useState(false)
+  const action = expanded ? 'Collapse' : 'Expand'
 
-function SessionsTable({ sessions, selected, onSelect, onAction, onRequestAction }: { sessions: AdminSession[]; selected: AdminSession | null; onSelect: (session: AdminSession | null) => void; onAction: Action; onRequestAction: RequestAction }) {
+  return (
+    <div className="relative rounded-lg border border-surface-800 bg-surface-900">
+      <div className="flex min-h-10 items-center justify-between gap-3 border-b border-surface-800 px-3 py-2">
+        <span className="text-[10px] uppercase tracking-wider text-slate-600">{expanded ? 'Expanded table' : 'Scrollable table'}</span>
+        <button
+          type="button"
+          aria-expanded={expanded}
+          aria-label={`${action} ${label} vertically`}
+          onClick={() => setExpanded(value => !value)}
+          className="min-h-9 shrink-0 rounded border border-surface-700 px-2.5 py-1.5 text-xs text-brand-300 transition-colors hover:bg-surface-800"
+        >
+          {action} vertically
+        </button>
+      </div>
+      <div className={`${expanded ? 'max-h-[calc(100dvh-11rem)]' : 'max-h-[70vh]'} overflow-y-auto overflow-x-hidden rounded-b-lg`}>
+        {children}
+      </div>
+    </div>
+  )
+}
+
+
+function SessionsTable({ sessions, total, selected, onSelect, onAction, onRequestAction }: { sessions: AdminSession[]; total: number; selected: AdminSession | null; onSelect: (session: AdminSession | null) => void; onAction: Action; onRequestAction: RequestAction }) {
   return (
     <section aria-labelledby="sessions-title">
       <div className="mb-3 flex items-end justify-between">
@@ -334,12 +364,12 @@ function SessionsTable({ sessions, selected, onSelect, onAction, onRequestAction
           <h2 id="sessions-title" className="text-base font-semibold">Session inventory</h2>
           <p className="mt-1 text-xs text-slate-500">Active SSH channels only. Instance and generation prevent stale-target actions.</p>
         </div>
-        <span className="text-xs text-slate-600">{sessions.length} active</span>
+        <span className="text-xs text-slate-600">{total} active</span>
       </div>
-      <div className="overflow-x-auto rounded-lg border border-surface-800 bg-surface-900">
-        <table className="w-full min-w-[820px] text-left text-xs">
+      <AdminTableViewport label="Session inventory">
+        <table className="w-full table-fixed text-left text-xs">
           <caption className="sr-only">Owner-bound active SSH sessions</caption>
-          <thead className="border-b border-surface-800 text-[10px] uppercase tracking-wider text-slate-600">
+          <thead className="sticky top-0 z-10 border-b border-surface-800 bg-surface-900 text-[10px] uppercase tracking-wider text-slate-600">
             <tr><th scope="col" className="px-3 py-2">Owner / target</th><th scope="col" className="px-3 py-2">State</th><th scope="col" className="px-3 py-2">Last activity</th><th scope="col" className="px-3 py-2">Identity</th><th scope="col" className="px-3 py-2 text-right">Controls</th></tr>
           </thead>
           <tbody>
@@ -347,19 +377,19 @@ function SessionsTable({ sessions, selected, onSelect, onAction, onRequestAction
               ? <tr><td colSpan={5} className="px-3 py-12 text-center text-slate-600">No active sessions.</td></tr>
               : sessions.map(session => (
                 <tr key={session.session_instance_id} className={`border-b border-surface-800/70 last:border-0 ${selected?.session_instance_id === session.session_instance_id ? 'bg-brand-500/5' : ''}`}>
-                  <td className="px-3 py-3">
-                    <div className="flex items-center gap-2 font-medium text-slate-200">
-                      <span className="h-1.5 w-1.5 rounded-full bg-green-400" />
-                      {session.owner_ldap_username || 'local'}
-                      <button type="button" className="text-left text-slate-500 underline decoration-dotted underline-offset-2 transition-colors hover:text-brand-300" onClick={() => onSelect(session)}>{session.host}:{session.port}</button>
+                  <td className="break-words px-3 py-3 [overflow-wrap:anywhere]">
+                    <div className="flex flex-wrap items-center gap-2 font-medium text-slate-200">
+                      <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-green-400" />
+                      <span className="break-words [overflow-wrap:anywhere]">{session.owner_ldap_username || 'local'}</span>
+                      <button type="button" className="break-words text-left text-slate-500 underline decoration-dotted underline-offset-2 transition-colors hover:text-brand-300 [overflow-wrap:anywhere]" onClick={() => onSelect(session)}>{session.host}:{session.port}</button>
                     </div>
-                    <div className="mt-1 text-[11px] text-slate-600">SSH account {session.username} · tab {session.tab_id}</div>
+                    <div className="mt-1 break-words text-[11px] text-slate-600 [overflow-wrap:anywhere]">SSH account {session.username} · tab {session.tab_id}</div>
                   </td>
                   <td className="px-3 py-3 text-green-300">Connected</td>
                   <td className="px-3 py-3 text-slate-400">{age(session.last_activity)}</td>
-                  <td className="px-3 py-3 font-mono text-[10px] text-slate-600">gen {session.generation}<br />{session.session_instance_id}</td>
-                  <td className="px-3 py-3 text-right">
-                    <div className="flex justify-end gap-1.5">
+                  <td className="break-words px-3 py-3 font-mono text-[10px] text-slate-600 [overflow-wrap:anywhere]">gen {session.generation}<br />{session.session_instance_id}</td>
+                  <td className="break-words px-3 py-3 text-right [overflow-wrap:anywhere]">
+                    <div className="flex flex-wrap justify-end gap-1.5">
                       <button
                         type="button"
                         onClick={() => onRequestAction({
@@ -389,7 +419,7 @@ function SessionsTable({ sessions, selected, onSelect, onAction, onRequestAction
               ))}
           </tbody>
         </table>
-      </div>
+      </AdminTableViewport>
       {selected && (
         <aside className="mt-3 rounded-lg border border-brand-900/50 bg-brand-950/10 p-4" aria-label="Session details">
           <div className="flex items-start justify-between">
@@ -450,19 +480,19 @@ function UsersTable({ users, fingerprint, onAction, onRequestAction }: { users: 
         <p className="mt-1 text-xs text-slate-500">Allowlist changes use a fingerprinted atomic update. New users apply immediately. Disable also revokes cookies and active tabs.</p>
       </div>
       <AddUserForm fingerprint={fingerprint} onAction={onAction} />
-      <div className="overflow-x-auto rounded-lg border border-surface-800 bg-surface-900">
-        <table className="w-full min-w-[620px] text-left text-xs">
+      <AdminTableViewport label="Users and policy">
+        <table className="w-full table-fixed text-left text-xs">
           <caption className="sr-only">LDAP users and policy state</caption>
-          <thead className="border-b border-surface-800 text-[10px] uppercase tracking-wider text-slate-600"><tr><th scope="col" className="px-3 py-2">Identity</th><th scope="col" className="px-3 py-2">Active sessions</th><th scope="col" className="px-3 py-2">Policy</th><th scope="col" className="px-3 py-2 text-right">Action</th></tr></thead>
+          <thead className="sticky top-0 z-10 border-b border-surface-800 bg-surface-900 text-[10px] uppercase tracking-wider text-slate-600"><tr><th scope="col" className="px-3 py-2">Identity</th><th scope="col" className="px-3 py-2">Active sessions</th><th scope="col" className="px-3 py-2">Policy</th><th scope="col" className="px-3 py-2 text-right">Action</th></tr></thead>
           <tbody>
             {users.length === 0
               ? <tr><td colSpan={4} className="px-3 py-12 text-center text-slate-600">No configured users observed.</td></tr>
               : users.map(user => (
                 <tr key={user.username} className="border-b border-surface-800/70 last:border-0">
-                  <td className="px-3 py-3 font-medium">{user.username}</td>
-                  <td className="px-3 py-3 text-slate-400">{user.active_sessions}</td>
-                  <td className="px-3 py-3 text-amber-300">{user.policy_state}</td>
-                  <td className="px-3 py-3 text-right">
+                  <td className="break-words px-3 py-3 font-medium [overflow-wrap:anywhere]">{user.username}</td>
+                  <td className="break-words px-3 py-3 text-slate-400 [overflow-wrap:anywhere]">{user.active_sessions}</td>
+                  <td className="break-words px-3 py-3 text-amber-300 [overflow-wrap:anywhere]">{user.policy_state}</td>
+                  <td className="break-words px-3 py-3 text-right [overflow-wrap:anywhere]">
                     {user.policy_state === 'disabled'
                       ? <button type="button" onClick={() => onRequestAction({ title: 'Enable LDAP user?', description: `Re-enable ${user.username} immediately.`, expected: `ENABLE ${user.username}`, confirmLabel: 'Enable user', action: async () => { await onAction(`/api/admin/users/${encodeURIComponent(user.username)}/enable`, { expected_fingerprint: fingerprint }, 'User enabled. No restart required.') } })} className="rounded border border-green-900/60 px-2 py-1 text-[11px] text-green-300 transition-colors hover:bg-green-950/40">Enable</button>
                       : <button type="button" onClick={() => onRequestAction({ title: 'Disable LDAP user?', description: `Revoke ${user.username}'s cookies and active tabs, then disable the user immediately.`, expected: `DISABLE ${user.username}`, confirmLabel: 'Disable user', destructive: true, action: async () => { await onAction(`/api/admin/users/${encodeURIComponent(user.username)}/disable`, { expected_fingerprint: fingerprint }, 'User disabled. No restart required.') } })} className="rounded border border-red-900/60 px-2 py-1 text-[11px] text-red-300 transition-colors hover:bg-red-950/40">Disable</button>}
@@ -471,7 +501,7 @@ function UsersTable({ users, fingerprint, onAction, onRequestAction }: { users: 
               ))}
           </tbody>
         </table>
-      </div>
+      </AdminTableViewport>
     </section>
   )
 }
@@ -492,7 +522,7 @@ function ActivityInput({ value, kind }: { value: string; kind: string }) {
         {value.slice(0, ACTIVITY_INPUT_PREVIEW_LIMIT)}…
         <span className="mt-1 block text-[10px] text-brand-300">Show full input ({value.length} characters)</span>
       </summary>
-      {expanded && <pre className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap break-words text-slate-200">{value}</pre>}
+      {expanded && <pre className="mt-2 max-h-80 overflow-y-auto overflow-x-hidden whitespace-pre-wrap break-words text-slate-200 [overflow-wrap:anywhere]">{value}</pre>}
     </details>
   )
 }
@@ -544,29 +574,61 @@ function ActivityTable({ events, filters, onApplyFilters }: { events: ActivityEv
         <p className="mt-1 text-xs text-slate-500">Completed terminal input is shown line-by-line with multiline text preserved. Sensitive prompts are recorded only as redaction markers. Terminal output and SSH connection passwords are not recorded.</p>
       </div>
       <ActivityFiltersForm filters={filters} onApply={onApplyFilters} />
-      <div className="overflow-x-auto rounded-lg border border-surface-800 bg-surface-900">
-        <table className="w-full min-w-[980px] text-left text-xs">
+      <AdminTableViewport label="Submitted input">
+        <table className="w-full table-fixed text-left text-xs">
           <caption className="sr-only">Submitted terminal input events</caption>
-          <thead className="border-b border-surface-800 text-[10px] uppercase tracking-wider text-slate-600"><tr><th scope="col" className="px-3 py-2">When</th><th scope="col" className="px-3 py-2">Actor</th><th scope="col" className="px-3 py-2">Target</th><th scope="col" className="px-3 py-2">Input</th><th scope="col" className="px-3 py-2">Kind</th><th scope="col" className="px-3 py-2 text-right">Bytes</th></tr></thead>
+          <thead className="sticky top-0 z-10 border-b border-surface-800 bg-surface-900 text-[10px] uppercase tracking-wider text-slate-600"><tr><th scope="col" className="px-3 py-2">When</th><th scope="col" className="px-3 py-2">Actor</th><th scope="col" className="px-3 py-2">Target</th><th scope="col" className="px-3 py-2">Input</th><th scope="col" className="px-3 py-2">Kind</th><th scope="col" className="px-3 py-2 text-right">Bytes</th></tr></thead>
           <tbody>
             {events.length === 0
               ? <tr><td colSpan={6} className="px-3 py-12 text-center text-slate-600">No submitted input events.</td></tr>
               : events.map(event => (
                 <tr key={event.event_id} className="border-b border-surface-800/70 last:border-0">
-                  <td className="whitespace-nowrap px-3 py-3 text-slate-400">{new Date(event.occurred_at).toLocaleString()}</td>
-                  <td className="px-3 py-3">{event.ldap_username}</td>
-                  <td className="px-3 py-3">{event.ssh_host || '—'}:{event.ssh_port || '—'} <span className="text-slate-600">({event.ssh_username || '—'})</span></td>
-                  <td className="px-3 py-3 font-mono text-[11px] text-slate-200"><ActivityInput value={event.input} kind={event.kind} /></td>
-                  <td className="px-3 py-3 text-slate-400">{event.kind === 'sensitive' ? 'Sensitive (redacted)' : event.kind}</td>
+                  <td className="break-words px-3 py-3 text-slate-400 [overflow-wrap:anywhere]">{new Date(event.occurred_at).toLocaleString()}</td>
+                  <td className="break-words px-3 py-3 [overflow-wrap:anywhere]">{event.ldap_username}</td>
+                  <td className="break-words px-3 py-3 [overflow-wrap:anywhere]">{event.ssh_host || '—'}:{event.ssh_port || '—'} <span className="break-words text-slate-600 [overflow-wrap:anywhere]">({event.ssh_username || '—'})</span></td>
+                  <td className="break-words px-3 py-3 font-mono text-[11px] text-slate-200 [overflow-wrap:anywhere]"><ActivityInput value={event.input} kind={event.kind} /></td>
+                  <td className="break-words px-3 py-3 text-slate-400 [overflow-wrap:anywhere]">{event.kind === 'sensitive' ? 'Sensitive (redacted)' : event.kind}</td>
                   <td className="px-3 py-3 text-right text-slate-400">{event.bytes}</td>
                 </tr>
               ))}
           </tbody>
         </table>
+      </AdminTableViewport>
+    </section>
+  )
+}
+function StatsPanel({ sessionTotal, users, activity, retention }: { sessionTotal: number; users: AdminUser[]; activity: ActivityEvent[]; retention: RetentionInfo | null }) {
+  const activeUsers = users.filter(user => user.active_sessions > 0).length
+  const disabledUsers = users.filter(user => user.policy_state === 'disabled').length
+  const stats = [
+    { label: 'Active users', value: activeUsers, detail: 'Users with one or more open SSH sessions.' },
+    { label: 'Active sessions', value: sessionTotal, detail: 'Server-reported live SSH channels.' },
+    { label: 'Configured users', value: users.length, detail: 'Users currently returned by policy inventory.' },
+    { label: 'Requests loaded', value: activity.length, detail: 'Latest request rows in current activity view.' },
+    { label: 'Disabled users', value: disabledUsers, detail: 'Policy-disabled users in current inventory.' },
+    { label: 'Retention eligible', value: retention?.eligible_count ?? 0, detail: `Terminal rows older than ${retention?.cutoff_days ?? 30} days.` },
+  ]
+
+  return (
+    <section aria-labelledby="stats-title">
+      <div className="mb-4">
+        <p className="mb-2 font-mono text-[10px] font-semibold uppercase tracking-[0.2em] text-brand-400">Snapshot</p>
+        <h2 id="stats-title" className="text-xl font-semibold tracking-tight">Admin stats</h2>
+        <p className="mt-1 text-sm leading-relaxed text-slate-500">Live counts from latest successful refresh. Request count reflects current loaded activity rows; session count includes server total.</p>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        {stats.map(stat => (
+          <article key={stat.label} className="rounded-lg border border-surface-800 bg-surface-900 p-4">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-600">{stat.label}</p>
+            <p className="mt-2 text-3xl font-semibold tracking-tight text-slate-100">{stat.value}</p>
+            <p className="mt-2 text-xs leading-relaxed text-slate-500">{stat.detail}</p>
+          </article>
+        ))}
       </div>
     </section>
   )
 }
+
 
 function RetentionPanel({ retention, onAction, onRequestAction }: { retention: RetentionInfo | null; onAction: Action; onRequestAction: RequestAction }) {
   const [days, setDays] = useState(retention?.cutoff_days || 30)

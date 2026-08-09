@@ -174,6 +174,8 @@ _sid_client_ips: dict[str, str] = {}
 _INPUT_BUFFER_MEMORY_LIMIT = 1_048_576
 _INPUT_BUFFER_MAX_BYTES = 4 * 1024 * 1024
 _OVERSIZED_INPUT_MARKER = "[input omitted: command exceeded audit limit]"
+_BRACKETED_PASTE_OPEN = b"\x1b[200~"
+_BRACKETED_PASTE_CLOSE = b"\x1b[201~"
 
 
 @dataclass
@@ -188,6 +190,8 @@ class _CommandInputBuffer:
     size: int = 0
     overflowed: bool = False
     completion_pending: bool = False
+    bracketed_paste: bool = False
+    pending_escape: bytearray = field(default_factory=bytearray)
 
     def _append(self, incoming: bytes) -> None:
         if not incoming or self.overflowed:
@@ -207,6 +211,7 @@ class _CommandInputBuffer:
         self.spool.truncate(0)
         self.size = 0
         self.overflowed = False
+        self.completion_pending = False
 
     def observe_output(self, incoming: bytes) -> None:
         """Append inline shell-completion text while a Tab request is pending."""
@@ -220,27 +225,54 @@ class _CommandInputBuffer:
         if completion:
             self._append(completion.encode("utf-8", errors="replace"))
 
+    def _filtered_input(self, incoming: bytes) -> list[tuple[int, bool]]:
+        """Remove bracketed-paste markers while retaining literal paste tabs."""
+        filtered: list[tuple[int, bool]] = []
+        for value in incoming:
+            self.pending_escape.append(value)
+            while self.pending_escape:
+                pending = bytes(self.pending_escape)
+                if pending == _BRACKETED_PASTE_OPEN:
+                    self.pending_escape.clear()
+                    self.bracketed_paste = True
+                    break
+                if pending == _BRACKETED_PASTE_CLOSE:
+                    self.pending_escape.clear()
+                    self.bracketed_paste = False
+                    break
+                if _BRACKETED_PASTE_OPEN.startswith(
+                    pending
+                ) or _BRACKETED_PASTE_CLOSE.startswith(pending):
+                    break
+                filtered.append((self.pending_escape.pop(0), self.bracketed_paste))
+        return filtered
+
     def extract(self, incoming: bytes) -> list[str]:
         commands: list[str] = []
+        filtered = self._filtered_input(incoming)
         if incoming:
             self.completion_pending = False
+
+        def segment(start: int, end: int) -> bytes:
+            return bytes(value for value, _ in filtered[start:end])
+
         start = 0
-        for index, value in enumerate(incoming):
+        for index, (value, in_bracketed_paste) in enumerate(filtered):
             if self.skip_lf:
                 self.skip_lf = False
                 if value == 0x0A:
                     start = index + 1
                     continue
-            if value == 0x09:
+            if value == 0x09 and not in_bracketed_paste:
                 if start < index:
-                    self._append(incoming[start:index])
+                    self._append(segment(start, index))
                 self.completion_pending = True
                 start = index + 1
                 continue
             if value not in (0x0A, 0x0D):
                 continue
             if start < index:
-                self._append(incoming[start:index])
+                self._append(segment(start, index))
             if self.overflowed:
                 command = _OVERSIZED_INPUT_MARKER
             else:
@@ -252,8 +284,8 @@ class _CommandInputBuffer:
                 commands.append(cleaned)
             start = index + 1
             self.skip_lf = value == 0x0D
-        if start < len(incoming):
-            self._append(incoming[start:])
+        if start < len(filtered):
+            self._append(segment(start, len(filtered)))
         return commands
 
     def close(self) -> None:
@@ -315,6 +347,7 @@ async def _cleanup_ssh_input_buffer(session_id: str, tab_id: str) -> None:
             _close_command_buffer(buffer)
         for key in [key for key in _sensitive_input_buffers if key[1:] == key_suffix]:
             _sensitive_input_buffers.pop(key)
+    await sftp_manager.on_ssh_tab_disconnect(session_id, tab_id)
 
 
 async def _record_ssh_output_audit(
@@ -747,7 +780,12 @@ async def admin_sessions(request: Request):
     page, next_cursor = _admin_session_page(
         sessions, limit, request.query_params.get("cursor")
     )
-    return {"items": page, "next_cursor": next_cursor, "observed_at": time.time()}
+    return {
+        "items": page,
+        "next_cursor": next_cursor,
+        "total": len(sessions),
+        "observed_at": time.time(),
+    }
 
 
 def _display_audit_input(value: bytes | str | None) -> str:
@@ -1240,13 +1278,7 @@ async def sftp_stream_upload(request: Request):
         return JSONResponse(
             status_code=401, content={"ok": False, "code": "auth_required"}
         )
-    if (
-        _ldap_enabled
-        and await ssh_manager.get_session_target(
-            session_id, tab_id, owner_ldap_username=owner
-        )
-        is None
-    ):
+    if _ldap_enabled and not await _sftp_session_owned(session_id, tab_id, owner):
         return JSONResponse(
             status_code=403, content={"ok": False, "code": "session_owner_mismatch"}
         )
@@ -1287,13 +1319,7 @@ async def sftp_upload_init(request: Request):
         return JSONResponse(
             status_code=401, content={"ok": False, "code": "auth_required"}
         )
-    if (
-        _ldap_enabled
-        and await ssh_manager.get_session_target(
-            session_id, tab_id, owner_ldap_username=owner
-        )
-        is None
-    ):
+    if _ldap_enabled and not await _sftp_session_owned(session_id, tab_id, owner):
         return JSONResponse(
             status_code=403, content={"ok": False, "code": "session_owner_mismatch"}
         )
@@ -1330,13 +1356,7 @@ async def sftp_stream_download(request: Request):
         return JSONResponse(
             status_code=401, content={"ok": False, "code": "auth_required"}
         )
-    if (
-        _ldap_enabled
-        and await ssh_manager.get_session_target(
-            session_id, tab_id, owner_ldap_username=owner
-        )
-        is None
-    ):
+    if _ldap_enabled and not await _sftp_session_owned(session_id, tab_id, owner):
         return JSONResponse(
             status_code=403, content={"ok": False, "code": "session_owner_mismatch"}
         )
@@ -1677,6 +1697,25 @@ async def _require_session_owner(sid: str, session_id: str, tab_id: str) -> str 
     return owner
 
 
+async def _sftp_session_owned(
+    session_id: str,
+    tab_id: str,
+    owner: str | None,
+) -> bool:
+    source_tab_id = sftp_manager.get_source_tab_id(
+        tab_id, expected_session_id=session_id
+    )
+    return (
+        source_tab_id is not None
+        and await ssh_manager.get_session_target(
+            session_id,
+            source_tab_id,
+            owner_ldap_username=owner,
+        )
+        is not None
+    )
+
+
 def _http_environ(request: Request) -> dict:
     return {
         "asgi.scope": request.scope,
@@ -2009,13 +2048,8 @@ async def on_ssh_disconnect(sid, data):
             to=sid,
         )
         return
-    await sftp_manager.close_sftp(tab_id)
-    async with _input_buffer_lock:
-        key = (sid, session_id, tab_id)
-        buffer = _input_buffers.pop(key, None)
-        if buffer is not None:
-            _close_command_buffer(buffer)
-        _sensitive_input_buffers.pop(key, None)
+    if result != "closed":
+        await _cleanup_ssh_input_buffer(session_id, tab_id)
 
 
 @sio.on("sftp:close")
@@ -2025,7 +2059,7 @@ async def on_sftp_close(sid, data):
         return
     if not await _require_auth(sid, tab_id):
         return
-    if await _require_session_owner(sid, session_id, tab_id) is None:
+    if not await _require_sftp_session_owner(sid, session_id, tab_id):
         return
     await sftp_manager.close_sftp(tab_id)
     await sio.emit("sftp:close:result", {"tab_id": tab_id, "ok": True}, to=sid)
@@ -2105,22 +2139,53 @@ async def _emit_sftp_error(
     sid: str,
     tab_id: str,
     exc: SFTPError,
-    operation: str,
+    operation: str | None,
 ) -> None:
-    await sio.emit(
-        "sftp:error",
-        {
-            "tab_id": tab_id,
-            "code": exc.code,
-            "message": exc.message,
-            "operation": operation,
-        },
-        to=sid,
-    )
+    payload = {
+        "tab_id": tab_id,
+        "code": exc.code,
+        "message": exc.message,
+    }
+    if operation is not None:
+        payload["operation"] = operation
+    await sio.emit("sftp:error", payload, to=sid)
 
 
 def _sftp_request_ids(data) -> tuple[str, str]:
     return data.get("session_id", ""), data.get("tab_id", "")
+
+
+async def _require_sftp_session_owner(
+    sid: str,
+    session_id: str,
+    tab_id: str,
+    operation: str | None = None,
+) -> bool:
+    source_tab_id = sftp_manager.get_source_tab_id(
+        tab_id, expected_session_id=session_id
+    )
+    if source_tab_id is None:
+        await _emit_sftp_error(
+            sid,
+            tab_id,
+            SFTPError(
+                "CONNECTION_CLOSED", "SSH connection lost. Reconnect to continue."
+            ),
+            operation,
+        )
+        return False
+    if await _require_session_owner(sid, session_id, source_tab_id) is None:
+        await _emit_sftp_error(
+            sid,
+            tab_id,
+            SFTPError(
+                "SESSION_OWNER_MISMATCH",
+                "Session is not available to this user.",
+            ),
+            operation,
+        )
+        return False
+    return True
 
 
 @sio.on("sftp:open")
@@ -2208,7 +2273,7 @@ async def on_sftp_list(sid, data):
         return
     if not await _require_auth(sid, tab_id):
         return
-    if await _require_session_owner(sid, session_id, tab_id) is None:
+    if not await _require_sftp_session_owner(sid, session_id, tab_id):
         return
     try:
         result = await sftp_manager.list_directory(tab_id, data.get("path", "."))
@@ -2228,7 +2293,7 @@ async def on_sftp_upload(sid, data):
         return
     if not await _require_auth(sid, tab_id):
         return
-    if await _require_session_owner(sid, session_id, tab_id) is None:
+    if not await _require_sftp_session_owner(sid, session_id, tab_id, "upload"):
         return
     try:
         raw = base64.b64decode(data.get("data", ""), validate=True)
@@ -2259,7 +2324,7 @@ async def on_sftp_download(sid, data):
         return
     if not await _require_auth(sid, tab_id):
         return
-    if await _require_session_owner(sid, session_id, tab_id) is None:
+    if not await _require_sftp_session_owner(sid, session_id, tab_id, "download"):
         return
     try:
         result = await sftp_manager.download_file(
@@ -2277,7 +2342,7 @@ async def on_sftp_delete(sid, data):
         return
     if not await _require_auth(sid, tab_id):
         return
-    if await _require_session_owner(sid, session_id, tab_id) is None:
+    if not await _require_sftp_session_owner(sid, session_id, tab_id):
         return
     paths = (
         data.get("paths")
@@ -2315,7 +2380,7 @@ async def on_sftp_rename(sid, data):
         return
     if not await _require_auth(sid, tab_id):
         return
-    if await _require_session_owner(sid, session_id, tab_id) is None:
+    if not await _require_sftp_session_owner(sid, session_id, tab_id, "rename"):
         return
     try:
         result = await sftp_manager.rename(
@@ -2333,7 +2398,7 @@ async def on_sftp_mkdir(sid, data):
         return
     if not await _require_auth(sid, tab_id):
         return
-    if await _require_session_owner(sid, session_id, tab_id) is None:
+    if not await _require_sftp_session_owner(sid, session_id, tab_id, "mkdir"):
         return
     try:
         result = await sftp_manager.mkdir(tab_id, data.get("path", ""))
@@ -2349,7 +2414,7 @@ async def on_sftp_chmod(sid, data):
         return
     if not await _require_auth(sid, tab_id):
         return
-    if await _require_session_owner(sid, session_id, tab_id) is None:
+    if not await _require_sftp_session_owner(sid, session_id, tab_id, "chmod"):
         return
     mode = data.get("mode")
     if isinstance(mode, bool) or not isinstance(mode, int) or not 0 <= mode <= 0o7777:
@@ -2383,7 +2448,7 @@ async def on_sftp_chown(sid, data):
         return
     if not await _require_auth(sid, tab_id):
         return
-    if await _require_session_owner(sid, session_id, tab_id) is None:
+    if not await _require_sftp_session_owner(sid, session_id, tab_id, "chown"):
         return
     uid = data.get("uid")
     gid = data.get("gid")
@@ -2425,7 +2490,7 @@ async def on_sftp_accounts(sid, data):
         return
     if not await _require_auth(sid, tab_id):
         return
-    if await _require_session_owner(sid, session_id, tab_id) is None:
+    if not await _require_sftp_session_owner(sid, session_id, tab_id):
         return
     try:
         result = await sftp_manager.accounts(tab_id)
