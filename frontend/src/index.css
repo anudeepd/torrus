@@ -149,3 +149,7 @@
 .xterm-selection {
   overflow: hidden;
 }
+/* Custom password toggle replaces Edge's native reveal control. */
+.torrus-password-input::-ms-reveal {
+  display: none;
+}

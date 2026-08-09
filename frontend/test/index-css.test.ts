@@ -23,9 +23,11 @@ describe('terminal scrollbar CSS', () => {
 })
 
 describe('password input CSS', () => {
-  it('does not override browser-native password controls', () => {
-    expect(css).not.toContain('torrus-password-input')
-    expect(css).not.toContain('::-ms-reveal')
+  it('hides Edge native reveal when custom toggle is present', () => {
+    expect(css).toContain('.torrus-password-input::-ms-reveal {\n  display: none;')
+  })
+
+  it('does not override unrelated browser-native password controls', () => {
     expect(css).not.toContain('::-moz-reveal')
     expect(css).not.toContain('::-webkit-credentials-auto-fill-button')
     expect(css).not.toContain('textfield-decoration-container')

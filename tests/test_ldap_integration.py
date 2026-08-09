@@ -77,7 +77,7 @@ def test_login_template_uses_nonce_for_inline_assets():
     assert 'class="password-toggle"' in template
     assert "password.type = showing ? 'text' : 'password';" in template
     assert "password.focus();" in template
-    assert "::-ms-reveal" not in template
+    assert 'input[type="password"]::-ms-reveal' in template
     assert "::-moz-reveal" not in template
     assert "credentials-auto-fill-button" not in template
     assert 'style="' not in template

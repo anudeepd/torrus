@@ -7,6 +7,7 @@ describe('ConnectForm', () => {
     const onConnect = vi.fn()
     render(<ConnectForm error="Authentication failed" onConnect={onConnect} />)
     const password = screen.getByTestId('password-input')
+    expect(password).toHaveClass('torrus-password-input')
 
     fireEvent.change(password, { target: { value: 'mistyped-password' } })
     expect(password).toHaveAttribute('type', 'password')
