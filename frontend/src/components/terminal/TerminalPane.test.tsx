@@ -59,6 +59,31 @@ describe('TerminalPane', () => {
     })
   })
 
+  it('enforces readable contrast for terminal ANSI colors', async () => {
+    const tabId = 'tab-contrast'
+    act(() => {
+      seedStores(tabId, 'connected')
+    })
+
+    const socket = createMockSocket()
+    render(
+      <TerminalPane
+        tabId={tabId}
+        isActive={true}
+        focused={true}
+        socket={socket as unknown as import('socket.io-client').Socket}
+      />
+    )
+
+    await waitFor(() => {
+      expect(mockTerminalInstances.length).toBeGreaterThan(0)
+    })
+
+    expect(mockTerminalInstances[mockTerminalInstances.length - 1]?.options).toEqual(
+      expect.objectContaining({ minimumContrastRatio: 4.5 }),
+    )
+  })
+
   it('remains interactive when remounted with an already-connected tab (split-exit regression)', async () => {
     const tabId = 'tab-1'
     act(() => {

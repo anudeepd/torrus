@@ -409,6 +409,7 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
         containerRef.current.appendChild(termContainer)
 
         const term = new Terminal({
+          minimumContrastRatio: 4.5,
           fontFamily: '"JetBrains Mono", "Cascadia Code", "Fira Code", ui-monospace, monospace',
           fontSize,
           fontWeight: 'normal',

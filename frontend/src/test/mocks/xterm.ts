@@ -15,7 +15,8 @@ export class MockTerminal {
   scrollToBottom = vi.fn()
   private _dataHandler: ((data: string) => void) | null = null
   private _keyHandler: ((event: KeyboardEvent) => boolean) | null = null
-  constructor() {
+  constructor(options: Record<string, unknown> = {}) {
+    this.options = options
     this.textarea = document.createElement('textarea')
     mockTerminalInstances.push(this)
   }
