@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.2.36] - 2026-08-13
+
+### Fixed
+
+- Claim Ctrl+L for terminal clear and SFTP path editing only on macOS so Windows and Linux keep the browser's address-bar shortcut.
+- Remove browser-reserved Ctrl/⌘+T, Ctrl/⌘+W, Ctrl+Tab, and Ctrl/⌘+K shortcuts from Torrus, and add a visible command-palette button in the toolbar.
+- Add regression coverage for platform-safe shortcut handling across macOS, Windows, and Linux user agents.
+- Rebuild bundled frontend assets for the release.
+
 ## [0.2.32] - 2026-08-02
 
 ### Fixed

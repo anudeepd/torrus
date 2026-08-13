@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from '@testing-library/react'
+import { act, createEvent, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Socket } from 'socket.io-client'
 import SFTPBrowser from './SFTPBrowser'
@@ -8,6 +8,11 @@ import { createMockSocket } from '@/test/mocks/socket'
 
 describe('SFTPBrowser', () => {
   const tabId = 'sftp-tab'
+  const originalUserAgent = navigator.userAgent
+
+  function setUserAgent(userAgent: string) {
+    Object.defineProperty(window.navigator, 'userAgent', { configurable: true, value: userAgent })
+  }
 
   beforeEach(() => {
     useSFTPStore.setState({ tabs: {}, transfers: [] })
@@ -26,9 +31,13 @@ describe('SFTPBrowser', () => {
         sourceTabId: 'terminal-tab',
       }],
     })
+    setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15')
   })
 
-  afterEach(() => vi.useRealTimers())
+  afterEach(() => {
+    setUserAgent(originalUserAgent)
+    vi.useRealTimers()
+  })
 
   it('shows an explicit root breadcrumb for the filesystem root', () => {
     const socket = createMockSocket()
@@ -46,6 +55,57 @@ describe('SFTPBrowser', () => {
     socket.emit.mockClear()
     fireEvent.click(screen.getByRole('button', { name: '/' }))
     expect(socket.emit).toHaveBeenCalledWith('sftp:list', expect.objectContaining({ path: '/' }))
+  })
+
+  it('only intercepts Ctrl+L when focus is inside the browser', () => {
+    const socket = createMockSocket()
+    render(<SFTPBrowser tabId={tabId} sourceTabId="terminal-tab" socket={socket as unknown as Socket} />)
+
+    act(() => {
+      socket._trigger('sftp:open:result', {
+        tab_id: tabId,
+        ok: true,
+        path: '/',
+        entries: [],
+      })
+    })
+
+    // Focus outside the browser (e.g. a terminal tab): Ctrl+L must not enter
+    // path-editing mode or block the browser default.
+    fireEvent.keyDown(window, { key: 'l', ctrlKey: true })
+    expect(screen.queryByRole('textbox', { name: 'Remote path' })).not.toBeInTheDocument()
+
+    // Focus inside the browser: Ctrl+L selects the remote path for editing.
+    screen.getByRole('listbox', { name: 'File browser' }).focus()
+    fireEvent.keyDown(window, { key: 'l', ctrlKey: true })
+    expect(screen.getByRole('textbox', { name: 'Remote path' })).toBeInTheDocument()
+  })
+
+  it('leaves Ctrl+L to the address bar on Windows and Linux browsers', () => {
+    const socket = createMockSocket()
+    render(<SFTPBrowser tabId={tabId} sourceTabId="terminal-tab" socket={socket as unknown as Socket} />)
+
+    act(() => {
+      socket._trigger('sftp:open:result', {
+        tab_id: tabId,
+        ok: true,
+        path: '/',
+        entries: [],
+      })
+    })
+
+    const browser = screen.getByRole('listbox', { name: 'File browser' })
+    browser.focus()
+    for (const userAgent of [
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151.0.0.0 Safari/537.36',
+      'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/151.0.0.0 Safari/537.36',
+    ]) {
+      setUserAgent(userAgent)
+      const event = createEvent.keyDown(window, { key: 'l', ctrlKey: true })
+      fireEvent(window, event)
+      expect(event.defaultPrevented).toBe(false)
+      expect(screen.queryByRole('textbox', { name: 'Remote path' })).not.toBeInTheDocument()
+    }
   })
 
   it('moves up from absolute top-level folders to filesystem root', () => {

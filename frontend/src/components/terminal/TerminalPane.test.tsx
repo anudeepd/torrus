@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import type { Socket } from 'socket.io-client'
 import { useTerminalStore } from '@/store/terminalStore'
 import { useSettingsStore } from '@/store/settingsStore'
 import { useBroadcastStore } from '@/store/broadcastStore'
@@ -7,6 +8,11 @@ import { createMockSocket } from '@/test/mocks/socket'
 import { mockSearchAddonInstances, mockTerminalInstances, clearMockTerminalInstances } from '@/test/mocks/xterm'
 import { mockResizeObserverInstances } from '@/test/setup'
 import TerminalPane from './TerminalPane'
+const originalUserAgent = navigator.userAgent
+
+function setUserAgent(userAgent: string) {
+  Object.defineProperty(window.navigator, 'userAgent', { configurable: true, value: userAgent })
+}
 
 function seedStores(tabId: string, status: 'connected' | 'connecting' | 'disconnected') {
   useTerminalStore.setState({
@@ -42,9 +48,11 @@ describe('TerminalPane', () => {
     vi.clearAllMocks()
     clearMockTerminalInstances()
     mockResizeObserverInstances.length = 0
+    setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15')
   })
 
   afterEach(() => {
+    setUserAgent(originalUserAgent)
     act(() => {
       useTerminalStore.setState({ sessionId: '', tabs: [], activeTabId: null })
       useBroadcastStore.setState({ enabled: false, excludedTabIds: [] })
@@ -380,6 +388,41 @@ describe('TerminalPane', () => {
     )
   })
 
+  it('leaves browser-reserved Ctrl+L to Windows and Linux browsers', async () => {
+    const tabId = 'tab-browser-ctrl-l'
+    act(() => {
+      seedStores(tabId, 'connected')
+    })
+
+    const socket = createMockSocket()
+    render(
+      <TerminalPane
+        tabId={tabId}
+        isActive={true}
+        focused={true}
+        socket={socket as unknown as Socket}
+      />
+    )
+
+    await waitFor(() => {
+      expect(mockTerminalInstances.length).toBeGreaterThan(0)
+    })
+
+    const term = mockTerminalInstances[mockTerminalInstances.length - 1]
+    socket.emit.mockClear()
+    for (const userAgent of [
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151.0.0.0 Safari/537.36',
+      'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/151.0.0.0 Safari/537.36',
+    ]) {
+      setUserAgent(userAgent)
+      expect(term.simulateKey({ key: 'l', ctrlKey: true })).toBe(false)
+      expect(term.lastKeyEvent?.defaultPrevented).toBe(false)
+    }
+
+    expect(term.scrollToBottom).not.toHaveBeenCalled()
+    expect(socket.emit).not.toHaveBeenCalledWith('ssh:input', expect.objectContaining({ data: '\x0c' }))
+  })
+
   it('leaves ordinary key events available to xterm input handling', async () => {
     const tabId = 'tab-vi-navigation'
     act(() => {
@@ -649,6 +692,7 @@ describe('TerminalPane', () => {
       })
     })
 
+    expect(term.lastKeyEvent?.defaultPrevented).toBe(true)
     expect(term.scrollToBottom).toHaveBeenCalledOnce()
     expect(term.write).toHaveBeenCalledWith(
       `\x1b[s\x1b[24;1H${'\x1bD'.repeat(6)}\x1b[u`,

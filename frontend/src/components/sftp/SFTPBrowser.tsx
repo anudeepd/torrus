@@ -32,6 +32,7 @@ import { anchoredSurface, completedTransferRetentionMs, exitTransition, fade, su
 import * as m from 'motion/react-m'
 import { AnimatePresence } from 'motion/react'
 
+import { isMac, isMacPlatform } from '@/utils/platform'
 interface SFTPBrowserProps {
   tabId: string
   sourceTabId?: string
@@ -354,7 +355,7 @@ function Breadcrumbs({ path, list, onEdit }: BreadcrumbsProps) {
         type="button"
         onClick={onEdit}
         className="ml-1 flex h-6 w-6 flex-shrink-0 items-center justify-center text-slate-500 hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 max-[600px]:h-10 max-[600px]:w-10"
-        title="Edit path (Ctrl+L)"
+        title={isMac ? 'Edit path (Ctrl+L)' : 'Edit path'}
         aria-label="Edit path"
       >
         <Pencil className="h-3 w-3" />
@@ -437,6 +438,7 @@ function SFTPDialog({ labelledBy, initialFocus, onClose, className, children }: 
 }
 
 export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserProps) {
+  const rootRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
   const pathInputRef = useRef<HTMLInputElement>(null)
@@ -632,7 +634,9 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'l') {
+      if (isMacPlatform() && event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey && event.key.toLowerCase() === 'l') {
+        // Ctrl+L is reserved for the browser address bar on Windows/Linux.
+        if (!rootRef.current?.contains(document.activeElement)) return
         event.preventDefault()
         if (!newFolderOpen && !chmodDialog && !deletePaths) setEditingPath(true)
       } else if (event.key === 'Escape') {
@@ -833,7 +837,7 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
   }, [mkdir, newFolderName])
 
   return (
-    <div className="relative flex h-full min-h-0 flex-col bg-surface-950 text-slate-200">
+    <div ref={rootRef} className="relative flex h-full min-h-0 flex-col bg-surface-950 text-slate-200">
       <div className="flex h-10 flex-shrink-0 items-center justify-between gap-2 border-b border-surface-800 px-2 max-[600px]:h-12">
         <div className="flex min-w-0 flex-1 items-center gap-2">
           <Button className="max-[600px]:h-11 max-[600px]:w-11 max-[600px]:px-0" variant="ghost" size="sm" onClick={() => list(parentPath(path))} title="Go to parent folder (Backspace)">
@@ -967,7 +971,7 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
             <m.div {...anchoredSurface} transition={surfaceSpring} ref={helpMenuRef} id="sftp-shortcuts" className="absolute right-0 top-8 z-40 w-64 rounded-lg border border-surface-700 bg-surface-800 p-3 shadow-xl" onPointerDown={event => event.stopPropagation()}>
               <p className="mb-2 text-xs font-medium text-slate-200">Keyboard shortcuts</p>
               <div className="grid grid-cols-[72px_1fr] gap-x-3 gap-y-1 text-[11px] text-slate-400">
-                <span className="font-mono text-slate-300">Ctrl+L</span><span>Edit path</span>
+                {isMac && <><span className="font-mono text-slate-300">Ctrl+L</span><span>Edit path</span></>}
                 <span className="font-mono text-slate-300">Enter</span><span>Open selection</span>
                 <span className="font-mono text-slate-300">Backspace</span><span>Go to parent</span>
                 <span className="font-mono text-slate-300">F2</span><span>Rename</span>

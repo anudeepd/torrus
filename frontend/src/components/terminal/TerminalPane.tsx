@@ -14,6 +14,7 @@ import ConnectForm from './ConnectForm'
 import { useTerminalStore } from '@/store/terminalStore'
 import { useSettingsStore } from '@/store/settingsStore'
 import { useBroadcastStore } from '@/store/broadcastStore'
+import { isMacPlatform } from '@/utils/platform'
 
 interface TerminalPaneProps {
   tabId: string
@@ -322,7 +323,11 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
         emitInterrupt()
         return false
       }
-      if (e.ctrlKey && !e.metaKey && !e.shiftKey && key === 'l') {
+      if (e.type === 'keydown' && e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && key === 'l') {
+        // Ctrl+L belongs to the browser address bar on Windows/Linux. A web
+        // page cannot cancel browser chrome shortcuts, so only claim it on macOS.
+        if (!isMacPlatform()) return false
+        e.preventDefault()
         suppressNextScrollbackClearRef.current = true
         preserveVisibleRows(term, () => emitInput('\x0c'))
         return false

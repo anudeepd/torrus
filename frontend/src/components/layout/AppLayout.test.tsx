@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, createEvent, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { StrictMode } from 'react'
 import { createMockSocket } from '@/test/mocks/socket'
 import { useTerminalStore } from '@/store/terminalStore'
@@ -36,6 +36,7 @@ async function renderAppLayout({
       <>
         <button type="button" data-testid="tabbar" onClick={onCloseAllTabs}>Close All</button>
         <button type="button" data-testid="close-tab" onClick={() => onCloseTab('terminal-tab')}>Close Tab</button>
+        <button type="button" data-testid="close-sftp-tab" onClick={() => onCloseTab('sftp-tab')}>Close SFTP Tab</button>
         <button type="button" data-testid="open-admin" onClick={() => onOpenAdmin?.()}>Admin</button>
       </>
     ),
@@ -218,7 +219,7 @@ describe('AppLayout LDAP auth handling', () => {
     })
     const { socket } = await renderAppLayout()
 
-    fireEvent.keyDown(window, { key: 'w', ctrlKey: true })
+    fireEvent.click(screen.getByTestId('close-sftp-tab'))
 
     expect(screen.getByText('Close SFTP tab?')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Close tab' }))
@@ -228,6 +229,26 @@ describe('AppLayout LDAP auth handling', () => {
       tab_id: 'sftp-tab',
     })
     expect(socket.emit).not.toHaveBeenCalledWith('ssh:disconnect', expect.anything())
+  })
+
+  it('leaves browser-reserved tab and omnibox shortcuts to the browser', async () => {
+    await renderAppLayout()
+
+    for (const shortcut of [
+      { key: 't', ctrlKey: true },
+      { key: 'w', ctrlKey: true },
+      { key: 'Tab', ctrlKey: true },
+      { key: 'k', ctrlKey: true },
+      { key: 't', metaKey: true },
+      { key: 'w', metaKey: true },
+      { key: 'k', metaKey: true },
+    ]) {
+      const event = createEvent.keyDown(window, shortcut)
+      fireEvent(window, event)
+      expect(event.defaultPrevented).toBe(false)
+    }
+
+    expect(screen.queryByRole('dialog', { name: 'Command Palette' })).not.toBeInTheDocument()
   })
 
   it('uses the internal warning before closing all active tabs', async () => {

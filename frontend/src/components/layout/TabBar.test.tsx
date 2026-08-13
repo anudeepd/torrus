@@ -118,5 +118,28 @@ describe('TabBar', () => {
     render(<TabBar {...props} />)
     expect(screen.getByRole('button', { name: 'Admin console' })).toBeInTheDocument()
   })
+  it('provides command palette access in desktop layout', () => {
+    const onOpenCommandPalette = vi.fn()
+    render(
+      <TabBar
+        onAddTab={() => {}}
+        onCloseTab={() => {}}
+        onCloneTab={() => {}}
+        onOpenSftpTab={() => {}}
+        onDuplicateTab={() => {}}
+        onCloseAllTabs={() => {}}
+        onOpenSettings={() => {}}
+        onOpenSplitPicker={() => {}}
+        onOpenBroadcastPicker={() => {}}
+        onExitSplit={() => {}}
+        onSetActiveTab={() => {}}
+        onOpenCommandPalette={onOpenCommandPalette}
+        inSplitMode={false}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open command palette' }))
+    expect(onOpenCommandPalette).toHaveBeenCalledOnce()
+  })
 })
 

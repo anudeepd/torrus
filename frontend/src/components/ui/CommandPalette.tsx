@@ -36,7 +36,7 @@ export default function CommandPalette({ tabs, activeTabId, canSplit, canBroadca
 
   const commands = useMemo(() => {
     const items = [
-      { id: 'new-terminal', label: 'New terminal tab', detail: `${modKey}+T`, icon: Plus, run: onAddTab },
+      { id: 'new-terminal', label: 'New terminal tab', detail: 'Toolbar', icon: Plus, run: onAddTab },
       ...(inSplitMode
         ? [{ id: 'exit-split', label: 'Exit split mode', detail: 'Layout', icon: X, run: onExitSplit }]
         : canSplit ? [{ id: 'split', label: 'Create split layout', detail: 'Layout', icon: Columns2, run: onOpenSplitPicker }] : []),

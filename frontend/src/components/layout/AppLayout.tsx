@@ -423,47 +423,12 @@ export default function AppLayout({ navigateToAdmin = () => window.location.assi
     setBroadcastPickerOpen(false)
   }, [disableBroadcast, exitSplitMode, splitOwnedByBroadcast])
 
-  // Keyboard shortcuts — use refs to avoid recreating listener on every render
-  const handleAddTabRef = useRef(handleAddTab)
-  const handleCloseTabRef = useRef(handleCloseTab)
-  const handleSetActiveTabRef = useRef(handleSetActiveTab)
-  useEffect(() => {
-    handleAddTabRef.current = handleAddTab
-    handleCloseTabRef.current = handleCloseTab
-    handleSetActiveTabRef.current = handleSetActiveTab
-  })
-
+  // Keep application shortcuts separate from browser-owned tab and omnibox keys.
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === 't') { e.preventDefault(); handleAddTabRef.current() }
-      if ((e.ctrlKey || e.metaKey) && e.key === 'w') {
-        e.preventDefault()
-        const store = useTerminalStore.getState()
-        const currentActiveTabId = store.activeTabId
-        if (currentActiveTabId) {
-          handleCloseTabRef.current(currentActiveTabId)
-        }
-      }
       if ((e.ctrlKey || e.metaKey) && e.key === ',') {
         e.preventDefault()
         setSettingsOpen(o => !o)
-      }
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
-        e.preventDefault()
-        setCommandPaletteOpen(open => !open)
-      }
-      if (e.ctrlKey && e.key === 'Tab') {
-        e.preventDefault()
-        const store = useTerminalStore.getState()
-        const currentTabs = store.tabs
-        const currentActiveTabId = store.activeTabId
-        const idx = currentTabs.findIndex(t => t.id === currentActiveTabId)
-        if (currentTabs.length > 1) {
-          const next = e.shiftKey
-            ? (idx - 1 + currentTabs.length) % currentTabs.length
-            : (idx + 1) % currentTabs.length
-          handleSetActiveTabRef.current(currentTabs[next].id)
-        }
       }
     }
     window.addEventListener('keydown', onKeyDown)

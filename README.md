@@ -12,7 +12,7 @@
 - **SFTP file browser** — upload, download, rename, delete files directly from the browser
 - **Multi-tab support** — open multiple SSH sessions side by side, close all at once
 - **Tab management** — right-click to rename, clone, duplicate, or save a tab as a session
-- **Keyboard shortcuts** — `Ctrl+T` new tab, `Ctrl+W` close tab, `Ctrl+Tab` cycle tabs, `Ctrl+,` settings
+- **Keyboard shortcuts** — `Ctrl+,` / `⌘+,` settings; browser-reserved tab and omnibox shortcuts remain native
 - **Saved servers** — save, edit, import, and export connection configs
 - **Works behind reverse proxies** — uses Socket.IO for reliable transport
 - **Session sidebar** — quick-connect to saved servers

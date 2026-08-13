@@ -267,7 +267,7 @@ export default function TabBar({ onAddTab, onCloseTab, onCloneTab, onOpenSftpTab
       </div>
 
       {compactSidebar && (
-        <button type="button" onClick={onOpenCommandPalette} title={`Command palette (${modKey}+K)`} aria-label="Open command palette" className="col-start-3 row-start-1 flex h-[46px] w-10 justify-self-end items-center justify-center text-slate-400 transition-colors hover:bg-surface-800 hover:text-slate-200">
+        <button type="button" onClick={onOpenCommandPalette} title="Open command palette" aria-label="Open command palette" className="col-start-3 row-start-1 flex h-[46px] w-10 justify-self-end items-center justify-center text-slate-400 transition-colors hover:bg-surface-800 hover:text-slate-200">
           <Command className="h-4 w-4" />
         </button>
       )}
@@ -275,7 +275,7 @@ export default function TabBar({ onAddTab, onCloseTab, onCloneTab, onOpenSftpTab
       {/* New tab button */}
       <button
         onClick={onAddTab}
-        title={`New tab (${modKey}+T)`}
+        title="New tab"
         className={clsx('h-10 flex-shrink-0 w-10 flex items-center justify-center text-slate-500 hover:text-slate-300 hover:bg-surface-800 transition-colors border-r border-surface-800', compactSidebar && 'col-start-1 row-start-2 self-center')}
       >
         <Plus className="w-4 h-4" />
@@ -407,6 +407,15 @@ export default function TabBar({ onAddTab, onCloseTab, onCloneTab, onOpenSftpTab
           <span className="max-[900px]:hidden">Close All</span>
         </button>
       )}
+      {!compactSidebar && <button
+        type="button"
+        onClick={onOpenCommandPalette}
+        title="Open command palette"
+        aria-label="Open command palette"
+        className="h-10 flex-shrink-0 w-10 flex items-center justify-center text-slate-500 hover:text-slate-300 hover:bg-surface-800 transition-colors border-l border-surface-800"
+      >
+        <Command className="w-3.5 h-3.5" />
+      </button>}
       {!compactSidebar && <button
         onClick={onOpenSettings}
         title={`Settings (${modKey}+,)`}
