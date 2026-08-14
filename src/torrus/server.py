@@ -190,6 +190,11 @@ class _CommandInputBuffer:
     size: int = 0
     overflowed: bool = False
     completion_pending: bool = False
+    # Byte offset in `spool` where the active shell-completion region begins.
+    # Set on every Tab keystroke; cleared on submit/reset. Each incremental
+    # completion chunk replaces everything from this offset onward instead
+    # of appending, so a multi-chunk completion echo never produces duplicates.
+    completion_zone_start: int = 0
     bracketed_paste: bool = False
     pending_escape: bytearray = field(default_factory=bytearray)
 
@@ -212,9 +217,26 @@ class _CommandInputBuffer:
         self.size = 0
         self.overflowed = False
         self.completion_pending = False
+        self.completion_zone_start = 0
+
+    def _truncate_completion_zone(self) -> None:
+        """Discard everything in `spool` from the active completion zone onward."""
+        if self.completion_zone_start <= 0:
+            return
+        if self.completion_zone_start >= self.size:
+            return
+        self.spool.seek(self.completion_zone_start)
+        self.spool.truncate()
+        self.size = self.completion_zone_start
 
     def observe_output(self, incoming: bytes) -> None:
-        """Append inline shell-completion text while a Tab request is pending."""
+        """Replace inline shell-completion text while a Tab request is pending.
+
+        Each incremental completion chunk (e.g. bash re-drawing a glob or
+        filename match list) overwrites the prior completion region instead
+        of appending to it, so the audited command reflects the final state
+        the user saw and submits.
+        """
         if not self.completion_pending or not incoming:
             return
         if b"\r" in incoming or b"\n" in incoming:
@@ -222,8 +244,10 @@ class _CommandInputBuffer:
         completion = audit_store.strip_escape(
             incoming.decode("utf-8", errors="replace")
         ).replace("\t", "")
-        if completion:
-            self._append(completion.encode("utf-8", errors="replace"))
+        if not completion:
+            return
+        self._truncate_completion_zone()
+        self._append(completion.encode("utf-8", errors="replace"))
 
     def _filtered_input(self, incoming: bytes) -> list[tuple[int, bool]]:
         """Remove bracketed-paste markers while retaining literal paste tabs."""
@@ -267,6 +291,10 @@ class _CommandInputBuffer:
                 if start < index:
                     self._append(segment(start, index))
                 self.completion_pending = True
+                # Mark the byte offset where completion output should begin
+                # replacing existing input, so subsequent incremental completion
+                # chunks overwrite (not append to) the previous completion text.
+                self.completion_zone_start = self.size
                 start = index + 1
                 continue
             if value not in (0x0A, 0x0D):

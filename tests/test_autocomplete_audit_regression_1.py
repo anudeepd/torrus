@@ -20,7 +20,7 @@ async def test_inline_tab_completion_is_included_in_audited_command():
         assert buffer.extract(b"cd /ho") == []
         assert buffer.extract(b"\t") == []
         await server_module._record_ssh_output_audit("session", "tab", b"me")
-        await server_module._record_ssh_output_audit("session", "tab", b"/")
+        await server_module._record_ssh_output_audit("session", "tab", b"me/")
         assert buffer.extract(b"user\r") == ["cd /home/user"]
     finally:
         server_module._input_buffers.pop(key, None)
@@ -105,3 +105,46 @@ async def test_ssh_read_loop_forwards_output_to_audit_callback(mock_sio):
         assert mock_sio.emit.await_args_list[0].args[0] == "ssh:output"
     finally:
         await manager.stop_background_tasks()
+
+
+@pytest.mark.asyncio
+async def test_glob_completion_incremental_chunks_do_not_duplicate():
+    """A path ending with `*` plus Tab must record the final glob state once.
+
+    Regression: ISSUE-003 — admin audit split ``/hivestage/.../something/*``
+    into two rows when bash re-drew the glob candidates in multiple output
+    chunks. Each chunk used to append to the prior completion region, so the
+    audit either duplicated candidates or, when interleaved with a stray
+    Enter, fragmented the command. Completion output must now overwrite the
+    prior completion region instead of appending.
+    Found by /investigate on 2026-08-14
+    """
+    import torrus.server as server_module
+
+    key = ("sid", "session", "tab")
+    buffer = server_module._CommandInputBuffer()
+    server_module._input_buffers[key] = buffer
+    try:
+        assert (
+            buffer.extract(
+                b"/hivestage/frdv/frdv/timekey=something/countrycode=something/*\t"
+            )
+            == []
+        )
+        # Bash re-draws the glob in three incremental output chunks.
+        await server_module._record_ssh_output_audit(
+            "session", "tab", b" fileA.parquet"
+        )
+        await server_module._record_ssh_output_audit(
+            "session", "tab", b" fileA.parquet fileB.parquet"
+        )
+        await server_module._record_ssh_output_audit(
+            "session", "tab", b" fileA.parquet fileB.parquet fileC.parquet"
+        )
+        assert buffer.extract(b"\r") == [
+            "/hivestage/frdv/frdv/timekey=something/countrycode=something/*"
+            " fileA.parquet fileB.parquet fileC.parquet"
+        ]
+    finally:
+        server_module._input_buffers.pop(key, None)
+        buffer.close()
