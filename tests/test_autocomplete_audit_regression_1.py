@@ -148,3 +148,42 @@ async def test_glob_completion_incremental_chunks_do_not_duplicate():
     finally:
         server_module._input_buffers.pop(key, None)
         buffer.close()
+
+
+@pytest.mark.asyncio
+async def test_late_output_after_enter_does_not_overwrite_audited_command():
+    """ISSUE-guard: an SSH output chunk arriving after Enter must not mutate
+    the already-submitted command or the buffer's completion zone.
+
+    Regression guard: completion_pending is cleared by extract() on Enter, so
+    observe_output()'s ``if not self.completion_pending`` guard short-circuits
+    late chunks. completion_zone_start remains set but is harmless because the
+    guard fires first; it is overwritten on the next Tab keystroke.
+    """
+    import torrus.server as server_module
+
+    key = ("sid", "session", "tab")
+    buffer = server_module._CommandInputBuffer()
+    server_module._input_buffers[key] = buffer
+    try:
+        # Match the existing completion pattern so the buffer reaches a known
+        # audited state. After extract("user\\r") returns, the buffer is reset
+        # and completion_pending is False.
+        assert buffer.extract(b"cd /ho") == []
+        assert buffer.extract(b"\t") == []
+        await server_module._record_ssh_output_audit("session", "tab", b"me")
+        await server_module._record_ssh_output_audit("session", "tab", b"me/")
+        assert buffer.extract(b"user\r") == ["cd /home/user"]
+
+        # Late chunk arriving after submit must be a no-op.
+        await server_module._record_ssh_output_audit(
+            "session", "tab", b" injected-evil"
+        )
+        assert buffer.size == 0
+        assert buffer.completion_pending is False
+        assert buffer.completion_zone_start == 0
+        # And the next extract produces no command.
+        assert buffer.extract(b"\r") == []
+    finally:
+        server_module._input_buffers.pop(key, None)
+        buffer.close()
