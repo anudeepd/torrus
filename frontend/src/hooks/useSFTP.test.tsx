@@ -32,10 +32,11 @@ describe('useSFTP', () => {
     vi.useRealTimers()
   })
 
-  it('uses larger upload chunks for very large files without exceeding 32 MB', () => {
+  it('uses larger upload chunks for very large files without exceeding 64 MB', () => {
     expect(uploadChunkSize(0)).toBe(8 * 1024 * 1024)
     expect(uploadChunkSize(1024 * 1024 * 1024)).toBe(8 * 1024 * 1024)
-    expect(uploadChunkSize(5 * 1024 * 1024 * 1024)).toBe(32 * 1024 * 1024)
+    expect(uploadChunkSize(5 * 1024 * 1024 * 1024)).toBe(40 * 1024 * 1024)
+    expect(uploadChunkSize(10 * 1024 * 1024 * 1024)).toBe(64 * 1024 * 1024)
   })
 
   it('marks the tab dead when a directory listing reports a closed connection', () => {

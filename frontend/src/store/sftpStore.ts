@@ -21,6 +21,8 @@ export interface TransferItem {
   total: number
   startedAt: number
   error?: string
+  /** Current transfer speed in bytes/second while active. */
+  speed?: number
 }
 
 interface SFTPTabState {

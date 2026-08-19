@@ -17,6 +17,10 @@ function formatBytes(bytes: number): string {
   return `${value.toFixed(value >= 10 ? 0 : 1)} ${unit}`
 }
 
+function formatSpeed(bytesPerSecond: number): string {
+  return `${formatBytes(bytesPerSecond)}/s`
+}
+
 interface TransferQueueProps {
   transfers: TransferItem[]
   onDismiss: (id: string) => void
@@ -84,7 +88,10 @@ export default function TransferQueue({ transfers, onDismiss, onRetry }: Transfe
             </div>
             <div className="mt-1 flex justify-between px-3 pb-2.5 font-mono text-[11px] text-slate-500">
               <span className="min-w-0 truncate">{item.error ?? `${formatBytes(item.bytes)} / ${formatBytes(item.total)}`}</span>
-              <span className="ml-2 flex-shrink-0">{item.progress}%</span>
+              <span className="ml-2 flex-shrink-0">
+                {item.status === 'active' && item.speed ? `${formatSpeed(item.speed)} · ` : ''}
+                {item.progress}%
+              </span>
             </div>
           </m.div>
         ))}

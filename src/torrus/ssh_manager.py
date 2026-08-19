@@ -1260,6 +1260,16 @@ def _connect_and_check_tmux(
         look_for_keys=False,
         allow_agent=False,
     )
+    transport = client.get_transport()
+    if transport is not None:
+        try:
+            # Larger per-channel transfer windows cut round-trip stalls on
+            # high-latency links (paramiko defaults are 2 MiB / 32 KiB).
+            transport.default_window_size = 16 * 1024 * 1024
+            transport.default_max_packet_size = 128 * 1024
+        except AttributeError:
+            # Older paramiko without these knobs keeps its defaults.
+            pass
     try:
         return _connection_probes_blocking(client)
     except Exception:

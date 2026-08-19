@@ -9,11 +9,13 @@ import { uuid } from '@/utils/uuid'
 // files automatically use streaming HTTP; users do not need to choose a path.
 const LARGE_UPLOAD_THRESHOLD = 5 * 1024 * 1024
 const MIN_UPLOAD_CHUNK_BYTES = 8 * 1024 * 1024
-const MAX_UPLOAD_CHUNK_BYTES = 32 * 1024 * 1024
+const MAX_UPLOAD_CHUNK_BYTES = 64 * 1024 * 1024
 const TARGET_UPLOAD_CHUNKS = 128
 const UPLOAD_RETRY_LIMIT = 3
 const MAX_CONCURRENT_UPLOADS = 2
 const LISTING_TIMEOUT_MS = 15_000
+// Max time a single chunk XHR may take before it is aborted and retried.
+const UPLOAD_CHUNK_TIMEOUT_MS = 30_000
 
 interface ListingPayload {
   tab_id: string
@@ -107,6 +109,58 @@ function plural(count: number, singular: string): string {
   return `${count} ${singular}${count === 1 ? '' : 's'}`
 }
 
+/**
+ * Tracks upload progress samples to compute a sliding-window transfer speed.
+ * One instance is owned by each active upload transfer.
+ */
+export class SpeedTracker {
+  private samples: Array<{ t: number; b: number }> = []
+  private windowMs = 5000
+  private maxSamples = 20
+
+  sample(bytes: number) {
+    const now = Date.now()
+    this.samples.push({ t: now, b: bytes })
+    this.evict(now)
+  }
+
+  /** Bytes per second over the last 5 seconds (0 when there is not enough data). */
+  speed(): number {
+    const now = Date.now()
+    this.evict(now)
+    if (this.samples.length < 2) return 0
+    const oldest = this.samples[0]
+    const newest = this.samples[this.samples.length - 1]
+    const deltaBytes = newest.b - oldest.b
+    const deltaMs = newest.t - oldest.t
+    if (deltaMs <= 0) return 0
+    return Math.max(0, (deltaBytes / deltaMs) * 1000)
+  }
+
+  reset() {
+    this.samples = []
+  }
+
+  private evict(now: number) {
+    this.samples = this.samples.filter(s => now - s.t < this.windowMs)
+    if (this.samples.length > this.maxSamples) this.samples.shift()
+  }
+}
+
+/**
+ * Clamps per-chunk XHR progress to a monotonically non-decreasing byte count.
+ * A retried chunk creates a fresh XHR whose `loaded` starts back at 0; without
+ * clamping the displayed transfer bytes would jump backwards on every retry.
+ */
+export function clampUploadProgress(
+  lastReported: number,
+  offset: number,
+  loaded: number,
+  fileSize: number,
+): number {
+  return Math.min(fileSize, Math.max(lastReported, offset + loaded))
+}
+
 export function uploadChunkSize(fileSize: number): number {
   if (fileSize <= 0) return MIN_UPLOAD_CHUNK_BYTES
   return Math.min(
@@ -119,19 +173,27 @@ function uploadChunkWithProgress(url: string, body: Blob, onProgress: (bytes: nu
   return new Promise((resolve, reject) => {
     const request = new XMLHttpRequest()
     request.open('POST', url)
+    request.timeout = UPLOAD_CHUNK_TIMEOUT_MS
     request.upload.onprogress = event => onProgress(event.loaded)
     request.onload = () => {
-      let payload: { offset?: number; message?: string } | null = null
+      let payload: { offset?: number; message?: string; code?: string } | null = null
       try { payload = JSON.parse(request.responseText) } catch { /* response handled below */ }
       if (request.status >= 200 && request.status < 300) {
         resolve(payload ?? {})
       } else {
+        const transientCode =
+          payload?.code === 'CONNECTION_CLOSED' || payload?.code === 'TRANSFER_FAILED'
         reject(Object.assign(new Error(payload?.message ?? `Upload failed (${request.status})`), {
-          retryable: request.status >= 500 || request.status === 408 || request.status === 429,
+          retryable:
+            request.status >= 500 || request.status === 408 || request.status === 429 || transientCode,
         }))
       }
     }
-    request.onerror = () => reject(new Error('Upload connection failed'))
+    request.ontimeout = () => reject(Object.assign(
+      new Error(`Upload timed out after ${UPLOAD_CHUNK_TIMEOUT_MS / 1000}s`),
+      { retryable: true },
+    ))
+    request.onerror = () => reject(Object.assign(new Error('Upload connection failed'), { retryable: true }))
     request.send(body)
   })
 }
@@ -484,7 +546,7 @@ export function useSFTP(tabId: string, sourceTabId: string | undefined, socket: 
     }
   }, [clearListingTimeout, socket, tabId, list, refreshCurrentDirectory, setTabStatus, setError, setNotice, setListing, setUsername, setIsRoot, setDisconnected])
 
-  const resumeUpload = useCallback(async (transferId: string) => {
+  const resumeUpload = useCallback(async (transferId: string, tracker?: SpeedTracker) => {
     const pending = pendingUploadsRef.current.get(transferId)
     if (!pending) return
     const { file, remotePath, uploadId } = pending
@@ -499,6 +561,7 @@ export function useSFTP(tabId: string, sourceTabId: string | undefined, socket: 
         const body = await initResponse.json().catch(() => null) as { message?: string } | null
         throw new Error(body?.message ?? `Upload failed (${initResponse.status})`)
       }
+      let lastReportedBytes = 0
       do {
         const offset = pending.offset
         const end = Math.min(offset + chunkSize, file.size)
@@ -510,10 +573,16 @@ export function useSFTP(tabId: string, sourceTabId: string | undefined, socket: 
             result = await uploadChunkWithProgress(
               `/sftp/upload?session_id=${encodeURIComponent(sessionId)}&tab_id=${encodeURIComponent(tabId)}&path=${encodeURIComponent(remotePath)}&upload_id=${uploadId}&offset=${offset}&total=${file.size}&complete=${complete}`,
               file.slice(offset, end),
-              loaded => updateTransfer(transferId, {
-                bytes: Math.min(file.size, offset + loaded),
-                progress: Math.round((Math.min(file.size, offset + loaded) / file.size) * 100),
-              }),
+              loaded => {
+                const clamped = clampUploadProgress(lastReportedBytes, offset, loaded, file.size)
+                lastReportedBytes = clamped
+                tracker?.sample(clamped)
+                updateTransfer(transferId, {
+                  bytes: clamped,
+                  progress: Math.round((clamped / file.size) * 100),
+                  speed: tracker?.speed() ?? 0,
+                })
+              },
             )
             break
           } catch (error) {
@@ -528,18 +597,21 @@ export function useSFTP(tabId: string, sourceTabId: string | undefined, socket: 
         const nextOffset = result.offset ?? end
         if ((!complete && nextOffset <= offset) || nextOffset > file.size) throw new Error('Upload did not advance')
         pending.offset = nextOffset
+        lastReportedBytes = nextOffset
         updateTransfer(transferId, {
           bytes: nextOffset,
           progress: Math.round((nextOffset / file.size) * 100),
+          speed: tracker?.speed() ?? 0,
         })
       } while (pending.offset < file.size)
       pendingUploadsRef.current.delete(transferId)
-      updateTransfer(transferId, { status: 'done', progress: 100, bytes: file.size })
+      updateTransfer(transferId, { status: 'done', progress: 100, bytes: file.size, speed: 0 })
       refreshCurrentDirectory()
     } catch (error) {
       updateTransfer(transferId, {
         status: 'error',
         error: error instanceof Error ? error.message : 'Upload failed',
+        speed: 0,
       })
     }
   }, [refreshCurrentDirectory, sessionId, tabId, updateTransfer])
@@ -570,14 +642,15 @@ export function useSFTP(tabId: string, sourceTabId: string | undefined, socket: 
     const worker = async () => {
       while (next < pendingIds.length) {
         const transferId = pendingIds[next++]
-        await resumeUpload(transferId)
+        const tracker = new SpeedTracker()
+        await resumeUpload(transferId, tracker)
       }
     }
     await Promise.all(Array.from({ length: Math.min(MAX_CONCURRENT_UPLOADS, pendingIds.length) }, worker))
   }, [tabId, addTransfer, resumeUpload])
 
   const retryUpload = useCallback((transferId: string) => {
-    void resumeUpload(transferId)
+    void resumeUpload(transferId, new SpeedTracker())
   }, [resumeUpload])
 
   const download = useCallback(async (entry: SFTPEntry) => {
