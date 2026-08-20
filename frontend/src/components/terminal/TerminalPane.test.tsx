@@ -413,7 +413,7 @@ describe('TerminalPane', () => {
     )
   })
 
-  it('leaves browser-reserved Ctrl+L to Windows and Linux browsers', async () => {
+  it('claims Ctrl+L for terminal clear on every platform, blocking the browser address bar', async () => {
     const tabId = 'tab-browser-ctrl-l'
     act(() => {
       seedStores(tabId, 'connected')
@@ -441,11 +441,13 @@ describe('TerminalPane', () => {
     ]) {
       setUserAgent(userAgent)
       expect(term.simulateKey({ key: 'l', ctrlKey: true })).toBe(false)
-      expect(term.lastKeyEvent?.defaultPrevented).toBe(false)
+      // Address bar must not be touched: preventDefault is unconditional.
+      expect(term.lastKeyEvent?.defaultPrevented).toBe(true)
+      expect(term.scrollToBottom).toHaveBeenCalled()
+      expect(socket.emit).toHaveBeenCalledWith('ssh:input', expect.objectContaining({ data: '\x0c' }))
+      term.scrollToBottom.mockClear()
+      socket.emit.mockClear()
     }
-
-    expect(term.scrollToBottom).not.toHaveBeenCalled()
-    expect(socket.emit).not.toHaveBeenCalledWith('ssh:input', expect.objectContaining({ data: '\x0c' }))
   })
 
   it('leaves ordinary key events available to xterm input handling', async () => {

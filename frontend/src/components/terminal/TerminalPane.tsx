@@ -6,7 +6,7 @@ import { SearchAddon } from '@xterm/addon-search'
 import { ChevronDown, ChevronUp, LoaderCircle, X } from 'lucide-react'
 import { AnimatePresence } from 'motion/react'
 import * as m from 'motion/react-m'
-import { anchoredSurface, exitTransition, fade, surfaceSpring, surfaceTransition } from '@/motion/tokens'
+import { exitTransition, fade, surfaceSpring, surfaceTransition } from '@/motion/tokens'
 import '@xterm/xterm/css/xterm.css'
 import type { Socket } from 'socket.io-client'
 import type { ConnectFormValues } from '@/types'
@@ -14,7 +14,6 @@ import ConnectForm from './ConnectForm'
 import { useTerminalStore } from '@/store/terminalStore'
 import { useSettingsStore } from '@/store/settingsStore'
 import { useBroadcastStore } from '@/store/broadcastStore'
-import { isMacPlatform } from '@/utils/platform'
 
 interface TerminalPaneProps {
   tabId: string
@@ -324,9 +323,9 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
         return false
       }
       if (e.type === 'keydown' && e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && key === 'l') {
-        // Ctrl+L belongs to the browser address bar on Windows/Linux. A web
-        // page cannot cancel browser chrome shortcuts, so only claim it on macOS.
-        if (!isMacPlatform()) return false
+        // Claim Ctrl+L for terminal clear on every platform — preventDefault cancels
+        // the browser's URL-bar focus shortcut in Chrome, Edge (Chromium), Firefox,
+        // and Safari. The keydown reaches us first, and the browser yields.
         e.preventDefault()
         suppressNextScrollbackClearRef.current = true
         preserveVisibleRows(term, () => emitInput('\x0c'))
@@ -585,6 +584,23 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
     termRef.current?.focus()
   }, [getSearchAddon])
 
+  // Esc closes the find bar from anywhere — even if focus drifted back to xterm
+  // or elsewhere. Capture phase so we win against xterm's own key handler.
+  useEffect(() => {
+    if (!findOpen) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      // Don't hijack Esc if a dialog/menu is open and handling its own Esc.
+      const target = event.target as HTMLElement | null
+      if (target && target.closest('[role="dialog"]')) return
+      event.preventDefault()
+      event.stopPropagation()
+      closeFind()
+    }
+    window.addEventListener('keydown', onKeyDown, true)
+    return () => window.removeEventListener('keydown', onKeyDown, true)
+  }, [findOpen, closeFind])
+
   // Browser Find can win before xterm receives a key event, especially after
   // the terminal loses its hidden textarea focus. Capture it at the window so
   // the focused pane always searches the complete xterm scrollback buffer.
@@ -825,7 +841,15 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
 
       <AnimatePresence>
       {findOpen && (
-        <m.div {...anchoredSurface} transition={surfaceSpring} className="absolute right-3 top-3 z-20 flex items-center gap-1 rounded-lg border border-surface-700 bg-surface-900/95 p-1.5 shadow-xl backdrop-blur" role="search" aria-label="Find in terminal">
+        <m.div
+          initial={{ opacity: 0, scale: 0.85, y: -12 }}
+          animate={{ opacity: 1, scale: 1, y: 0 }}
+          exit={{ opacity: 0, scale: 0.85, y: -12, transition: { duration: 0.12, ease: 'easeIn' } }}
+          transition={{ type: 'spring', stiffness: 520, damping: 26, mass: 0.6 }}
+          className="absolute right-3 top-3 z-20 flex items-center gap-1 rounded-xl border border-surface-600 bg-surface-900/95 px-2 py-1.5 shadow-2xl ring-1 ring-brand-500/30 backdrop-blur"
+          role="search"
+          aria-label="Find in terminal"
+        >
           <input
             ref={findInputRef}
             value={findQuery}
@@ -846,13 +870,13 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
             className="h-7 w-44 rounded bg-surface-950 px-2 text-xs text-slate-200 outline-none placeholder:text-slate-500 focus:ring-1 focus:ring-brand-500"
           />
           {findQuery && findResult === false && <span className="px-1 text-[10px] text-amber-400">No match</span>}
-          <button type="button" onClick={() => search('previous')} title="Previous match" aria-label="Previous match" className="rounded p-1 text-slate-400 hover:bg-surface-800 hover:text-slate-200">
+          <button type="button" onClick={() => search('previous')} title="Previous match (Shift+Enter)" aria-label="Previous match" className="rounded p-1 text-slate-400 hover:bg-surface-800 hover:text-slate-200">
             <ChevronUp className="h-3.5 w-3.5" />
           </button>
-          <button type="button" onClick={() => search('next')} title="Next match" aria-label="Next match" className="rounded p-1 text-slate-400 hover:bg-surface-800 hover:text-slate-200">
+          <button type="button" onClick={() => search('next')} title="Next match (Enter)" aria-label="Next match" className="rounded p-1 text-slate-400 hover:bg-surface-800 hover:text-slate-200">
             <ChevronDown className="h-3.5 w-3.5" />
           </button>
-          <button type="button" onClick={closeFind} title="Close find" aria-label="Close find" className="rounded p-1 text-slate-400 hover:bg-surface-800 hover:text-slate-200">
+          <button type="button" onClick={closeFind} title="Close find (Esc)" aria-label="Close find" className="rounded p-1 text-slate-400 hover:bg-surface-800 hover:text-slate-200">
             <X className="h-3.5 w-3.5" />
           </button>
         </m.div>

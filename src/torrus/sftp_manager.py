@@ -6,13 +6,15 @@ import asyncio
 import base64
 import concurrent.futures
 import errno
+import io
 import os
 import posixpath
 import stat
 import sys
 import time
+import zipfile
 from dataclasses import dataclass, field
-from typing import Any, Callable, AsyncIterator, TypeVar
+from typing import Any, Callable, AsyncIterator, Iterator, TypeVar
 
 import paramiko
 
@@ -194,6 +196,27 @@ class SFTPManager:
         return await self._locked(
             tab_id,
             lambda session: self._prepare_download_sync(session, remote_path),
+            expected_session_id=expected_session_id,
+        )
+
+    async def prepare_bulk_download(
+        self,
+        tab_id: str,
+        paths: list[str],
+        expected_session_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Validate every requested path and flatten directories for zipping.
+
+        Mirrors ``prepare_download``'s "errors before headers" behavior: this
+        resolves each path, rejects any that escape the remote home directory
+        or fail stat, and walks directories so all failures surface as
+        ``SFTPError`` before the endpoint starts streaming the archive.
+        Returns ``{"ok": True, "files": [(resolved_path, arcname), ...]}``
+        ready for ``stream_bulk_zip``.
+        """
+        return await self._locked(
+            tab_id,
+            lambda session: self._prepare_bulk_download_sync(session, paths),
             expected_session_id=expected_session_id,
         )
 
@@ -411,6 +434,50 @@ class SFTPManager:
                     await self._run_blocking(remote_file.close)
                 except Exception:
                     pass
+
+    async def stream_bulk_zip(
+        self,
+        tab_id: str,
+        files: list[tuple[str, str]],
+        chunk_size: int = 4 * 1024 * 1024,
+        expected_session_id: str | None = None,
+    ) -> AsyncIterator[bytes]:
+        """Stream a zip archive of the given ``(remote_path, arcname)`` files.
+
+        Remote file bytes are read through the SSH executor and the archive is
+        compressed with ``zipfile.ZIP_DEFLATED`` (matching xwing's
+        ``/_bulk/zip``). The tab lock is only held while the session is
+        resolved, mirroring ``stream_download`` so other SFTP operations on
+        the tab can interleave between archive chunks. Files must already be
+        validated by ``prepare_bulk_download``.
+        """
+        lock = self._locks.setdefault(tab_id, asyncio.Lock())
+        async with lock:
+            session = self._get_session(tab_id, expected_session_id=expected_session_id)
+            session.last_activity = time.time()
+
+        sentinel = object()
+        archive = self._bulk_zip_sync(session, files, chunk_size)
+        try:
+            while True:
+                chunk = await self._run_blocking(_next_or_sentinel, archive, sentinel)
+                if chunk is sentinel:
+                    break
+                session.last_activity = time.time()
+                yield chunk
+        except SFTPError:
+            raise
+        except Exception as exc:
+            mapped = _map_error(exc, "")
+            if mapped.code in {"CONNECTION_CLOSED", "TRANSFER_FAILED"}:
+                raise SFTPError(
+                    "DOWNLOAD_INTERRUPTED",
+                    "Download interrupted. Reconnect and try again.",
+                ) from exc
+            raise mapped from exc
+        finally:
+            async with lock:
+                session.last_activity = time.time()
 
     async def _locked(self, tab_id: str, work, expected_session_id: str | None = None):
         lock = self._locks.setdefault(tab_id, asyncio.Lock())
@@ -643,6 +710,103 @@ class SFTPManager:
         except Exception as exc:
             raise _map_error(exc, resolved) from exc
 
+    def _prepare_bulk_download_sync(
+        self, session: SFTPSession, paths: list[str]
+    ) -> dict[str, Any]:
+        if not paths:
+            raise SFTPError("INVALID_REQUEST", "No paths selected for download.")
+        files: list[tuple[str, str]] = []
+        seen: set[str] = set()
+        for raw_path in paths:
+            resolved = _resolve_remote_path(session.cwd, raw_path, session.home)
+            _ensure_within_home(session.home, resolved)
+            try:
+                attr = session.client.stat(resolved)
+            except Exception as exc:
+                raise _map_error(exc, resolved) from exc
+            if stat.S_ISDIR(attr.st_mode or 0):
+                for file_path in self._iter_dir_files_sync(session, resolved):
+                    arcname = _zip_arcname(session.home, file_path)
+                    if arcname not in seen:
+                        seen.add(arcname)
+                        files.append((file_path, arcname))
+            else:
+                arcname = _zip_arcname(session.home, resolved)
+                if arcname not in seen:
+                    seen.add(arcname)
+                    files.append((resolved, arcname))
+        files.sort(key=lambda item: item[1])
+        return {"ok": True, "files": files}
+
+    def _iter_dir_files_sync(self, session: SFTPSession, directory: str) -> list[str]:
+        """Return every file under ``directory``, walking subdirectories.
+
+        Symlinked directories are followed like ``_list_directory_sync`` but
+        guarded against cycles; broken symlinks are skipped.
+        """
+        files: list[str] = []
+        visited: set[str] = set()
+        stack = [directory]
+        while stack:
+            current = stack.pop()
+            if current in visited:
+                continue
+            visited.add(current)
+            try:
+                attrs = session.client.listdir_attr(current)
+            except Exception as exc:
+                raise _map_error(exc, current) from exc
+            for attr in attrs:
+                entry_path = posixpath.join(current, attr.filename)
+                mode = attr.st_mode or 0
+                if stat.S_ISDIR(mode):
+                    stack.append(entry_path)
+                    continue
+                if stat.S_ISLNK(mode):
+                    try:
+                        target_mode = session.client.stat(entry_path).st_mode or 0
+                    except Exception:
+                        continue  # broken symlink
+                    if stat.S_ISDIR(target_mode):
+                        stack.append(entry_path)
+                    else:
+                        files.append(entry_path)
+                    continue
+                if stat.S_ISREG(mode) or mode == 0:
+                    files.append(entry_path)
+        files.sort()
+        return files
+
+    def _bulk_zip_sync(
+        self,
+        session: SFTPSession,
+        files: list[tuple[str, str]],
+        chunk_size: int,
+    ) -> Iterator[bytes]:
+        """Build the zip archive entry-by-entry, yielding bytes as it grows."""
+        buffer = io.BytesIO()
+        flushed = 0
+        pending = bytearray()
+        with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+            for file_path, arcname in files:
+                try:
+                    with session.client.open(file_path, "rb") as remote_file:
+                        data = remote_file.read()
+                except Exception as exc:
+                    raise _map_error(exc, file_path) from exc
+                archive.writestr(arcname, data, compress_type=zipfile.ZIP_DEFLATED)
+                flushed, new_bytes = _drain_zip_bytes(buffer, flushed)
+                if new_bytes:
+                    pending += new_bytes
+                    if len(pending) >= chunk_size:
+                        yield bytes(pending)
+                        pending.clear()
+        flushed, new_bytes = _drain_zip_bytes(buffer, flushed)
+        if new_bytes:
+            pending += new_bytes
+        if pending:
+            yield bytes(pending)
+
     def _delete_sync(self, session: SFTPSession, path: str) -> dict[str, Any]:
         resolved = _resolve_remote_path(session.cwd, path, session.home)
         is_directory = False
@@ -761,6 +925,51 @@ def _resolve_remote_path(cwd: str, path: str, home: str | None = None) -> str:
         return posixpath.normpath(raw)
     base = cwd if cwd and cwd != "." else "."
     return posixpath.normpath(posixpath.join(base, raw))
+
+
+def _ensure_within_home(home: str | None, resolved: str) -> None:
+    """Reject a resolved path that escapes the user's remote home directory."""
+    home_dir = posixpath.normpath(home or ".")
+    if home_dir == ".":
+        # Home is unknown (cwd detection failed); confinement cannot be enforced.
+        return
+    norm = posixpath.normpath(resolved)
+    prefix = home_dir.rstrip("/") + "/"
+    if norm == home_dir or norm.startswith(prefix):
+        return
+    raise SFTPError(
+        "PERMISSION_DENIED",
+        f"Path escapes the remote home directory: {resolved}",
+    )
+
+
+def _zip_arcname(home: str | None, resolved: str) -> str:
+    """Return the zip entry name for a resolved path, relative to home."""
+    norm = posixpath.normpath(resolved)
+    home_dir = posixpath.normpath(home or ".")
+    if home_dir != ".":
+        prefix = home_dir.rstrip("/") + "/"
+        if norm == home_dir:
+            return posixpath.basename(home_dir.rstrip("/")) or "home"
+        if norm.startswith(prefix):
+            return norm[len(prefix) :]
+    return norm.lstrip("/")
+
+
+def _drain_zip_bytes(buffer: io.BytesIO, flushed: int) -> tuple[int, bytes]:
+    """Return ``(new_total, bytes_written_since_flushed)`` for a growing zip buffer."""
+    view = memoryview(buffer.getbuffer())
+    total = len(view)
+    new_bytes = view[flushed:total].tobytes()
+    del view
+    return total, new_bytes
+
+
+def _next_or_sentinel(iterator: Iterator[bytes], sentinel: object) -> bytes:
+    try:
+        return next(iterator)
+    except StopIteration:
+        return sentinel  # type: ignore[return-value]
 
 
 def _read_remote_text(

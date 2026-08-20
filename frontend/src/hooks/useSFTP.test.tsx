@@ -395,6 +395,65 @@ describe('useSFTP', () => {
     anchorClick.mockRestore()
   })
 
+  it('downloads multiple files through the bulk zip endpoint', async () => {
+    const socket = createMockSocket()
+    const blob = new Blob(['zip-bytes'], { type: 'application/zip' })
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      blob: async () => blob,
+      headers: new Headers({ 'Content-Disposition': 'attachment; filename="logs.zip"' }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const createObjectURL = vi.fn(() => 'blob:mock-url')
+    const revokeObjectURL = vi.fn()
+    Object.defineProperty(URL, 'createObjectURL', { value: createObjectURL, writable: true })
+    Object.defineProperty(URL, 'revokeObjectURL', { value: revokeObjectURL, writable: true })
+    const anchorClick = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    const { result } = renderHook(() => useSFTP(tabId, 'terminal-tab', socket as unknown as Socket))
+
+    await act(async () => {
+      await result.current.bulkDownload([
+        { name: 'a.log', path: '/var/log/a.log', type: 'file', size: 1, mtime: 1 },
+        { name: 'b.log', path: '/var/log/b.log', type: 'file', size: 1, mtime: 1 },
+      ])
+    })
+
+    expect(fetchMock).toHaveBeenCalledWith('/sftp/bulk-download', expect.objectContaining({
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        session_id: 'test-session',
+        tab_id: tabId,
+        paths: ['/var/log/a.log', '/var/log/b.log'],
+      }),
+    }))
+    expect(createObjectURL).toHaveBeenCalledWith(blob)
+    expect(anchorClick).toHaveBeenCalledOnce()
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:mock-url')
+    anchorClick.mockRestore()
+    vi.unstubAllGlobals()
+  })
+
+  it('surfaces bulk download failures through the store error', async () => {
+    const socket = createMockSocket()
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 500,
+      json: async () => ({ message: 'Failed to create archive' }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const { result } = renderHook(() => useSFTP(tabId, 'terminal-tab', socket as unknown as Socket))
+
+    await act(async () => {
+      await result.current.bulkDownload([
+        { name: 'a.log', path: '/var/log/a.log', type: 'file', size: 1, mtime: 1 },
+      ])
+    })
+
+    expect(useSFTPStore.getState().tabs[tabId].error).toBe('Failed to create archive')
+    vi.unstubAllGlobals()
+  })
+
   it('shows detailed delete errors without reloading the directory', () => {
     const socket = createMockSocket()
     renderHook(() => useSFTP(tabId, 'terminal-tab', socket as unknown as Socket))

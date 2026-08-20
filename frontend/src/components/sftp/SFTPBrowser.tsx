@@ -466,6 +466,7 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
   const [moreActionsOpen, setMoreActionsOpen] = useState(false)
   const [sortRules, setSortRules] = useState<SortRule[]>([])
   const [selectionAnchorPath, setSelectionAnchorPath] = useState<string | null>(null)
+  const [bulkZipBusy, setBulkZipBusy] = useState<number | null>(null)
   const {
     path,
     username,
@@ -482,6 +483,7 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
     uploadFiles,
     retryUpload,
     download,
+    bulkDownload,
     remove,
     rename,
     mkdir,
@@ -494,7 +496,7 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
     clearNotice,
     parentPath,
   } = useSFTP(tabId, sourceTabId, socket)
-  const { toggleSelected, setSelected, clearSelected, removeTransfer } = useSFTPStore()
+  const { toggleSelected, setSelected, clearSelected, removeTransfer, setError } = useSFTPStore()
   const statusNotice = error ? { tone: 'error' as const, message: error } : notice
   const clearFileSelection = useCallback(() => {
     clearSelected(tabId)
@@ -714,6 +716,11 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
     if (entry.type === 'directory') list(entry.path)
     else void download(entry)
   }, [download, list])
+
+  const handleBulkDownload = useCallback((entries: SFTPEntry[]) => {
+    setBulkZipBusy(entries.length)
+    void bulkDownload(entries).finally(() => setBulkZipBusy(null))
+  }, [bulkDownload])
 
   const openPermissions = useCallback((entries: SFTPEntry[]) => {
     const entry = entries[0]
@@ -1057,7 +1064,18 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
         onDrop={event => {
           event.preventDefault()
           clearDropFeedback()
-          void uploadFiles(event.dataTransfer.files)
+          const files = event.dataTransfer?.files
+          // Enterprise browser extensions (DLP, security tools such as Menlo
+          // and ForcePoint) can intercept drag-drop and strip the DataTransfer
+          // before our handler sees it. Detect that and tell the user how to
+          // upload anyway instead of silently swallowing the event.
+          if (!files
+            || files.length === 0
+            || Array.from(files).every(f => !f || typeof f.name !== 'string')) {
+            setError(tabId, 'Drag-drop is blocked by a browser extension or security policy. Use the upload button to select files.')
+            return
+          }
+          void uploadFiles(files)
         }}
         className={clsx('relative min-h-0 flex-1 select-none overflow-y-auto outline-none focus-visible:ring-2 focus-visible:ring-brand-500', {
           'pointer-events-none opacity-50': disconnected,
@@ -1209,6 +1227,25 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
           </m.div>
         )}
         </AnimatePresence>
+
+        <AnimatePresence initial={false}>
+        {bulkZipBusy !== null && (
+          <m.div
+            key="bulk-zip"
+            {...fade}
+            transition={exitTransition}
+            className="absolute inset-0 z-30 flex flex-col items-center justify-center gap-3 bg-surface-950/70 backdrop-blur-[1px]"
+            role="status"
+            aria-live="polite"
+            onDragOver={event => { event.preventDefault(); event.stopPropagation() }}
+            onDragLeave={event => { event.preventDefault(); event.stopPropagation() }}
+            onDrop={event => { event.preventDefault(); event.stopPropagation() }}
+          >
+            <LoaderCircle className="h-6 w-6 animate-spin text-brand-400 motion-reduce:animate-none" />
+            <span className="text-xs text-slate-300">Zipping {bulkZipBusy} {bulkZipBusy === 1 ? 'file' : 'files'}…</span>
+          </m.div>
+        )}
+        </AnimatePresence>
       </div>
 
       <AnimatePresence initial={false}>
@@ -1236,9 +1273,9 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
               ] : []),
               { label: 'Permissions', icon: ShieldCheck, action: () => openPermissions(contextMenu.entries) },
               ...(files.length > 0 ? [{
-                label: files.length === 1 ? 'Download' : `Download ${files.length} files`,
+                label: files.length === 1 ? 'Download' : `Download ${files.length} as zip`,
                 icon: Download,
-                action: () => files.forEach(file => void download(file)),
+                action: () => handleBulkDownload(files),
               }] : []),
               {
                 label: isSingleEntry ? 'Delete' : `Delete ${contextMenu.entries.length} items`,

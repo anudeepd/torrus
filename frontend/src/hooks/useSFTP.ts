@@ -254,6 +254,17 @@ function triggerDownload(name: string, base64Data: string) {
   URL.revokeObjectURL(url)
 }
 
+function triggerBlobDownload(name: string, blob: Blob) {
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = name
+  document.body.appendChild(anchor)
+  anchor.click()
+  anchor.remove()
+  URL.revokeObjectURL(url)
+}
+
 export function useSFTP(tabId: string, sourceTabId: string | undefined, socket: Socket) {
   const [users, setUsers] = useState<SFTPUser[]>([])
   const [groups, setGroups] = useState<SFTPGroup[]>([])
@@ -618,7 +629,14 @@ export function useSFTP(tabId: string, sourceTabId: string | undefined, socket: 
 
   const uploadFiles = useCallback(async (files: FileList | File[]) => {
     const currentPath = useSFTPStore.getState().tabs[tabId]?.path ?? '.'
-    const pendingIds = Array.from(files).map(file => {
+    // Defensive: enterprise browser extensions (Menlo, ForcePoint) and other
+    // content scripts can corrupt a dropped FileList with null or partially-
+    // formed entries. Filter them out instead of crashing on `file.name`.
+    const validFiles = Array.from(files).filter((f): f is File =>
+      f != null && typeof f.name === 'string'
+    )
+    if (validFiles.length === 0) return
+    const pendingIds = validFiles.map(file => {
       const transferId = `${tabId}-${file.name}-${Date.now()}`
       addTransfer({
         id: transferId,
@@ -666,6 +684,30 @@ export function useSFTP(tabId: string, sourceTabId: string | undefined, socket: 
     socket.emit('sftp:download', { session_id: sessionId, tab_id: tabId, path: entry.path })
   }, [socket, sessionId, tabId])
 
+  const bulkDownload = useCallback(async (entries: SFTPEntry[]) => {
+    try {
+      const response = await fetch('/sftp/bulk-download', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          session_id: sessionId,
+          tab_id: tabId,
+          paths: entries.map(entry => entry.path),
+        }),
+      })
+      if (!response.ok) {
+        const body = await response.json().catch(() => null) as { message?: string } | null
+        throw new Error(body?.message ?? `Download failed (${response.status})`)
+      }
+      const blob = await response.blob()
+      const disposition = response.headers.get('Content-Disposition')
+      const filename = disposition?.match(/filename="?([^";]+)"?/i)?.[1]
+      triggerBlobDownload(filename ?? 'download.zip', blob)
+    } catch (error) {
+      setError(tabId, error instanceof Error ? error.message : 'Download failed')
+    }
+  }, [sessionId, tabId, setError])
+
   const remove = useCallback((paths: string[]) => {
     socket.emit('sftp:delete', { session_id: sessionId, tab_id: tabId, paths })
   }, [socket, sessionId, tabId])
@@ -697,6 +739,7 @@ export function useSFTP(tabId: string, sourceTabId: string | undefined, socket: 
     uploadFiles,
     retryUpload,
     download,
+    bulkDownload,
     remove,
     rename,
     mkdir,

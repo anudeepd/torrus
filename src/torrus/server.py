@@ -1416,6 +1416,71 @@ async def sftp_stream_download(request: Request):
     )
 
 
+@fastapi_app.post("/sftp/bulk-download", include_in_schema=False)
+async def sftp_stream_bulk_download(request: Request):
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(
+            status_code=400, content={"ok": False, "code": "invalid_request"}
+        )
+    session_id = body.get("session_id", "")
+    tab_id = body.get("tab_id", "")
+    paths = body.get("paths")
+    if (
+        not isinstance(session_id, str)
+        or not isinstance(tab_id, str)
+        or not _valid_id(session_id)
+        or not _valid_id(tab_id)
+        or not isinstance(paths, list)
+        or not paths
+        or any(not isinstance(path, str) or not path for path in paths)
+    ):
+        return JSONResponse(
+            status_code=400, content={"ok": False, "code": "invalid_request"}
+        )
+    owner = _http_owner(request)
+    if _ldap_enabled and not owner:
+        return JSONResponse(
+            status_code=401, content={"ok": False, "code": "auth_required"}
+        )
+    if _ldap_enabled and not await _sftp_session_owned(session_id, tab_id, owner):
+        return JSONResponse(
+            status_code=403, content={"ok": False, "code": "session_owner_mismatch"}
+        )
+
+    try:
+        prepared = await sftp_manager.prepare_bulk_download(
+            tab_id, paths, expected_session_id=session_id
+        )
+    except SFTPError as exc:
+        return JSONResponse(
+            status_code=404
+            if exc.code == "FILE_NOT_FOUND"
+            else 403
+            if exc.code == "PERMISSION_DENIED"
+            else 400,
+            content={"ok": False, "code": exc.code, "message": exc.message},
+        )
+
+    logger.info(
+        "SFTP bulk download: tab=%s files=%d owner=%s",
+        tab_id,
+        len(prepared["files"]),
+        owner or "-",
+    )
+    filename = quote(f"torrus-bulk-{time.strftime('%Y%m%d-%H%M%S', time.gmtime())}.zip")
+    return StreamingResponse(
+        sftp_manager.stream_bulk_zip(
+            tab_id, prepared["files"], expected_session_id=session_id
+        ),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{filename}",
+        },
+    )
+
+
 @fastapi_app.get("/{full_path:path}", include_in_schema=False)
 async def spa_fallback(full_path: str):
     if full_path.lower().startswith("socket.io"):
