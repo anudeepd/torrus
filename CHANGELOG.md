@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.43] - 2026-08-24
+
+### Fixed
+
+- Show the command-palette toolbar button only in the compact (mobile) layout so desktop no longer displays the duplicate icon.
+- Add regression coverage for the command palette button's compact-only visibility.
+- Rebuild bundled frontend assets for the release.
+
 ## [0.2.36] - 2026-08-13
 
 ### Fixed

@@ -408,15 +408,6 @@ export default function TabBar({ onAddTab, onCloseTab, onCloneTab, onOpenSftpTab
         </button>
       )}
       {!compactSidebar && <button
-        type="button"
-        onClick={onOpenCommandPalette}
-        title="Open command palette"
-        aria-label="Open command palette"
-        className="h-10 flex-shrink-0 w-10 flex items-center justify-center text-slate-500 hover:text-slate-300 hover:bg-surface-800 transition-colors border-l border-surface-800"
-      >
-        <Command className="w-3.5 h-3.5" />
-      </button>}
-      {!compactSidebar && <button
         onClick={onOpenSettings}
         title={`Settings (${modKey}+,)`}
         className="h-10 flex-shrink-0 w-10 flex items-center justify-center text-slate-500 hover:text-slate-300 hover:bg-surface-800 transition-colors border-l border-surface-800"

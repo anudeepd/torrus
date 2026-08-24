@@ -118,26 +118,29 @@ describe('TabBar', () => {
     render(<TabBar {...props} />)
     expect(screen.getByRole('button', { name: 'Admin console' })).toBeInTheDocument()
   })
-  it('provides command palette access in desktop layout', () => {
+  it('shows the command palette button only in compact layout', () => {
     const onOpenCommandPalette = vi.fn()
-    render(
-      <TabBar
-        onAddTab={() => {}}
-        onCloseTab={() => {}}
-        onCloneTab={() => {}}
-        onOpenSftpTab={() => {}}
-        onDuplicateTab={() => {}}
-        onCloseAllTabs={() => {}}
-        onOpenSettings={() => {}}
-        onOpenSplitPicker={() => {}}
-        onOpenBroadcastPicker={() => {}}
-        onExitSplit={() => {}}
-        onSetActiveTab={() => {}}
-        onOpenCommandPalette={onOpenCommandPalette}
-        inSplitMode={false}
-      />,
-    )
+    const props = {
+      onAddTab: () => {},
+      onCloseTab: () => {},
+      onCloneTab: () => {},
+      onOpenSftpTab: () => {},
+      onDuplicateTab: () => {},
+      onCloseAllTabs: () => {},
+      onOpenSettings: () => {},
+      onOpenSplitPicker: () => {},
+      onOpenBroadcastPicker: () => {},
+      onExitSplit: () => {},
+      onSetActiveTab: () => {},
+      onOpenCommandPalette,
+      inSplitMode: false,
+    }
 
+    const { unmount } = render(<TabBar {...props} />)
+    expect(screen.queryByRole('button', { name: 'Open command palette' })).not.toBeInTheDocument()
+
+    unmount()
+    render(<TabBar {...props} compactSidebar />)
     fireEvent.click(screen.getByRole('button', { name: 'Open command palette' }))
     expect(onOpenCommandPalette).toHaveBeenCalledOnce()
   })
