@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import errno
+import posixpath
 from types import SimpleNamespace
 
 import pytest
@@ -144,6 +145,12 @@ class FakeSFTP:
     def stat(self, path: str):
         return self.lstat(path)
 
+    def normalize(self, path: str) -> str:
+        """Server realpath. The base fake has no symlinks, so normpath only."""
+        if not path.startswith("/"):
+            path = f"{self.cwd.rstrip('/')}/{path}"
+        return posixpath.normpath(path)
+
     def remove(self, path: str) -> None:
         if not path.startswith("/"):
             path = f"{self.cwd.rstrip('/')}/{path}"
@@ -193,6 +200,9 @@ class FakeSSHManager:
     async def open_sftp_channel(self, _session_id: str, tab_id: str):
         self.opened_tab_id = tab_id
         return self.sftp
+
+    async def get_session_target(self, _session_id: str, tab_id: str):
+        return ("ssh.example.com", 22, "root")
 
 
 class QueueSSHManager:

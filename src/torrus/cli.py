@@ -82,20 +82,38 @@ def serve(
 
 def _print_audit_events(events) -> None:
     for event in events:
-        # JSON escaping keeps terminal control sequences inert while retaining
-        # an unambiguous representation of the raw input bytes.
-        raw = event["input_data"]
-        text = raw.decode("utf-8", errors="backslashreplace")
-        rendered = json.dumps(text, ensure_ascii=True)
         target = event["ssh_host"] or "unknown"
         if event["ssh_port"]:
             target = f"{target}:{event['ssh_port']}"
         if event["ssh_username"]:
             target = f"{event['ssh_username']}@{target}"
+        if "operation" in event:
+            detail = f" {event['detail']}" if event.get("detail") else ""
+            click.echo(
+                f"{event['occurred_at']} {event['ldap_username']} "
+                f"target={target} session={event['session_id']} tab={event['tab_id']} "
+                f"sftp {event['operation']} {event['path']} "
+                f"({event['size']} bytes){detail}"
+            )
+            continue
+        # JSON escaping keeps terminal control sequences inert while retaining
+        # an unambiguous representation of the raw input bytes.
+        raw = event["input_data"]
+        text = raw.decode("utf-8", errors="backslashreplace")
+        rendered = json.dumps(text, ensure_ascii=True)
         click.echo(
             f"{event['occurred_at']} {event['ldap_username']} "
             f"target={target} session={event['session_id']} tab={event['tab_id']} {rendered}"
         )
+
+
+def _merged_audit_events(username: str | None, since: str | None, limit: int) -> list:
+    from torrus.audit_store import list_sftp_events, list_terminal_input_events
+
+    events = list_terminal_input_events(username=username, since=since, limit=limit)
+    events += list_sftp_events(username=username, since=since, limit=limit)
+    events.sort(key=lambda event: event["occurred_at"], reverse=True)
+    return events[:limit]
 
 
 @main.group(invoke_without_command=True)
@@ -106,12 +124,10 @@ def _print_audit_events(events) -> None:
 def audit(ctx: click.Context, username: str | None, since: str | None, limit: int):
     """Read or purge raw terminal-input audit events."""
     if ctx.invoked_subcommand is None:
-        from torrus.audit_store import init_db, list_terminal_input_events
+        from torrus.audit_store import init_db
 
         init_db()
-        _print_audit_events(
-            list_terminal_input_events(username=username, since=since, limit=limit)
-        )
+        _print_audit_events(_merged_audit_events(username, since, limit))
 
 
 @audit.command("show")
@@ -119,12 +135,10 @@ def audit(ctx: click.Context, username: str | None, since: str | None, limit: in
 @click.option("--since", default=None, help="ISO date/time, for example 2026-06-21.")
 @click.option("--limit", default=100, show_default=True, type=click.IntRange(1, 10000))
 def audit_show(username: str | None, since: str | None, limit: int):
-    from torrus.audit_store import init_db, list_terminal_input_events
+    from torrus.audit_store import init_db
 
     init_db()
-    _print_audit_events(
-        list_terminal_input_events(username=username, since=since, limit=limit)
-    )
+    _print_audit_events(_merged_audit_events(username, since, limit))
 
 
 @audit.command("purge")

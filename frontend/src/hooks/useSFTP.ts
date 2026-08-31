@@ -262,7 +262,9 @@ function triggerBlobDownload(name: string, blob: Blob) {
   document.body.appendChild(anchor)
   anchor.click()
   anchor.remove()
-  URL.revokeObjectURL(url)
+  // Revoke after the browser has had a chance to start the download; revoking
+  // synchronously can abort the transfer before it begins.
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
 export function useSFTP(tabId: string, sourceTabId: string | undefined, socket: Socket) {
@@ -701,7 +703,7 @@ export function useSFTP(tabId: string, sourceTabId: string | undefined, socket: 
       }
       const blob = await response.blob()
       const disposition = response.headers.get('Content-Disposition')
-      const filename = disposition?.match(/filename="?([^";]+)"?/i)?.[1]
+      const filename = disposition?.match(/filename\*?=(?:UTF-8'')?"?([^";]+)"?/i)?.[1]
       triggerBlobDownload(filename ?? 'download.zip', blob)
     } catch (error) {
       setError(tabId, error instanceof Error ? error.message : 'Download failed')

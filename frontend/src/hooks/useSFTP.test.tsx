@@ -401,7 +401,7 @@ describe('useSFTP', () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       blob: async () => blob,
-      headers: new Headers({ 'Content-Disposition': 'attachment; filename="logs.zip"' }),
+      headers: new Headers({ 'Content-Disposition': "attachment; filename*=UTF-8''logs.zip" }),
     })
     vi.stubGlobal('fetch', fetchMock)
     const createObjectURL = vi.fn(() => 'blob:mock-url')
@@ -409,6 +409,7 @@ describe('useSFTP', () => {
     Object.defineProperty(URL, 'createObjectURL', { value: createObjectURL, writable: true })
     Object.defineProperty(URL, 'revokeObjectURL', { value: revokeObjectURL, writable: true })
     const anchorClick = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    const setTimeoutSpy = vi.spyOn(window, 'setTimeout')
     const { result } = renderHook(() => useSFTP(tabId, 'terminal-tab', socket as unknown as Socket))
 
     await act(async () => {
@@ -429,8 +430,14 @@ describe('useSFTP', () => {
     }))
     expect(createObjectURL).toHaveBeenCalledWith(blob)
     expect(anchorClick).toHaveBeenCalledOnce()
+    // Revocation is deferred so the browser can start the download first.
+    expect(revokeObjectURL).not.toHaveBeenCalled()
+    const revokeCall = setTimeoutSpy.mock.calls.find(call => call[1] === 1000)
+    expect(revokeCall).toBeDefined()
+    ;(revokeCall![0] as () => void)()
     expect(revokeObjectURL).toHaveBeenCalledWith('blob:mock-url')
     anchorClick.mockRestore()
+    setTimeoutSpy.mockRestore()
     vi.unstubAllGlobals()
   })
 

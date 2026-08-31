@@ -130,3 +130,38 @@ def test_strip_escape_removes_bracketed_paste_markers():
     from torrus.audit_store import strip_escape
 
     assert strip_escape("\x1b[200~echo one\x1b[201~") == "echo one"
+
+
+@pytest.mark.asyncio
+async def test_sftp_event_roundtrip_and_purge(monkeypatch, tmp_path):
+    monkeypatch.setenv("TORRUS_AUDIT_DB", str(tmp_path / "audit.db"))
+    from torrus import audit_store
+
+    audit_store.init_db()
+    await audit_store.record_sftp_event(
+        ldap_username="alice",
+        session_id="sess",
+        tab_id="tab",
+        operation="bulk_download",
+        path="/etc/passwd",
+        size=85,
+        detail="",
+        ssh_host="h",
+        ssh_port=22,
+        ssh_username="root",
+    )
+    await audit_store.record_command_event(
+        ldap_username="alice", session_id="sess", tab_id="tab", command="ls"
+    )
+
+    events = audit_store.list_sftp_events(username="alice")
+    assert [(e["operation"], e["path"], e["size"], e["detail"]) for e in events] == [
+        ("bulk_download", "/etc/passwd", 85, "")
+    ]
+    assert events[0]["ssh_host"] == "h"
+    assert audit_store.list_sftp_events(input_query="passwd")
+    assert not audit_store.list_sftp_events(input_query="nomatch")
+    # Retention count/purge covers both terminal input and SFTP events.
+    assert audit_store.count_terminal_input_events(0) == 2
+    assert audit_store.purge_terminal_input_events(0) == 2
+    assert audit_store.list_sftp_events() == []

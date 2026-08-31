@@ -62,19 +62,24 @@ async def test_bulk_zip_directory_walks_nested_files():
 
 
 @pytest.mark.asyncio
-async def test_bulk_zip_rejects_traversal_outside_home():
-    from torrus.sftp_manager import SFTPError, SFTPManager
+async def test_bulk_zip_works_outside_home():
+    """Bulk download must work from any path, not just the remote home.
+
+    Bulk zip is a download operation like single-file download, which has no
+    home confinement; restricting it to home was inconsistent.
+    """
+    from torrus.sftp_manager import SFTPManager
 
     sftp = FakeSFTP()
     manager = SFTPManager()
     try:
         await manager.open_sftp("sess1", "tab1", FakeSSHManager(sftp))
-        with pytest.raises(SFTPError) as exc:
-            await manager.prepare_bulk_download("tab1", ["../etc/passwd"])
+        prepared = await manager.prepare_bulk_download("tab1", ["/etc/passwd"])
+        assert prepared["files"] == [("/etc/passwd", "etc/passwd", 85)]
+        archive = await _read_zip(manager, "tab1", prepared["files"])
+        assert b"app:x:1000" in archive.read("etc/passwd")
     finally:
         await manager.shutdown()
-
-    assert exc.value.code == "PERMISSION_DENIED"
 
 
 @pytest.mark.asyncio
@@ -91,6 +96,43 @@ async def test_bulk_zip_rejects_missing_path():
         await manager.shutdown()
 
     assert exc.value.code == "FILE_NOT_FOUND"
+
+
+@pytest.mark.asyncio
+async def test_bulk_zip_accepts_symlink_spelling_of_home():
+    """A path spelled through a symlink to the home directory must resolve to
+    the same canonical file as the direct spelling: confinement is gone, but
+    canonicalization still prevents duplicate zip entries for one file.
+    """
+    from torrus.sftp_manager import SFTPManager
+    from test_sftp_manager import FakeSFTP, FakeSSHManager
+
+    class SymlinkHomeSFTP(FakeSFTP):
+        def __init__(self):
+            super().__init__()
+            self.links = {"/home/app-link": "/home/app"}
+
+        def normalize(self, path: str) -> str:
+            for link, target in self.links.items():
+                if path == link:
+                    return target
+                if path.startswith(link + "/"):
+                    return target + path[len(link) :]
+            return super().normalize(path)
+
+    sftp = SymlinkHomeSFTP()
+    ssh_manager = FakeSSHManager(sftp)
+    manager = SFTPManager()
+    try:
+        await manager.open_sftp("sess1", "tab1", ssh_manager)
+        prepared = await manager.prepare_bulk_download(
+            "tab1", ["/home/app-link/readme.txt"]
+        )
+        assert prepared["files"] == [("/home/app/readme.txt", "readme.txt", 5)]
+        archive = await _read_zip(manager, "tab1", prepared["files"])
+        assert archive.read("readme.txt") == b"hello"
+    finally:
+        await manager.shutdown()
 
 
 @pytest.mark.asyncio
@@ -129,7 +171,7 @@ async def test_bulk_download_endpoint_returns_zip(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_bulk_download_endpoint_rejects_traversal(monkeypatch):
+async def test_bulk_download_endpoint_works_outside_home(monkeypatch):
     import torrus.server as server_module
     from fastapi.testclient import TestClient
     from torrus.sftp_manager import SFTPManager
@@ -142,13 +184,58 @@ async def test_bulk_download_endpoint_rejects_traversal(monkeypatch):
         client = TestClient(server_module.fastapi_app)
         response = client.post(
             "/sftp/bulk-download",
-            json={"session_id": "sess1", "tab_id": "tab1", "paths": ["../etc/passwd"]},
+            json={"session_id": "sess1", "tab_id": "tab1", "paths": ["/etc/passwd"]},
         )
     finally:
         await manager.shutdown()
 
-    assert response.status_code == 403
-    assert response.json()["code"] == "PERMISSION_DENIED"
+    assert response.status_code == 200
+    archive = zipfile.ZipFile(io.BytesIO(response.content))
+    assert b"app:x:1000" in archive.read("etc/passwd")
+
+
+@pytest.mark.asyncio
+async def test_bulk_download_endpoint_records_sftp_audit(monkeypatch, tmp_path):
+    import torrus.server as server_module
+    from fastapi.testclient import TestClient
+    from torrus import audit_store
+    from torrus.sftp_manager import SFTPManager
+
+    monkeypatch.setenv("TORRUS_AUDIT_DB", str(tmp_path / "audit.db"))
+    audit_store.init_db()
+
+    sftp = FakeSFTP()
+    sftp.fs["/home/app/readme.txt"] = b"hello"
+    manager = SFTPManager()
+    await manager.open_sftp("sess1", "tab1", FakeSSHManager(sftp))
+    monkeypatch.setattr(server_module, "sftp_manager", manager)
+    monkeypatch.setattr(server_module, "_ldap_enabled", True)
+    monkeypatch.setattr(server_module, "_http_owner", lambda _request: "alice")
+
+    async def owned(_session_id, _tab_id, owner):
+        return owner == "alice"
+
+    monkeypatch.setattr(server_module, "_sftp_session_owned", owned)
+    try:
+        client = TestClient(server_module.fastapi_app)
+        response = client.post(
+            "/sftp/bulk-download",
+            json={
+                "session_id": "sess1",
+                "tab_id": "tab1",
+                "paths": ["/home/app/readme.txt"],
+            },
+        )
+    finally:
+        await manager.shutdown()
+
+    assert response.status_code == 200
+    events = audit_store.list_sftp_events(username="alice")
+    assert [(e["operation"], e["path"], e["size"]) for e in events] == [
+        ("bulk_download", "/home/app/readme.txt", 5)
+    ]
+    assert events[0]["ssh_host"] == "ssh.example.com"
+    assert events[0]["ldap_username"] == "alice"
 
 
 @pytest.mark.asyncio

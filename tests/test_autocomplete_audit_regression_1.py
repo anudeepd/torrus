@@ -187,3 +187,121 @@ async def test_late_output_after_enter_does_not_overwrite_audited_command():
     finally:
         server_module._input_buffers.pop(key, None)
         buffer.close()
+
+
+@pytest.mark.asyncio
+async def test_redraw_completion_with_cr_prefix_is_captured():
+    """A readline ``\\r`` redraw of the full completed line must contribute
+    only the completion suffix, not the pre-tab text (which is already in the
+    spool) and not a shell prompt.
+
+    Regression: admin audit recorded ``cd /etc/ho`` instead of
+    ``cd /etc/host`` because observe_output() discarded any chunk containing
+    ``\\r``/``\\n``; bash wraps unique-completion redraws in ``\\r``.
+    """
+    import torrus.server as server_module
+
+    key = ("sid", "session", "tab")
+    buffer = server_module._CommandInputBuffer()
+    server_module._input_buffers[key] = buffer
+    try:
+        assert buffer.extract(b"cd /etc/ho") == []
+        assert buffer.extract(b"\t") == []
+        await server_module._record_ssh_output_audit(
+            "session", "tab", b"\rcd /etc/host"
+        )
+        assert buffer.extract(b"\r") == ["cd /etc/host"]
+    finally:
+        server_module._input_buffers.pop(key, None)
+        buffer.close()
+
+
+@pytest.mark.asyncio
+async def test_readline_redraw_with_prompt_keeps_only_completion_suffix():
+    """Ambiguous-completion redraw (``\\r\\n`` listing + prompt + line) must
+    not duplicate pre-tab text: only the non-prompt divergence is appended.
+    """
+    import torrus.server as server_module
+
+    key = ("sid", "session", "tab")
+    buffer = server_module._CommandInputBuffer()
+    server_module._input_buffers[key] = buffer
+    try:
+        assert buffer.extract(b"cat re") == []
+        assert buffer.extract(b"\t") == []
+        await server_module._record_ssh_output_audit(
+            "session",
+            "tab",
+            b"\r\nreadme.txt  requirements.txt\r\n$ cat re",
+        )
+        # Listing + prompt redraw added nothing; user's own disambiguation
+        # typing must produce the final audited command.
+        assert buffer.extract(b"adme.txt\r") == ["cat readme.txt"]
+    finally:
+        server_module._input_buffers.pop(key, None)
+        buffer.close()
+
+
+@pytest.mark.asyncio
+async def test_full_line_completion_echo_without_cr_prefix_is_captured():
+    """Some shells echo the entire completed line without a ``\\r`` wrapper.
+    A chunk that starts with the pending pre-tab input is a redraw and must
+    contribute only the new suffix.
+    """
+    import torrus.server as server_module
+
+    key = ("sid", "session", "tab")
+    buffer = server_module._CommandInputBuffer()
+    server_module._input_buffers[key] = buffer
+    try:
+        assert buffer.extract(b"cd /etc/ho") == []
+        assert buffer.extract(b"\t") == []
+        await server_module._record_ssh_output_audit("session", "tab", b"cd /etc/host")
+        assert buffer.extract(b"\r") == ["cd /etc/host"]
+    finally:
+        server_module._input_buffers.pop(key, None)
+        buffer.close()
+
+
+@pytest.mark.asyncio
+async def test_suffix_echo_split_across_output_chunks_is_not_lost():
+    """ISSUE-guard: a completion suffix echo split across two SSH output
+    reads (``me`` then ``/``) must accumulate at the cursor. Replacing the
+    zone on every bare chunk used to drop the first suffix and audit
+    ``cd /ho/user`` instead of ``cd /home/user``.
+    Found by user report on 2026-08-31.
+    """
+    import torrus.server as server_module
+
+    key = ("sid", "session", "tab")
+    buffer = server_module._CommandInputBuffer()
+    server_module._input_buffers[key] = buffer
+    try:
+        assert buffer.extract(b"cd /ho") == []
+        assert buffer.extract(b"\t") == []
+        await server_module._record_ssh_output_audit("session", "tab", b"me")
+        await server_module._record_ssh_output_audit("session", "tab", b"/")
+        assert buffer.extract(b"user\r") == ["cd /home/user"]
+    finally:
+        server_module._input_buffers.pop(key, None)
+        buffer.close()
+
+
+@pytest.mark.asyncio
+async def test_cumulative_zone_reecho_appends_only_extension():
+    """A bare chunk that re-echoes the already-echoed completion zone must
+    contribute only its extension, never duplicate the zone content."""
+    import torrus.server as server_module
+
+    key = ("sid", "session", "tab")
+    buffer = server_module._CommandInputBuffer()
+    server_module._input_buffers[key] = buffer
+    try:
+        assert buffer.extract(b"cd /ho") == []
+        assert buffer.extract(b"\t") == []
+        await server_module._record_ssh_output_audit("session", "tab", b"me")
+        await server_module._record_ssh_output_audit("session", "tab", b"me/")
+        assert buffer.extract(b"user\r") == ["cd /home/user"]
+    finally:
+        server_module._input_buffers.pop(key, None)
+        buffer.close()

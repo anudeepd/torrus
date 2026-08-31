@@ -114,6 +114,34 @@ def init_db() -> None:
             "CREATE UNIQUE INDEX IF NOT EXISTS admin_actions_idempotency "
             "ON admin_actions (actor, action, idempotency_key)"
         )
+        db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS sftp_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                occurred_at TEXT NOT NULL,
+                ldap_username TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                tab_id TEXT NOT NULL,
+                ssh_host TEXT,
+                ssh_port INTEGER,
+                ssh_username TEXT,
+                operation TEXT NOT NULL,
+                path TEXT NOT NULL,
+                size INTEGER NOT NULL DEFAULT 0,
+                detail TEXT NOT NULL DEFAULT ''
+            )
+            """
+        )
+        db.execute(
+            "CREATE INDEX IF NOT EXISTS sftp_events_lookup "
+            "ON sftp_events (ldap_username, occurred_at)"
+        )
+        try:
+            db.execute(
+                "ALTER TABLE sftp_events ADD COLUMN detail TEXT NOT NULL DEFAULT ''"
+            )
+        except sqlite3.OperationalError:
+            pass
         # Existing early audit databases are upgraded in place.
         for column in (
             "ssh_host TEXT",
@@ -228,6 +256,43 @@ async def record_sensitive_event(
         )
 
 
+async def record_sftp_event(
+    *,
+    ldap_username: str,
+    session_id: str,
+    tab_id: str,
+    operation: str,
+    path: str,
+    size: int,
+    detail: str = "",
+    ssh_host: str | None = None,
+    ssh_port: int | None = None,
+    ssh_username: str | None = None,
+) -> None:
+    """Store one SFTP file transfer or mutation event for audit."""
+    occurred_at = datetime.now(timezone.utc).isoformat()
+    with _connect() as db:
+        db.execute(
+            "INSERT INTO sftp_events "
+            "(occurred_at, ldap_username, session_id, tab_id, ssh_host, ssh_port, "
+            "ssh_username, operation, path, size, detail) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                occurred_at,
+                ldap_username,
+                session_id,
+                tab_id,
+                ssh_host,
+                ssh_port,
+                ssh_username,
+                operation,
+                path,
+                max(0, int(size)),
+                detail,
+            ),
+        )
+
+
 def _contains_pattern(value: str) -> str:
     escaped = value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
     return f"%{escaped}%"
@@ -257,6 +322,36 @@ def list_terminal_input_events(
         rows = db.execute(
             "SELECT id, occurred_at, ldap_username, session_id, tab_id, ssh_host, ssh_port, ssh_username, input_data, event_kind "
             f"FROM terminal_input_events{where} ORDER BY id DESC LIMIT ?",
+            (*values, min(100, max(1, int(limit)))),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def list_sftp_events(
+    *,
+    username: str | None = None,
+    input_query: str | None = None,
+    since: str | None = None,
+    limit: int = 100,
+) -> list[dict]:
+    clauses: list[str] = []
+    values: list[object] = []
+    if username:
+        clauses.append("ldap_username LIKE ? COLLATE NOCASE ESCAPE '\\'")
+        values.append(_contains_pattern(username))
+    if input_query:
+        clauses.append("path LIKE ? COLLATE NOCASE ESCAPE '\\'")
+        values.append(_contains_pattern(input_query))
+    if since:
+        clauses.append("occurred_at >= ?")
+        values.append(since)
+    where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+    with _connect() as db:
+        db.row_factory = sqlite3.Row
+        rows = db.execute(
+            "SELECT id, occurred_at, ldap_username, session_id, tab_id, ssh_host, "
+            "ssh_port, ssh_username, operation, path, size, detail "
+            f"FROM sftp_events{where} ORDER BY id DESC LIMIT ?",
             (*values, min(100, max(1, int(limit)))),
         ).fetchall()
     return [dict(row) for row in rows]
@@ -363,8 +458,11 @@ def count_terminal_input_events(older_than_days: int) -> int:
     with _connect() as db:
         return int(
             db.execute(
-                "SELECT COUNT(*) FROM terminal_input_events WHERE occurred_at < ?",
-                (cutoff,),
+                "SELECT ("
+                "SELECT COUNT(*) FROM terminal_input_events WHERE occurred_at < ?"
+                ") + ("
+                "SELECT COUNT(*) FROM sftp_events WHERE occurred_at < ?)",
+                (cutoff, cutoff),
             ).fetchone()[0]
         )
 
@@ -372,7 +470,8 @@ def count_terminal_input_events(older_than_days: int) -> int:
 def purge_terminal_input_events(older_than_days: int) -> int:
     cutoff = (datetime.now(timezone.utc) - timedelta(days=older_than_days)).isoformat()
     with _connect() as db:
-        cursor = db.execute(
-            "DELETE FROM terminal_input_events WHERE occurred_at < ?", (cutoff,)
-        )
-        return cursor.rowcount
+        total = 0
+        for table in ("terminal_input_events", "sftp_events"):
+            cursor = db.execute(f"DELETE FROM {table} WHERE occurred_at < ?", (cutoff,))
+            total += cursor.rowcount
+        return total

@@ -166,3 +166,139 @@ async def test_activity_username_filter_is_case_insensitive(monkeypatch, tmp_pat
 
     assert len(audit_store.list_terminal_input_events(username="alice")) == 1
     assert len(audit_store.list_terminal_input_events(username="ALICE")) == 1
+
+
+@pytest.mark.asyncio
+async def test_sftp_inline_download_records_audit(mock_sio, monkeypatch):
+    """sftp:download must persist one audit row with path and size."""
+    import torrus.server as server_module
+
+    async def fake_owner(_sid):
+        return "alice"
+
+    async def fake_download(tab_id, path, max_bytes=None):
+        return {
+            "ok": True,
+            "path": "/home/app/readme.txt",
+            "name": "readme.txt",
+            "size": 5,
+            "data": "aGVsbG8=",
+        }
+
+    async def fake_target(_tab_id):
+        return ("ssh.example.com", 22, "root")
+
+    monkeypatch.setattr(server_module, "_ldap_enabled", True)
+    monkeypatch.setattr(server_module, "_owner_for_sid", fake_owner)
+    monkeypatch.setattr(server_module, "_require_auth", AsyncMock(return_value=True))
+    monkeypatch.setattr(
+        server_module,
+        "_require_sftp_session_owner",
+        AsyncMock(return_value=True),
+    )
+    monkeypatch.setattr(server_module.sftp_manager, "download_file", fake_download)
+    monkeypatch.setattr(server_module.sftp_manager, "session_target", fake_target)
+    with patch.object(
+        server_module.audit_store, "record_sftp_event", AsyncMock()
+    ) as record:
+        await server_module.on_sftp_download(
+            "sid", {"session_id": "s", "tab_id": "t", "path": "readme.txt"}
+        )
+
+    assert record.await_count == 1
+    kwargs = record.await_args.kwargs
+    assert kwargs["ldap_username"] == "alice"
+    assert kwargs["operation"] == "download"
+    assert kwargs["path"] == "/home/app/readme.txt"
+
+
+@pytest.mark.asyncio
+async def test_sftp_inline_upload_records_audit(mock_sio, monkeypatch):
+    """sftp:upload must persist one audit row with path and size."""
+    import torrus.server as server_module
+
+    async def fake_owner(_sid):
+        return "alice"
+
+    async def fake_upload(tab_id, path, data):
+        return {"ok": True, "path": "/home/app/notes.txt", "size": 5}
+
+    async def fake_target(_tab_id):
+        return ("ssh.example.com", 22, "root")
+
+    monkeypatch.setattr(server_module, "_ldap_enabled", True)
+    monkeypatch.setattr(server_module, "_owner_for_sid", fake_owner)
+    monkeypatch.setattr(server_module, "_require_auth", AsyncMock(return_value=True))
+    monkeypatch.setattr(
+        server_module,
+        "_require_sftp_session_owner",
+        AsyncMock(return_value=True),
+    )
+    monkeypatch.setattr(server_module.sftp_manager, "upload_file", fake_upload)
+    monkeypatch.setattr(server_module.sftp_manager, "session_target", fake_target)
+    with patch.object(
+        server_module.audit_store, "record_sftp_event", AsyncMock()
+    ) as record:
+        await server_module.on_sftp_upload(
+            "sid",
+            {
+                "session_id": "s",
+                "tab_id": "t",
+                "path": "notes.txt",
+                "data": "aGVsbG8=",
+            },
+        )
+
+    assert record.await_count == 1
+    kwargs = record.await_args.kwargs
+    assert kwargs["operation"] == "upload"
+    assert kwargs["path"] == "/home/app/notes.txt"
+    assert kwargs["size"] == 5
+
+
+@pytest.mark.asyncio
+async def test_sftp_rename_records_audit_with_target(mock_sio, monkeypatch):
+    """sftp:rename must persist old path with the new path as detail."""
+    import torrus.server as server_module
+
+    async def fake_owner(_sid):
+        return "alice"
+
+    async def fake_rename(tab_id, old_path, new_path):
+        return {
+            "ok": True,
+            "old_path": "/home/app/a.txt",
+            "new_path": "/home/app/b.txt",
+        }
+
+    async def fake_target(_tab_id):
+        return ("ssh.example.com", 22, "root")
+
+    monkeypatch.setattr(server_module, "_ldap_enabled", True)
+    monkeypatch.setattr(server_module, "_owner_for_sid", fake_owner)
+    monkeypatch.setattr(server_module, "_require_auth", AsyncMock(return_value=True))
+    monkeypatch.setattr(
+        server_module,
+        "_require_sftp_session_owner",
+        AsyncMock(return_value=True),
+    )
+    monkeypatch.setattr(server_module.sftp_manager, "rename", fake_rename)
+    monkeypatch.setattr(server_module.sftp_manager, "session_target", fake_target)
+    with patch.object(
+        server_module.audit_store, "record_sftp_event", AsyncMock()
+    ) as record:
+        await server_module.on_sftp_rename(
+            "sid",
+            {
+                "session_id": "s",
+                "tab_id": "t",
+                "old_path": "a.txt",
+                "new_path": "b.txt",
+            },
+        )
+
+    assert record.await_count == 1
+    kwargs = record.await_args.kwargs
+    assert kwargs["operation"] == "rename"
+    assert kwargs["path"] == "/home/app/a.txt"
+    assert kwargs["detail"] == "-> /home/app/b.txt"

@@ -84,6 +84,17 @@ match the sensitive-input detector; restrict access to the audit database.
 The Admin Console's **Submitted input** view displays completed command events
 to authorized admins; sensitive events show only their redaction marker.
 
+### SFTP audit
+LDAP deployments also record SFTP file operations: every download (inline,
+streaming, or a bulk zip archive — one event per archived file) plus uploads,
+deletes, renames, mkdirs, chmods, and chowns. Each event stores the resolved
+remote path, the size for transfers, and op-specific detail (rename target,
+permission mode, owner/group ids). Downloads are recorded when initiated;
+uploads when completed. Events appear in `torrus audit show` and in the
+Admin Console's activity table (kind `sftp_<operation>`), and they are
+covered by the same retention purge as terminal input.
+
+
 ## Development
 
 Requires [uv](https://github.com/astral-sh/uv).

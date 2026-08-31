@@ -236,17 +236,68 @@ class _CommandInputBuffer:
         filename match list) overwrites the prior completion region instead
         of appending to it, so the audited command reflects the final state
         the user saw and submits.
+
+        Three echo shapes arrive:
+        * bare suffix chunks (``me``, ``me/``) — a bare terminal write can
+          only append at the cursor, so each chunk appends to the completion
+          zone; a chunk that re-echoes the zone (or the full pre-tab line)
+          collapses to just its extension so cumulative redraws never
+          duplicate (ISSUE-003 glob redraws, split suffix echo chunks);
+        * readline redraws (``\r`` + full line, or ``\r\n`` option listing +
+          ``\r`` + prompt + line) — keep only what the line adds beyond the
+          pre-tab input text, which also skips any shell prompt prefix and
+          drops option listings outright.
         """
         if not self.completion_pending or not incoming:
             return
+        self.spool.seek(0)
+        base = self.spool.read(self.completion_zone_start).decode(
+            "utf-8", errors="replace"
+        )
         if b"\r" in incoming or b"\n" in incoming:
+            # The final redraw line is the last one; earlier lines are option
+            # listings or scroll content and must not reach audit input.
+            last_line = incoming.split(b"\n")[-1].split(b"\r")[-1]
+            completion = audit_store.strip_escape(
+                last_line.decode("utf-8", errors="replace")
+            ).replace("\t", "")
+            if not completion:
+                return
+            position = completion.find(base)
+            if position < 0:
+                # Redraw with no relation to the pending input: ignore.
+                return
+            suffix = completion[position + len(base) :]
+            if not suffix:
+                return
+            self._truncate_completion_zone()
+            self._append(suffix.encode("utf-8", errors="replace"))
             return
         completion = audit_store.strip_escape(
             incoming.decode("utf-8", errors="replace")
         ).replace("\t", "")
         if not completion:
             return
-        self._truncate_completion_zone()
+        if base and completion.startswith(base):
+            # Full-line echo without a \r wrapper: keep only the addition.
+            suffix = completion[len(base) :]
+            if not suffix:
+                return
+            self._truncate_completion_zone()
+            self._append(suffix.encode("utf-8", errors="replace"))
+            return
+        self.spool.seek(self.completion_zone_start)
+        zone = self.spool.read(max(0, self.size - self.completion_zone_start)).decode(
+            "utf-8", errors="replace"
+        )
+        if zone and completion.startswith(zone):
+            # Cumulative re-echo of the zone: only the extension is new.
+            suffix = completion[len(zone) :]
+            if not suffix:
+                return
+            self._append(suffix.encode("utf-8", errors="replace"))
+            return
+        # Plain cursor-append chunk (possibly split across output reads).
         self._append(completion.encode("utf-8", errors="replace"))
 
     def _filtered_input(self, incoming: bytes) -> list[tuple[int, bool]]:
@@ -843,31 +894,59 @@ async def admin_activity(request: Request):
         since=request.query_params.get("since") or None,
         limit=limit,
     )
+    sftp_events = await asyncio.to_thread(
+        audit_store.list_sftp_events,
+        username=username,
+        input_query=input_query,
+        since=request.query_params.get("since") or None,
+        limit=limit,
+    )
+    items: list[dict] = [
+        {
+            "event_id": event["id"],
+            "occurred_at": event["occurred_at"],
+            "ldap_username": event["ldap_username"],
+            "session_id": event["session_id"],
+            "tab_id": event["tab_id"],
+            "ssh_host": event["ssh_host"],
+            "ssh_port": event["ssh_port"],
+            "ssh_username": event["ssh_username"],
+            "kind": event.get("event_kind", "terminal_input"),
+            "input": (
+                "Sensitive input redacted"
+                if event.get("event_kind") == "sensitive"
+                else _display_audit_input(event.get("input_data"))
+            ),
+            "bytes": (
+                0
+                if event.get("event_kind") == "sensitive"
+                else len(event["input_data"] or b"")
+            ),
+        }
+        for event in events
+    ]
+    items.extend(
+        {
+            "event_id": event["id"],
+            "occurred_at": event["occurred_at"],
+            "ldap_username": event["ldap_username"],
+            "session_id": event["session_id"],
+            "tab_id": event["tab_id"],
+            "ssh_host": event["ssh_host"],
+            "ssh_port": event["ssh_port"],
+            "ssh_username": event["ssh_username"],
+            "kind": f"sftp_{event['operation']}",
+            "input": (
+                f"{event['operation']} {event['path']}"
+                + (f" {event['detail']}" if event.get("detail") else "")
+            ),
+            "bytes": event["size"],
+        }
+        for event in sftp_events
+    )
+    items.sort(key=lambda item: item["occurred_at"], reverse=True)
     return {
-        "items": [
-            {
-                "event_id": event["id"],
-                "occurred_at": event["occurred_at"],
-                "ldap_username": event["ldap_username"],
-                "session_id": event["session_id"],
-                "tab_id": event["tab_id"],
-                "ssh_host": event["ssh_host"],
-                "ssh_port": event["ssh_port"],
-                "ssh_username": event["ssh_username"],
-                "kind": event.get("event_kind", "terminal_input"),
-                "input": (
-                    "Sensitive input redacted"
-                    if event.get("event_kind") == "sensitive"
-                    else _display_audit_input(event.get("input_data"))
-                ),
-                "bytes": (
-                    0
-                    if event.get("event_kind") == "sensitive"
-                    else len(event["input_data"] or b"")
-                ),
-            }
-            for event in events
-        ],
+        "items": items[:limit],
         "observed_at": time.time(),
     }
 
@@ -887,7 +966,6 @@ async def admin_retention(request: Request):
         "cutoff_days": days,
         "minimum_age_days": 7,
         "eligible_count": eligible,
-        "terminal_rows_only": True,
         "admin_events_retained": True,
         "observed_at": time.time(),
     }
@@ -1321,6 +1399,14 @@ async def sftp_stream_upload(request: Request):
             complete,
             expected_session_id=session_id,
         )
+        if result.get("complete"):
+            await _record_sftp_events_audit(
+                owner=owner,
+                session_id=session_id,
+                tab_id=tab_id,
+                operation="upload",
+                entries=[(result["path"], result.get("offset", 0), "")],
+            )
         return JSONResponse(content=result)
     except SFTPError as exc:
         return JSONResponse(
@@ -1403,6 +1489,13 @@ async def sftp_stream_download(request: Request):
             content={"ok": False, "code": exc.code, "message": exc.message},
         )
 
+    await _record_sftp_events_audit(
+        owner=owner,
+        session_id=session_id,
+        tab_id=tab_id,
+        operation="download",
+        entries=[(download["path"], download["size"], "")],
+    )
     filename = download["name"] or Path(remote_path).name or "download"
     return StreamingResponse(
         sftp_manager.stream_download(
@@ -1463,6 +1556,13 @@ async def sftp_stream_bulk_download(request: Request):
             content={"ok": False, "code": exc.code, "message": exc.message},
         )
 
+    await _record_sftp_events_audit(
+        owner=owner,
+        session_id=session_id,
+        tab_id=tab_id,
+        operation="bulk_download",
+        entries=[(path, size, "") for path, _arcname, size in prepared["files"]],
+    )
     logger.info(
         "SFTP bulk download: tab=%s files=%d owner=%s",
         tab_id,
@@ -2244,6 +2344,37 @@ async def _emit_sftp_error(
     await sio.emit("sftp:error", payload, to=sid)
 
 
+async def _record_sftp_events_audit(
+    *,
+    owner: str | None,
+    session_id: str,
+    tab_id: str,
+    operation: str,
+    entries: list[tuple[str, int, str]],
+) -> None:
+    """Persist one SFTP audit row per affected file or directory."""
+    if not _ldap_enabled or not owner or not entries:
+        return
+    try:
+        target = await sftp_manager.session_target(tab_id)
+        ssh_host, ssh_port, ssh_username = target or (None, None, None)
+        for path, size, detail in entries:
+            await audit_store.record_sftp_event(
+                ldap_username=owner,
+                session_id=session_id,
+                tab_id=tab_id,
+                operation=operation,
+                path=path,
+                size=size,
+                detail=detail,
+                ssh_host=ssh_host,
+                ssh_port=ssh_port,
+                ssh_username=ssh_username,
+            )
+    except Exception:
+        logger.exception("Failed to record SFTP audit event")
+
+
 def _sftp_request_ids(data) -> tuple[str, str]:
     return data.get("session_id", ""), data.get("tab_id", "")
 
@@ -2388,6 +2519,7 @@ async def on_sftp_upload(sid, data):
         return
     if not await _require_sftp_session_owner(sid, session_id, tab_id, "upload"):
         return
+    owner = await _owner_for_sid(sid)
     try:
         raw = base64.b64decode(data.get("data", ""), validate=True)
         if len(raw) >= _SFTP_INLINE_TRANSFER_MAX:
@@ -2397,6 +2529,13 @@ async def on_sftp_upload(sid, data):
             )
         result = await sftp_manager.upload_file(tab_id, data.get("path", ""), raw)
         await sio.emit("sftp:upload:result", {"tab_id": tab_id, **result}, to=sid)
+        await _record_sftp_events_audit(
+            owner=owner,
+            session_id=session_id,
+            tab_id=tab_id,
+            operation="upload",
+            entries=[(result["path"], result.get("size", 0), "")],
+        )
     except SFTPError as exc:
         await _emit_sftp_error(sid, tab_id, exc, "upload")
     except Exception:
@@ -2419,11 +2558,19 @@ async def on_sftp_download(sid, data):
         return
     if not await _require_sftp_session_owner(sid, session_id, tab_id, "download"):
         return
+    owner = await _owner_for_sid(sid)
     try:
         result = await sftp_manager.download_file(
             tab_id, data.get("path", ""), max_bytes=_SFTP_INLINE_TRANSFER_MAX
         )
         await sio.emit("sftp:download:result", {"tab_id": tab_id, **result}, to=sid)
+        await _record_sftp_events_audit(
+            owner=owner,
+            session_id=session_id,
+            tab_id=tab_id,
+            operation="download",
+            entries=[(result["path"], result.get("size", 0), "")],
+        )
     except SFTPError as exc:
         await _emit_sftp_error(sid, tab_id, exc, "download")
 
@@ -2437,6 +2584,7 @@ async def on_sftp_delete(sid, data):
         return
     if not await _require_sftp_session_owner(sid, session_id, tab_id):
         return
+    owner = await _owner_for_sid(sid)
     paths = (
         data.get("paths")
         if isinstance(data.get("paths"), list)
@@ -2464,6 +2612,17 @@ async def on_sftp_delete(sid, data):
         },
         to=sid,
     )
+    await _record_sftp_events_audit(
+        owner=owner,
+        session_id=session_id,
+        tab_id=tab_id,
+        operation="delete",
+        entries=[
+            (item["path"], 0, "")
+            for item in results
+            if item.get("ok") and item.get("path")
+        ],
+    )
 
 
 @sio.on("sftp:rename")
@@ -2475,11 +2634,21 @@ async def on_sftp_rename(sid, data):
         return
     if not await _require_sftp_session_owner(sid, session_id, tab_id, "rename"):
         return
+    owner = await _owner_for_sid(sid)
     try:
         result = await sftp_manager.rename(
             tab_id, data.get("old_path", ""), data.get("new_path", "")
         )
         await sio.emit("sftp:rename:result", {"tab_id": tab_id, **result}, to=sid)
+        await _record_sftp_events_audit(
+            owner=owner,
+            session_id=session_id,
+            tab_id=tab_id,
+            operation="rename",
+            entries=[
+                (result.get("old_path", ""), 0, f"-> {result.get('new_path', '')}")
+            ],
+        )
     except SFTPError as exc:
         await _emit_sftp_error(sid, tab_id, exc, "rename")
 
@@ -2493,9 +2662,17 @@ async def on_sftp_mkdir(sid, data):
         return
     if not await _require_sftp_session_owner(sid, session_id, tab_id, "mkdir"):
         return
+    owner = await _owner_for_sid(sid)
     try:
         result = await sftp_manager.mkdir(tab_id, data.get("path", ""))
         await sio.emit("sftp:mkdir:result", {"tab_id": tab_id, **result}, to=sid)
+        await _record_sftp_events_audit(
+            owner=owner,
+            session_id=session_id,
+            tab_id=tab_id,
+            operation="mkdir",
+            entries=[(result["path"], 0, "")],
+        )
     except SFTPError as exc:
         await _emit_sftp_error(sid, tab_id, exc, "mkdir")
 
@@ -2509,6 +2686,7 @@ async def on_sftp_chmod(sid, data):
         return
     if not await _require_sftp_session_owner(sid, session_id, tab_id, "chmod"):
         return
+    owner = await _owner_for_sid(sid)
     mode = data.get("mode")
     if isinstance(mode, bool) or not isinstance(mode, int) or not 0 <= mode <= 0o7777:
         await sio.emit(
@@ -2532,6 +2710,13 @@ async def on_sftp_chmod(sid, data):
         )
         return
     await sio.emit("sftp:chmod:result", {"tab_id": tab_id, **result}, to=sid)
+    await _record_sftp_events_audit(
+        owner=owner,
+        session_id=session_id,
+        tab_id=tab_id,
+        operation="chmod",
+        entries=[(result["path"], 0, f"mode={mode:04o}")],
+    )
 
 
 @sio.on("sftp:chown")
@@ -2543,6 +2728,7 @@ async def on_sftp_chown(sid, data):
         return
     if not await _require_sftp_session_owner(sid, session_id, tab_id, "chown"):
         return
+    owner = await _owner_for_sid(sid)
     uid = data.get("uid")
     gid = data.get("gid")
     if (
@@ -2574,6 +2760,13 @@ async def on_sftp_chown(sid, data):
         )
         return
     await sio.emit("sftp:chown:result", {"tab_id": tab_id, **result}, to=sid)
+    await _record_sftp_events_audit(
+        owner=owner,
+        session_id=session_id,
+        tab_id=tab_id,
+        operation="chown",
+        entries=[(result["path"], 0, f"uid={uid} gid={gid}")],
+    )
 
 
 @sio.on("sftp:accounts")
