@@ -887,19 +887,41 @@ async def admin_activity(request: Request):
         limit = 100
     username = request.query_params.get("username") or None
     input_query = request.query_params.get("input") or None
-    events = await asyncio.to_thread(
-        audit_store.list_terminal_input_events,
-        username=username,
-        input_query=input_query,
-        since=request.query_params.get("since") or None,
-        limit=limit,
+    since = request.query_params.get("since") or None
+    until = request.query_params.get("until") or None
+    host = request.query_params.get("host") or None
+    kind = request.query_params.get("kind") or None
+    # A kind that names a terminal event filters terminal rows only; an sftp_*
+    # kind filters SFTP rows to that operation; "sftp" means every SFTP op.
+    terminal_kind = kind if kind in {"command", "sensitive", "terminal_input"} else None
+    sftp_operation = kind[len("sftp_") :] if kind and kind.startswith("sftp_") else None
+    events = (
+        await asyncio.to_thread(
+            audit_store.list_terminal_input_events,
+            username=username,
+            input_query=input_query,
+            since=since,
+            until=until,
+            host=host,
+            kind=terminal_kind,
+            limit=limit,
+        )
+        if kind is None or terminal_kind is not None
+        else []
     )
-    sftp_events = await asyncio.to_thread(
-        audit_store.list_sftp_events,
-        username=username,
-        input_query=input_query,
-        since=request.query_params.get("since") or None,
-        limit=limit,
+    sftp_events = (
+        await asyncio.to_thread(
+            audit_store.list_sftp_events,
+            username=username,
+            input_query=input_query,
+            since=since,
+            until=until,
+            host=host,
+            operation=sftp_operation,
+            limit=limit,
+        )
+        if kind is None or kind == "sftp" or sftp_operation is not None
+        else []
     )
     items: list[dict] = [
         {

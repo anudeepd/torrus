@@ -81,6 +81,74 @@ async def test_terminal_input_search_matches_partial_username_and_command(
         event["ldap_username"]
         for event in audit_store.list_terminal_input_events(input_query="TATUs")
     ] == ["alice"]
+    # Free-text search spans all columns, not only command text.
+    assert [
+        event["ldap_username"]
+        for event in audit_store.list_terminal_input_events(input_query="SESS-2")
+    ] == ["bob"]
+    assert (
+        audit_store.list_terminal_input_events(input_query="nonexistent-string") == []
+    )
+
+
+@pytest.mark.asyncio
+async def test_event_list_filters_by_host_until_kind_and_operation(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("TORRUS_AUDIT_DB", str(tmp_path / "audit.db"))
+    from torrus import audit_store
+
+    audit_store.init_db()
+    await audit_store.record_command_event(
+        ldap_username="alice",
+        session_id="sess-1",
+        tab_id="tab-1",
+        command="systemctl status torrus",
+        ssh_host="hivestage.example.com",
+        ssh_port=22,
+        ssh_username="deploy",
+    )
+    await audit_store.record_sensitive_event(
+        ldap_username="alice",
+        session_id="sess-1",
+        tab_id="tab-1",
+        ssh_host="hivestage.example.com",
+        ssh_port=22,
+        ssh_username="deploy",
+    )
+    await audit_store.record_sftp_event(
+        ldap_username="bob",
+        session_id="sess-2",
+        tab_id="tab-1",
+        operation="upload",
+        path="restore.sql",
+        size=1024,
+        ssh_host="db01.internal",
+        ssh_port=22,
+        ssh_username="root",
+    )
+
+    assert [
+        event["ssh_host"]
+        for event in audit_store.list_terminal_input_events(host="HIVESTAGE")
+    ] == ["hivestage.example.com", "hivestage.example.com"]
+    assert audit_store.list_terminal_input_events(host="db01.internal") == []
+    assert [
+        event["event_kind"]
+        for event in audit_store.list_terminal_input_events(kind="sensitive")
+    ] == ["sensitive"]
+    far_past = "2000-01-01T00:00:00+00:00"
+    far_future = "2999-01-01T00:00:00+00:00"
+    assert audit_store.list_terminal_input_events(until=far_past) == []
+    assert audit_store.list_sftp_events(until=far_past) == []
+    assert len(audit_store.list_terminal_input_events(until=far_future)) == 2
+    assert [
+        event["operation"] for event in audit_store.list_sftp_events(operation="upload")
+    ] == ["upload"]
+    assert audit_store.list_sftp_events(operation="download") == []
+    assert [
+        event["ldap_username"] for event in audit_store.list_sftp_events(host="db01")
+    ] == ["bob"]
 
 
 def test_sensitive_command_detection():

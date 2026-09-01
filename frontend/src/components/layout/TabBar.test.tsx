@@ -144,5 +144,43 @@ describe('TabBar', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Open command palette' }))
     expect(onOpenCommandPalette).toHaveBeenCalledOnce()
   })
+
+  it('reorders tabs when one is dragged onto another', () => {
+    const mkTab = (id: string, label: string) => ({
+      id, type: 'terminal' as const, host: null, port: null, username: null,
+      label, status: 'disconnected' as const, sessionKey: `session-1:${id}`,
+    })
+    useTerminalStore.setState({
+      tabs: [mkTab('tab-1', 'Production'), mkTab('tab-2', 'Staging'), mkTab('tab-3', 'Dev')],
+      activeTabId: 'tab-1',
+    })
+
+    render(
+      <TabBar
+        onAddTab={() => {}}
+        onCloseTab={() => {}}
+        onCloneTab={() => {}}
+        onOpenSftpTab={() => {}}
+        onDuplicateTab={() => {}}
+        onCloseAllTabs={() => {}}
+        onOpenSettings={() => {}}
+        onOpenSplitPicker={() => {}}
+        onOpenBroadcastPicker={() => {}}
+        onExitSplit={() => {}}
+        onSetActiveTab={() => {}}
+        inSplitMode={false}
+      />,
+    )
+
+    const production = screen.getByRole('tab', { name: /production/i }).parentElement!
+    const dev = screen.getByRole('tab', { name: /dev/i }).parentElement!
+    const dataTransfer = { effectAllowed: '', dropEffect: '', setData: vi.fn() } as unknown as DataTransfer
+    fireEvent.dragStart(production, { dataTransfer })
+    fireEvent.dragOver(dev, { dataTransfer })
+    fireEvent.drop(dev, { dataTransfer })
+    fireEvent.dragEnd(production, { dataTransfer })
+
+    expect(useTerminalStore.getState().tabs.map(t => t.label)).toEqual(['Staging', 'Dev', 'Production'])
+  })
 })
 

@@ -303,6 +303,9 @@ def list_terminal_input_events(
     username: str | None = None,
     input_query: str | None = None,
     since: str | None = None,
+    until: str | None = None,
+    host: str | None = None,
+    kind: str | None = None,
     limit: int = 100,
 ) -> list[dict]:
     clauses: list[str] = []
@@ -311,11 +314,28 @@ def list_terminal_input_events(
         clauses.append("ldap_username LIKE ? COLLATE NOCASE ESCAPE '\\'")
         values.append(_contains_pattern(username))
     if input_query:
-        clauses.append("CAST(input_data AS TEXT) LIKE ? COLLATE NOCASE ESCAPE '\\'")
-        values.append(_contains_pattern(input_query))
+        # Free-text search spans every readable column, not just command text.
+        clauses.append(
+            "(CAST(input_data AS TEXT) LIKE ? COLLATE NOCASE ESCAPE '\\'"
+            " OR ldap_username LIKE ? COLLATE NOCASE ESCAPE '\\'"
+            " OR ssh_host LIKE ? COLLATE NOCASE ESCAPE '\\'"
+            " OR ssh_username LIKE ? COLLATE NOCASE ESCAPE '\\'"
+            " OR session_id LIKE ? COLLATE NOCASE ESCAPE '\\'"
+            " OR tab_id LIKE ? COLLATE NOCASE ESCAPE '\\')"
+        )
+        values.extend([_contains_pattern(input_query)] * 6)
     if since:
         clauses.append("occurred_at >= ?")
         values.append(since)
+    if until:
+        clauses.append("occurred_at <= ?")
+        values.append(until)
+    if host:
+        clauses.append("ssh_host LIKE ? COLLATE NOCASE ESCAPE '\\'")
+        values.append(_contains_pattern(host))
+    if kind:
+        clauses.append("event_kind = ?")
+        values.append(kind)
     where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
     with _connect() as db:
         db.row_factory = sqlite3.Row
@@ -332,6 +352,9 @@ def list_sftp_events(
     username: str | None = None,
     input_query: str | None = None,
     since: str | None = None,
+    until: str | None = None,
+    host: str | None = None,
+    operation: str | None = None,
     limit: int = 100,
 ) -> list[dict]:
     clauses: list[str] = []
@@ -340,11 +363,29 @@ def list_sftp_events(
         clauses.append("ldap_username LIKE ? COLLATE NOCASE ESCAPE '\\'")
         values.append(_contains_pattern(username))
     if input_query:
-        clauses.append("path LIKE ? COLLATE NOCASE ESCAPE '\\'")
-        values.append(_contains_pattern(input_query))
+        clauses.append(
+            "(path LIKE ? COLLATE NOCASE ESCAPE '\\'"
+            " OR detail LIKE ? COLLATE NOCASE ESCAPE '\\'"
+            " OR operation LIKE ? COLLATE NOCASE ESCAPE '\\'"
+            " OR ldap_username LIKE ? COLLATE NOCASE ESCAPE '\\'"
+            " OR ssh_host LIKE ? COLLATE NOCASE ESCAPE '\\'"
+            " OR ssh_username LIKE ? COLLATE NOCASE ESCAPE '\\'"
+            " OR session_id LIKE ? COLLATE NOCASE ESCAPE '\\'"
+            " OR tab_id LIKE ? COLLATE NOCASE ESCAPE '\\')"
+        )
+        values.extend([_contains_pattern(input_query)] * 8)
     if since:
         clauses.append("occurred_at >= ?")
         values.append(since)
+    if until:
+        clauses.append("occurred_at <= ?")
+        values.append(until)
+    if host:
+        clauses.append("ssh_host LIKE ? COLLATE NOCASE ESCAPE '\\'")
+        values.append(_contains_pattern(host))
+    if operation:
+        clauses.append("operation = ?")
+        values.append(operation)
     where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
     with _connect() as db:
         db.row_factory = sqlite3.Row

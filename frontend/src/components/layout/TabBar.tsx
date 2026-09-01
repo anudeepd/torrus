@@ -152,7 +152,8 @@ function SaveSessionDialog({ state, onSave, onClose }: {
 }
 
 export default function TabBar({ onAddTab, onCloseTab, onCloneTab, onOpenSftpTab, onDuplicateTab, onCloseAllTabs, onOpenSettings, onOpenAdmin, onOpenSplitPicker, onOpenBroadcastPicker, onExitSplit, onSetActiveTab, inSplitMode, compactSidebar = false, sidebarOpen = false, onToggleSidebar, onOpenCommandPalette }: TabBarProps) {
-  const { tabs, activeTabId, renameTab } = useTerminalStore()
+  const { tabs, activeTabId, renameTab, moveTab } = useTerminalStore()
+  const [draggedTabId, setDraggedTabId] = useState<string | null>(null)
   const addServer = useSavedServerStore(s => s.addServer)
   const { ldapEnabled, isAdmin } = useServerConfigStore()
   const { enabled: broadcastEnabled } = useBroadcastStore()
@@ -288,10 +289,27 @@ export default function TabBar({ onAddTab, onCloseTab, onCloneTab, onOpenSftpTab
           {tabs.map(tab => (
             <m.div
               initial={{ opacity: 0, x: 14 }}
-              animate={{ opacity: 1, x: 0 }}
+              animate={{ opacity: draggedTabId === tab.id ? 0.5 : 1, x: 0 }}
               exit={{ opacity: 0, x: -14 }}
               transition={surfaceSpring}
               key={tab.id}
+              draggable
+              onDragStart={(e) => {
+                const event = e as unknown as React.DragEvent
+                setDraggedTabId(tab.id)
+                event.dataTransfer.effectAllowed = 'move'
+                event.dataTransfer.setData('text/plain', tab.id)
+              }}
+              onDragOver={(e) => {
+                e.preventDefault()
+                e.dataTransfer.dropEffect = 'move'
+              }}
+              onDrop={(e) => {
+                e.preventDefault()
+                if (draggedTabId && draggedTabId !== tab.id) moveTab(draggedTabId, tab.id)
+                setDraggedTabId(null)
+              }}
+              onDragEnd={() => setDraggedTabId(null)}
               onMouseDown={(e) => {
                 if (e.button === 2) e.preventDefault()
               }}

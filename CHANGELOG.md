@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.2.45] - 2026-09-01
+
+### Added
+
+- Group consecutive command lines from the same session into collapsible blocks in the Admin Console's Submitted input view; stored audit rows remain one row per line.
+- Add Type, Host, and Until filters to the Submitted input panel and activity API, with server-side kind routing across terminal and SFTP event tables and a live result count.
+- Broaden activity free-text search to every audited column (command text, path, detail, user, host, SSH user, session, tab) while sensitive rows stay redacted.
+- Add drag-to-reorder tabs (lagun parity), persisted with tab state and safe in split mode.
+- Replace the scrollable-table chrome with a quiet icon toggle across all admin tables.
+
+### Changed
+
+- Rebuild bundled frontend assets for the release.
+
 ## [0.2.43] - 2026-08-24
 
 ### Fixed

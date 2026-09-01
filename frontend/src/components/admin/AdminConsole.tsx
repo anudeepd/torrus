@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from 'react'
 import { io, type Socket } from 'socket.io-client'
-import { Activity, Check, ChevronLeft, CircleStop, RefreshCw, Shield, Terminal, UserRound, X } from 'lucide-react'
+import { Activity, Check, ChevronLeft, ChevronDown, ChevronUp, CircleStop, RefreshCw, Shield, Terminal, UserRound, X } from 'lucide-react'
 import AdminConfirmModal, { type AdminConfirmationRequest } from './AdminConfirmModal'
 import { uuid } from '@/utils/uuid'
 import * as m from 'motion/react-m'
@@ -52,8 +52,12 @@ type ActivityFilters = {
   username: string
   input: string
   since: string
+  until: string
+  host: string
+  kind: string
 }
 
+const ACTIVITY_GROUP_GAP_MS = 10_000
 const ACTIVITY_INPUT_PREVIEW_LIMIT = 240
 const ADMIN_NOTICE_TIMEOUT_MS = 5_000
 
@@ -99,7 +103,7 @@ export default function AdminConsole({ onClose }: { onClose?: () => void }) {
   const [sessionTotal, setSessionTotal] = useState(0)
   const [users, setUsers] = useState<AdminUser[]>([])
   const [activity, setActivity] = useState<ActivityEvent[]>([])
-  const [activityFilters, setActivityFilters] = useState<ActivityFilters>({ username: '', input: '', since: '' })
+  const [activityFilters, setActivityFilters] = useState<ActivityFilters>({ username: '', input: '', since: '', until: '', host: '', kind: '' })
   const [retention, setRetention] = useState<RetentionInfo | null>(null)
   const [policyFingerprint, setPolicyFingerprint] = useState('')
   const [loading, setLoading] = useState(true)
@@ -112,7 +116,7 @@ export default function AdminConsole({ onClose }: { onClose?: () => void }) {
   const csrfRef = useRef('')
   const refreshTimerRef = useRef<number | null>(null)
   const socketRef = useRef<Socket | null>(null)
-  const activityFiltersRef = useRef<ActivityFilters>({ username: '', input: '', since: '' })
+  const activityFiltersRef = useRef<ActivityFilters>({ username: '', input: '', since: '', until: '', host: '', kind: '' })
   const refreshGenerationRef = useRef(0)
 
   const loadCsrf = useCallback(async () => {
@@ -130,6 +134,9 @@ export default function AdminConsole({ onClose }: { onClose?: () => void }) {
       if (filters.username.trim()) activityQuery.set('username', filters.username.trim())
       if (filters.input.trim()) activityQuery.set('input', filters.input.trim())
       if (filters.since) activityQuery.set('since', filters.since)
+      if (filters.until) activityQuery.set('until', `${filters.until}T23:59:59.999Z`)
+      if (filters.host.trim()) activityQuery.set('host', filters.host.trim())
+      if (filters.kind) activityQuery.set('kind', filters.kind)
       const [sessionData, userData, activityData, retentionData, policyData] = await Promise.all([
         requestJson('/api/admin/sessions?limit=100'),
         requestJson('/api/admin/users'),
@@ -336,16 +343,16 @@ function AdminTableViewport({ label, children }: { label: string; children: Reac
 
   return (
     <div className="relative rounded-lg border border-surface-800 bg-surface-900">
-      <div className="flex min-h-10 items-center justify-between gap-3 border-b border-surface-800 px-3 py-2">
-        <span className="text-[10px] uppercase tracking-wider text-slate-600">{expanded ? 'Expanded table' : 'Scrollable table'}</span>
+      <div className="flex justify-end px-2 pt-1">
         <button
           type="button"
           aria-expanded={expanded}
           aria-label={`${action} ${label} vertically`}
           onClick={() => setExpanded(value => !value)}
-          className="min-h-9 shrink-0 rounded border border-surface-700 px-2.5 py-1.5 text-xs text-brand-300 transition-colors hover:bg-surface-800"
+          title={`${action} ${label} vertically`}
+          className="flex h-7 w-7 items-center justify-center rounded text-slate-600 transition-colors hover:bg-surface-800 hover:text-slate-300"
         >
-          {action} vertically
+          {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}
         </button>
       </div>
       <div className={`${expanded ? 'max-h-[calc(100dvh-11rem)]' : 'max-h-[70vh]'} overflow-y-auto overflow-x-hidden rounded-b-lg`}>
@@ -526,36 +533,68 @@ function ActivityInput({ value, kind }: { value: string; kind: string }) {
     </details>
   )
 }
+
 function ActivityFiltersForm({ filters, onApply }: { filters: ActivityFilters; onApply: (filters: ActivityFilters) => void }) {
   const [username, setUsername] = useState(filters.username)
   const [input, setInput] = useState(filters.input)
   const [since, setSince] = useState(filters.since)
+  const [until, setUntil] = useState(filters.until)
+  const [host, setHost] = useState(filters.host)
+  const [kind, setKind] = useState(filters.kind)
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    onApply({ username, input, since })
+    onApply({ username, input, since, until, host, kind })
   }
 
   const clear = () => {
     setUsername('')
     setInput('')
     setSince('')
-    onApply({ username: '', input: '', since: '' })
+    setUntil('')
+    setHost('')
+    setKind('')
+    onApply({ username: '', input: '', since: '', until: '', host: '', kind: '' })
   }
 
   return (
-    <form onSubmit={submit} className="mb-4 flex flex-col gap-2 rounded-lg border border-surface-800 bg-surface-900 p-3 sm:flex-row sm:items-end">
+    <form onSubmit={submit} className="mb-4 flex flex-col gap-2 rounded-lg border border-surface-800 bg-surface-900 p-3 sm:flex-row sm:flex-wrap sm:items-end">
       <div>
         <label htmlFor="activity-user" className="block text-[11px] font-medium text-slate-400">User</label>
-        <input id="activity-user" type="search" value={username} onChange={event => setUsername(event.target.value)} onKeyDown={submitActivityFiltersOnEnter} autoComplete="off" spellCheck={false} enterKeyHint="search" placeholder="All users" className="mt-1 w-full rounded border border-surface-700 bg-surface-950 px-2.5 py-1.5 text-xs text-slate-200 outline-none placeholder:text-slate-700 focus:border-brand-500 sm:w-44" />
+        <input id="activity-user" type="search" value={username} onChange={event => setUsername(event.target.value)} onKeyDown={submitActivityFiltersOnEnter} autoComplete="off" spellCheck={false} enterKeyHint="search" placeholder="All users" className="mt-1 w-full rounded border border-surface-700 bg-surface-950 px-2.5 py-1.5 text-xs text-slate-200 outline-none placeholder:text-slate-700 focus:border-brand-500 sm:w-40" />
       </div>
       <div>
-        <label htmlFor="activity-input" className="block text-[11px] font-medium text-slate-400">Command</label>
-        <input id="activity-input" type="search" value={input} onChange={event => setInput(event.target.value)} onKeyDown={submitActivityFiltersOnEnter} autoComplete="off" spellCheck={false} enterKeyHint="search" placeholder="Search command text" className="mt-1 w-full rounded border border-surface-700 bg-surface-950 px-2.5 py-1.5 text-xs text-slate-200 outline-none placeholder:text-slate-700 focus:border-brand-500 sm:w-56" />
+        <label htmlFor="activity-input" className="block text-[11px] font-medium text-slate-400">Search</label>
+        <input id="activity-input" type="search" value={input} onChange={event => setInput(event.target.value)} onKeyDown={submitActivityFiltersOnEnter} autoComplete="off" spellCheck={false} enterKeyHint="search" placeholder="Search all columns" className="mt-1 w-full rounded border border-surface-700 bg-surface-950 px-2.5 py-1.5 text-xs text-slate-200 outline-none placeholder:text-slate-700 focus:border-brand-500 sm:w-52" />
+      </div>
+      <div>
+        <label htmlFor="activity-kind" className="block text-[11px] font-medium text-slate-400">Type</label>
+        <select id="activity-kind" value={kind} onChange={event => setKind(event.target.value)} className="mt-1 rounded border border-surface-700 bg-surface-950 px-2.5 py-1.5 text-xs text-slate-200 outline-none focus:border-brand-500">
+          <option value="">All activity</option>
+          <option value="command">Commands</option>
+          <option value="sensitive">Sensitive (redacted)</option>
+          <option value="sftp">All SFTP</option>
+          <option value="sftp_download">SFTP downloads</option>
+          <option value="sftp_bulk_download">SFTP bulk downloads</option>
+          <option value="sftp_upload">SFTP uploads</option>
+          <option value="sftp_delete">SFTP deletes</option>
+          <option value="sftp_rename">SFTP renames</option>
+          <option value="sftp_mkdir">SFTP mkdirs</option>
+          <option value="sftp_chmod">SFTP chmods</option>
+          <option value="sftp_chown">SFTP chowns</option>
+        </select>
+      </div>
+      <div>
+        <label htmlFor="activity-host" className="block text-[11px] font-medium text-slate-400">Host</label>
+        <input id="activity-host" type="search" value={host} onChange={event => setHost(event.target.value)} onKeyDown={submitActivityFiltersOnEnter} autoComplete="off" spellCheck={false} enterKeyHint="search" placeholder="Any host" className="mt-1 w-full rounded border border-surface-700 bg-surface-950 px-2.5 py-1.5 text-xs text-slate-200 outline-none placeholder:text-slate-700 focus:border-brand-500 sm:w-44" />
       </div>
       <div>
         <label htmlFor="activity-since" className="block text-[11px] font-medium text-slate-400">Since</label>
         <input id="activity-since" type="date" value={since} onChange={event => setSince(event.target.value)} onKeyDown={submitActivityFiltersOnEnter} className="mt-1 rounded border border-surface-700 bg-surface-950 px-2.5 py-1.5 text-xs text-slate-200 outline-none focus:border-brand-500" />
+      </div>
+      <div>
+        <label htmlFor="activity-until" className="block text-[11px] font-medium text-slate-400">Until</label>
+        <input id="activity-until" type="date" value={until} onChange={event => setUntil(event.target.value)} onKeyDown={submitActivityFiltersOnEnter} className="mt-1 rounded border border-surface-700 bg-surface-950 px-2.5 py-1.5 text-xs text-slate-200 outline-none focus:border-brand-500" />
       </div>
       <div className="flex gap-2">
         <button type="submit" className="rounded border border-brand-700/60 px-3 py-1.5 text-xs text-brand-300 transition-colors hover:bg-brand-950/40">Apply filters</button>
@@ -566,12 +605,83 @@ function ActivityFiltersForm({ filters, onApply }: { filters: ActivityFilters; o
 }
 
 
+type ActivityGroup = { lead: ActivityEvent; events: ActivityEvent[] }
+
+// The server returns events newest-first, so adjacency in this array matches
+// visual adjacency in the table. Consecutive command rows from one session/tab
+// within the gap threshold are one block; anything else (kind change, other
+// session, silence) is a boundary. View-only: payloads stay one row per line.
+function groupActivityEvents(events: ActivityEvent[]): ActivityGroup[] {
+  const groups: ActivityGroup[] = []
+  for (const event of events) {
+    const last = groups[groups.length - 1]
+    const previous = last?.events[last.events.length - 1]
+    const gap = previous
+      ? Math.abs(new Date(event.occurred_at).getTime() - new Date(previous.occurred_at).getTime())
+      : Number.POSITIVE_INFINITY
+    const contiguous =
+      previous !== undefined &&
+      event.kind === 'command' &&
+      previous.kind === 'command' &&
+      event.ldap_username === previous.ldap_username &&
+      event.session_id === previous.session_id &&
+      event.tab_id === previous.tab_id &&
+      event.ssh_host === previous.ssh_host &&
+      event.ssh_port === previous.ssh_port &&
+      event.ssh_username === previous.ssh_username &&
+      gap <= ACTIVITY_GROUP_GAP_MS
+    if (contiguous && last) {
+      last.events.push(event)
+    } else {
+      groups.push({ lead: event, events: [event] })
+    }
+  }
+  return groups
+}
+
+function renderActivityEventRow(event: ActivityEvent) {
+  return (
+    <tr key={event.event_id} className="border-b border-surface-800/70 last:border-0">
+      <td className="break-words px-3 py-3 text-slate-400 [overflow-wrap:anywhere]">{new Date(event.occurred_at).toLocaleString()}</td>
+      <td className="break-words px-3 py-3 [overflow-wrap:anywhere]">{event.ldap_username}</td>
+      <td className="break-words px-3 py-3 [overflow-wrap:anywhere]">{event.ssh_host || '—'}:{event.ssh_port || '—'} <span className="break-words text-slate-600 [overflow-wrap:anywhere]">({event.ssh_username || '—'})</span></td>
+      <td className="break-words px-3 py-3 font-mono text-[11px] text-slate-200 [overflow-wrap:anywhere]"><ActivityInput value={event.input} kind={event.kind} /></td>
+      <td className="break-words px-3 py-3 text-slate-400 [overflow-wrap:anywhere]">{event.kind === 'sensitive' ? 'Sensitive (redacted)' : event.kind}</td>
+      <td className="px-3 py-3 text-right text-slate-400">{event.bytes}</td>
+    </tr>
+  )
+}
+
+function renderActivityGroupRow(group: ActivityGroup) {
+  // Display chronologically: oldest line first, like the query was typed.
+  const ordered = [...group.events].reverse()
+  const started = ordered[0]
+  const ended = ordered[ordered.length - 1]
+  const lead = group.lead
+  return (
+    <tr key={`group-${lead.event_id}`} className="border-b border-surface-800/70 last:border-0">
+      <td className="break-words px-3 py-3 text-slate-400 [overflow-wrap:anywhere]">
+        {new Date(started.occurred_at).toLocaleString()}
+        <span className="block text-[10px] text-slate-600">through {new Date(ended.occurred_at).toLocaleTimeString()}</span>
+      </td>
+      <td className="break-words px-3 py-3 [overflow-wrap:anywhere]">{lead.ldap_username}</td>
+      <td className="break-words px-3 py-3 [overflow-wrap:anywhere]">{lead.ssh_host || '—'}:{lead.ssh_port || '—'} <span className="break-words text-slate-600 [overflow-wrap:anywhere]">({lead.ssh_username || '—'})</span></td>
+      <td className="break-words px-3 py-3 font-mono text-[11px] text-slate-200 [overflow-wrap:anywhere]"><ActivityInput value={ordered.map(event => event.input).join('\n')} kind={lead.kind} /></td>
+      <td className="break-words px-3 py-3 text-slate-400 [overflow-wrap:anywhere]">command · {ordered.length} lines</td>
+      <td className="px-3 py-3 text-right text-slate-400">{ordered.reduce((total, event) => total + event.bytes, 0)}</td>
+    </tr>
+  )
+}
+
 function ActivityTable({ events, filters, onApplyFilters }: { events: ActivityEvent[]; filters: ActivityFilters; onApplyFilters: (filters: ActivityFilters) => void }) {
   return (
     <section aria-labelledby="activity-title">
-      <div className="mb-3">
-        <h2 id="activity-title" className="text-base font-semibold">Submitted input</h2>
-        <p className="mt-1 text-xs text-slate-500">Completed terminal input is shown line-by-line with multiline text preserved. Sensitive prompts are recorded only as redaction markers. Terminal output and SSH connection passwords are not recorded.</p>
+      <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <h2 id="activity-title" className="text-base font-semibold">Submitted input</h2>
+          <p className="mt-1 text-xs text-slate-500">Completed terminal input with consecutive command lines from the same session grouped into blocks. Sensitive prompts are recorded only as redaction markers. Terminal output and SSH connection passwords are not recorded.</p>
+        </div>
+        <p className="shrink-0 text-xs text-slate-500" aria-live="polite">{events.length} event{events.length === 1 ? '' : 's'}</p>
       </div>
       <ActivityFiltersForm filters={filters} onApply={onApplyFilters} />
       <AdminTableViewport label="Submitted input">
@@ -581,16 +691,11 @@ function ActivityTable({ events, filters, onApplyFilters }: { events: ActivityEv
           <tbody>
             {events.length === 0
               ? <tr><td colSpan={6} className="px-3 py-12 text-center text-slate-600">No submitted input events.</td></tr>
-              : events.map(event => (
-                <tr key={event.event_id} className="border-b border-surface-800/70 last:border-0">
-                  <td className="break-words px-3 py-3 text-slate-400 [overflow-wrap:anywhere]">{new Date(event.occurred_at).toLocaleString()}</td>
-                  <td className="break-words px-3 py-3 [overflow-wrap:anywhere]">{event.ldap_username}</td>
-                  <td className="break-words px-3 py-3 [overflow-wrap:anywhere]">{event.ssh_host || '—'}:{event.ssh_port || '—'} <span className="break-words text-slate-600 [overflow-wrap:anywhere]">({event.ssh_username || '—'})</span></td>
-                  <td className="break-words px-3 py-3 font-mono text-[11px] text-slate-200 [overflow-wrap:anywhere]"><ActivityInput value={event.input} kind={event.kind} /></td>
-                  <td className="break-words px-3 py-3 text-slate-400 [overflow-wrap:anywhere]">{event.kind === 'sensitive' ? 'Sensitive (redacted)' : event.kind}</td>
-                  <td className="px-3 py-3 text-right text-slate-400">{event.bytes}</td>
-                </tr>
-              ))}
+              : groupActivityEvents(events).map(group =>
+                  group.events.length === 1
+                    ? renderActivityEventRow(group.lead)
+                    : renderActivityGroupRow(group),
+                )}
           </tbody>
         </table>
       </AdminTableViewport>

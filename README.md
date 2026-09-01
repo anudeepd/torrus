@@ -64,8 +64,10 @@ Session controls use immutable session identity plus generation checks. New user
 
 LDAP deployments persist completed command lines after Enter, not raw
 keystrokes or terminal output. Pasted multiline input is split into submitted
-lines; the Admin Console's **Submitted input** table preserves embedded
-line breaks, wraps long values, and lets an admin expand truncated previews.
+lines; the Admin Console's **Submitted input** table groups consecutive command
+lines from the same session into one block (view only — stored events stay one
+row per line), preserves embedded line breaks, wraps long values, and lets an
+admin expand truncated previews.
 Inputs entered after a detected password/passphrase/token prompt, plus command
 lines containing inline credential flags or assignments, are stored only as a
 `[redacted sensitive input]` marker. The password supplied while opening an

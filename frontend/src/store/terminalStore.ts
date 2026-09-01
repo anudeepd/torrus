@@ -25,6 +25,7 @@ interface TerminalState {
   addSftpTab: (sourceTabId: string) => string
   closeTab: (id: string) => void
   closeAllTabs: () => void
+  moveTab: (fromId: string, toId: string) => void
   setActiveTab: (id: string) => void
   setTabStatus: (id: string, status: TabStatus) => void
   setTabConnection: (id: string, host: string, port: number, username: string) => void
@@ -104,6 +105,16 @@ export const useTerminalStore = create<TerminalState>()(
       closeAllTabs: () => set({ tabs: [], activeTabId: null }),
 
       setActiveTab: (id) => set({ activeTabId: id }),
+
+      moveTab: (fromId, toId) => set(s => {
+        const fromIdx = s.tabs.findIndex(t => t.id === fromId)
+        const toIdx = s.tabs.findIndex(t => t.id === toId)
+        if (fromIdx < 0 || toIdx < 0 || fromId === toId) return {}
+        const tabs = [...s.tabs]
+        const [moving] = tabs.splice(fromIdx, 1)
+        tabs.splice(toIdx, 0, moving)
+        return { tabs }
+      }),
 
       setTabStatus: (id, status) =>
         set(s => ({ tabs: s.tabs.map(t => t.id === id ? { ...t, status } : t) })),

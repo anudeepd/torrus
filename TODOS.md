@@ -19,3 +19,10 @@
   - **Context:** Baseline intentionally labels interrupt `best_effort` and excludes process enumeration. Revisit with a concrete target-host deployment model.
   - **Effort:** XL human team → L with CC+gstack.
   - **Depends on / blocked by:** Remote-host ownership, deployment, and security design.
+
+- [ ] **P3 — Activity filters sync to URL**
+  - **What:** Reflect Submitted-input filter state (user/host/kind/since/until) in query params so investigations are shareable and back-navigable.
+  - **Why:** /design-review 2026-09-01 deferred finding — audit checklist "URL reflects state".
+- [ ] **P4 — FTS5 for activity search if scale demands**
+  - **What:** Replace LIKE-based free-text search with an FTS5 virtual table when audit volume justifies it.
+  - **Why:** Benchmarked 2026-09-01: LIKE over 1M rows x 6 cols = 0.26s worst case. Revisit at ~5-10M rows or >1s admin queries. Cost then: ~2x storage on indexed cols, insert triggers, lost substring matching.

@@ -68,6 +68,63 @@ class TestServerConfig:
         assert result["items"][0]["input"] == "ls -la\n"
 
     @pytest.mark.asyncio
+    async def test_admin_activity_passes_kind_host_and_until_filters(self, monkeypatch):
+        import torrus.server as server_module
+
+        request = MagicMock()
+        request.query_params.get.side_effect = lambda name, default=None: {
+            "limit": "100",
+            "kind": "sftp_upload",
+            "host": "db01.internal",
+            "until": "2026-08-02T23:59:59+00:00",
+        }.get(name, default)
+        monkeypatch.setattr(
+            server_module,
+            "_admin_guard",
+            AsyncMock(return_value=("alice", None)),
+        )
+        terminal_calls = []
+        sftp_calls = []
+
+        def fake_terminal(**kwargs):
+            terminal_calls.append(kwargs)
+            return []
+
+        def fake_sftp(**kwargs):
+            sftp_calls.append(kwargs)
+            return [
+                {
+                    "id": 2,
+                    "occurred_at": "2026-08-02T10:00:00+00:00",
+                    "ldap_username": "bob",
+                    "session_id": "sess",
+                    "tab_id": "tab",
+                    "ssh_host": "db01.internal",
+                    "ssh_port": 22,
+                    "ssh_username": "root",
+                    "operation": "upload",
+                    "path": "restore.sql",
+                    "size": 10,
+                    "detail": "",
+                }
+            ]
+
+        monkeypatch.setattr(
+            server_module.audit_store, "list_terminal_input_events", fake_terminal
+        )
+        monkeypatch.setattr(server_module.audit_store, "list_sftp_events", fake_sftp)
+
+        result = await server_module.admin_activity(request)
+
+        # sftp_upload kind must skip the terminal query entirely and filter
+        # SFTP rows to the upload operation.
+        assert terminal_calls == []
+        assert sftp_calls[0]["operation"] == "upload"
+        assert sftp_calls[0]["host"] == "db01.internal"
+        assert sftp_calls[0]["until"] == "2026-08-02T23:59:59+00:00"
+        assert result["items"][0]["kind"] == "sftp_upload"
+
+    @pytest.mark.asyncio
     async def test_admin_sessions_reports_total_with_cursor_page(self, monkeypatch):
         import torrus.server as server_module
 
