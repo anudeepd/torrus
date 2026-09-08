@@ -335,6 +335,35 @@ describe('SFTPBrowser', () => {
     })
   })
 
+  it('downloads a single file directly from the context menu instead of zipping it', () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const socket = createMockSocket()
+    render(<SFTPBrowser tabId={tabId} sourceTabId="terminal-tab" socket={socket as unknown as Socket} />)
+
+    act(() => {
+      socket._trigger('sftp:open:result', {
+        tab_id: tabId,
+        ok: true,
+        path: '/var/log',
+        entries: [
+          { name: 'app.log', path: '/var/log/app.log', type: 'file', size: 2, mtime: 1, mode: 0o100640, uid: 1000, gid: 1000 },
+        ],
+      })
+    })
+
+    fireEvent.contextMenu(screen.getByRole('option', { name: /app\.log/i }), { clientX: 40, clientY: 40 })
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Download' }))
+
+    expect(socket.emit).toHaveBeenCalledWith('sftp:download', {
+      session_id: 'test-session',
+      tab_id: tabId,
+      path: '/var/log/app.log',
+    })
+    expect(fetchMock).not.toHaveBeenCalledWith('/sftp/bulk-download', expect.anything())
+    vi.unstubAllGlobals()
+  })
+
   it('auto-dismisses operation errors', () => {
     vi.useFakeTimers()
     const socket = createMockSocket()

@@ -525,9 +525,19 @@ function ActivityInput({ value, kind }: { value: string; kind: string }) {
 
   return (
     <details className="max-w-[32rem]" onToggle={event => setExpanded(event.currentTarget.open)}>
-      <summary className="cursor-pointer whitespace-pre-wrap break-words text-slate-200 marker:text-slate-500">
-        {value.slice(0, ACTIVITY_INPUT_PREVIEW_LIMIT)}…
-        <span className="mt-1 block text-[10px] text-brand-300">Show full input ({value.length} characters)</span>
+      <summary className="cursor-pointer list-none text-slate-200 [&::-webkit-details-marker]:hidden">
+        {expanded ? (
+          <span className="inline-flex items-center gap-1 text-[10px] text-brand-300">
+            <ChevronDown className="h-3 w-3" /> Hide full input
+          </span>
+        ) : (
+          <>
+            <span className="whitespace-pre-wrap break-words">{value.slice(0, ACTIVITY_INPUT_PREVIEW_LIMIT)}…</span>
+            <span className="mt-1 flex items-center gap-1 text-[10px] text-brand-300">
+              <ChevronUp className="h-3 w-3" /> Show full input ({value.length} characters)
+            </span>
+          </>
+        )}
       </summary>
       {expanded && <pre className="mt-2 max-h-80 overflow-y-auto overflow-x-hidden whitespace-pre-wrap break-words text-slate-200 [overflow-wrap:anywhere]">{value}</pre>}
     </details>

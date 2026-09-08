@@ -1275,7 +1275,7 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
               ...(files.length > 0 ? [{
                 label: files.length === 1 ? 'Download' : `Download ${files.length} as zip`,
                 icon: Download,
-                action: () => handleBulkDownload(files),
+                action: () => files.length === 1 ? void download(files[0]!) : handleBulkDownload(files),
               }] : []),
               {
                 label: isSingleEntry ? 'Delete' : `Delete ${contextMenu.entries.length} items`,

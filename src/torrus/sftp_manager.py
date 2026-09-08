@@ -728,13 +728,12 @@ class SFTPManager:
         if not paths:
             raise SFTPError("INVALID_REQUEST", "No paths selected for download.")
         files: list[tuple[str, str, int]] = []
-        seen: set[str] = set()
+        seen_paths: set[str] = set()
         for raw_path in paths:
             resolved = _resolve_remote_path(session.cwd, raw_path, session.home)
             try:
-                # Server-side realpath: resolves symlinks so zip entries use
-                # canonical paths and the same file cannot be included twice
-                # under different spellings.
+                # Server-side realpath: resolves symlinks so the same file
+                # cannot be included twice under different spellings.
                 canonical = session.client.normalize(resolved)
             except Exception as exc:
                 raise _map_error(exc, resolved) from exc
@@ -743,20 +742,37 @@ class SFTPManager:
             except Exception as exc:
                 raise _map_error(exc, canonical) from exc
             if stat.S_ISDIR(attr.st_mode or 0):
+                # Selected directories keep their own basename as the top
+                # folder; contents hang beneath it, not under the full
+                # remote path.
+                top = posixpath.basename(canonical.rstrip("/")) or "root"
                 for file_path, file_size in self._iter_dir_files_sync(
                     session, canonical
                 ):
-                    arcname = _zip_arcname(session.home, file_path)
-                    if arcname not in seen:
-                        seen.add(arcname)
-                        files.append((file_path, arcname, file_size))
+                    if file_path in seen_paths:
+                        continue
+                    seen_paths.add(file_path)
+                    rel = posixpath.relpath(file_path, canonical)
+                    files.append((file_path, posixpath.join(top, rel), file_size))
             else:
-                arcname = _zip_arcname(session.home, canonical)
-                if arcname not in seen:
-                    seen.add(arcname)
-                    files.append((canonical, arcname, attr.st_size or 0))
+                # Directly-selected files land flat at the archive root.
+                if canonical in seen_paths:
+                    continue
+                seen_paths.add(canonical)
+                files.append(
+                    (canonical, posixpath.basename(canonical), attr.st_size or 0)
+                )
         files.sort(key=lambda item: item[1])
-        return {"ok": True, "files": files}
+        # Distinct files can share a basename (e.g. two "app.log" from
+        # different folders). Suffix those instead of silently dropping them.
+        taken: set[str] = set()
+        deduped: list[tuple[str, str, int]] = []
+        for file_path, arcname, file_size in files:
+            unique = _dedupe_arcname(arcname, taken)
+            taken.add(unique)
+            deduped.append((file_path, unique, file_size))
+        deduped.sort(key=lambda item: item[1])
+        return {"ok": True, "files": deduped}
 
     async def session_target(self, tab_id: str) -> tuple[str, int, str] | None:
         """Return the SSH target backing an SFTP tab, for audit attribution."""
@@ -955,17 +971,24 @@ def _resolve_remote_path(cwd: str, path: str, home: str | None = None) -> str:
     return posixpath.normpath(posixpath.join(base, raw))
 
 
-def _zip_arcname(home: str | None, resolved: str) -> str:
-    """Return the zip entry name for a resolved path, relative to home."""
-    norm = posixpath.normpath(resolved)
-    home_dir = posixpath.normpath(home or ".")
-    if home_dir != ".":
-        prefix = home_dir.rstrip("/") + "/"
-        if norm == home_dir:
-            return posixpath.basename(home_dir.rstrip("/")) or "home"
-        if norm.startswith(prefix):
-            return norm[len(prefix) :]
-    return norm.lstrip("/")
+def _dedupe_arcname(arcname: str, taken: set[str]) -> str:
+    """Return ``arcname`` made unique within ``taken``.
+
+    First claimant keeps the plain name; later ones get ``" (2)"``,
+    ``" (3)"``, ... inserted before the extension (``"a (2).txt"``).
+    """
+    if arcname not in taken:
+        return arcname
+    directory, sep, filename = arcname.rpartition("/")
+    stem, dot, ext = filename.rpartition(".")
+    if not stem or not dot:
+        stem, ext, dot = filename, "", ""
+    index = 2
+    while True:
+        candidate = f"{directory}{sep}{stem} ({index})" + (f"{dot}{ext}" if dot else "")
+        if candidate not in taken:
+            return candidate
+        index += 1
 
 
 def _drain_zip_bytes(buffer: io.BytesIO, flushed: int) -> tuple[int, bytes]:

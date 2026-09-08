@@ -119,6 +119,12 @@ describe('AdminConsole', () => {
       expect(screen.getByText(longInput)).toBeInTheDocument()
       expect(screen.getByText(longInput)).toHaveClass('whitespace-pre-wrap')
     })
+    // Expanded state replaces the truncated preview instead of stacking both.
+    expect(screen.queryByText(/Show full input/)).not.toBeInTheDocument()
+    expect(screen.getByText(/Hide full input/)).toBeInTheDocument()
+    for (const summary of document.querySelectorAll('summary')) {
+      expect(summary.textContent).not.toContain('xxxx')
+    }
   })
   it('keeps each admin table header fixed inside scrollable content', async () => {
     await renderAdmin()

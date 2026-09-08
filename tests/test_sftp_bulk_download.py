@@ -75,11 +75,100 @@ async def test_bulk_zip_works_outside_home():
     try:
         await manager.open_sftp("sess1", "tab1", FakeSSHManager(sftp))
         prepared = await manager.prepare_bulk_download("tab1", ["/etc/passwd"])
-        assert prepared["files"] == [("/etc/passwd", "etc/passwd", 85)]
+        assert prepared["files"] == [("/etc/passwd", "passwd", 85)]
         archive = await _read_zip(manager, "tab1", prepared["files"])
-        assert b"app:x:1000" in archive.read("etc/passwd")
+        assert b"app:x:1000" in archive.read("passwd")
     finally:
         await manager.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_bulk_zip_flattens_files_from_different_folders():
+    """Directly-selected files land at the archive root, not under their
+    remote folder paths."""
+    from torrus.sftp_manager import SFTPManager
+
+    sftp = FakeSFTP()
+    sftp.fs["/var/log/app.log"] = b"aaa"
+    manager = SFTPManager()
+    try:
+        await manager.open_sftp("sess1", "tab1", FakeSSHManager(sftp))
+        prepared = await manager.prepare_bulk_download(
+            "tab1", ["/var/log/app.log", "/etc/passwd"]
+        )
+        archive = await _read_zip(manager, "tab1", prepared["files"])
+    finally:
+        await manager.shutdown()
+
+    assert archive.namelist() == ["app.log", "passwd"]
+    assert archive.read("app.log") == b"aaa"
+
+
+@pytest.mark.asyncio
+async def test_bulk_zip_disambiguates_same_basename_instead_of_dropping():
+    """Two distinct files sharing a basename must both survive, suffixed."""
+    from torrus.sftp_manager import SFTPManager
+
+    sftp = FakeSFTP()
+    sftp.fs["/var/log/app.log"] = b"from-var"
+    sftp.fs["/etc/app.log"] = b"from-etc"
+    manager = SFTPManager()
+    try:
+        await manager.open_sftp("sess1", "tab1", FakeSSHManager(sftp))
+        prepared = await manager.prepare_bulk_download(
+            "tab1", ["/var/log/app.log", "/etc/app.log", "/etc/passwd"]
+        )
+        assert [entry for _, entry, _ in prepared["files"]] == [
+            "app (2).log",
+            "app.log",
+            "passwd",
+        ]
+        archive = await _read_zip(manager, "tab1", prepared["files"])
+    finally:
+        await manager.shutdown()
+
+    assert archive.read("app.log") == b"from-var"
+    assert archive.read("app (2).log") == b"from-etc"
+
+
+@pytest.mark.asyncio
+async def test_bulk_zip_dedupes_same_file_selected_twice():
+    from torrus.sftp_manager import SFTPManager
+
+    sftp = FakeSFTP()
+    manager = SFTPManager()
+    try:
+        await manager.open_sftp("sess1", "tab1", FakeSSHManager(sftp))
+        prepared = await manager.prepare_bulk_download(
+            "tab1", ["/etc/passwd", "/etc/passwd"]
+        )
+    finally:
+        await manager.shutdown()
+
+    assert [entry for _, entry, _ in prepared["files"]] == ["passwd"]
+
+
+@pytest.mark.asyncio
+async def test_bulk_zip_directory_outside_home_uses_dir_basename():
+    """A selected directory keeps its own basename as the top folder."""
+    from torrus.sftp_manager import SFTPManager
+
+    sftp = FakeSFTP()
+    sftp.dirs.add("/var/log/myapp")
+    sftp.dirs.add("/var/log/myapp/sub")
+    sftp.fs["/var/log/myapp/a.log"] = b"a"
+    sftp.fs["/var/log/myapp/sub/b.log"] = b"b"
+    manager = SFTPManager()
+    try:
+        await manager.open_sftp("sess1", "tab1", FakeSSHManager(sftp))
+        prepared = await manager.prepare_bulk_download("tab1", ["/var/log/myapp"])
+        archive = await _read_zip(manager, "tab1", prepared["files"])
+    finally:
+        await manager.shutdown()
+
+    assert archive.namelist() == ["myapp/a.log", "myapp/sub/b.log"]
+    assert archive.read("myapp/a.log") == b"a"
+    assert archive.read("myapp/sub/b.log") == b"b"
 
 
 @pytest.mark.asyncio
@@ -191,7 +280,7 @@ async def test_bulk_download_endpoint_works_outside_home(monkeypatch):
 
     assert response.status_code == 200
     archive = zipfile.ZipFile(io.BytesIO(response.content))
-    assert b"app:x:1000" in archive.read("etc/passwd")
+    assert b"app:x:1000" in archive.read("passwd")
 
 
 @pytest.mark.asyncio
