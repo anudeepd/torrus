@@ -10,7 +10,6 @@ import io
 import os
 import posixpath
 import stat
-import sys
 import time
 import zipfile
 from dataclasses import dataclass, field
@@ -18,7 +17,15 @@ from typing import Any, Callable, AsyncIterator, Iterator, TypeVar
 
 import paramiko
 
+from .upload_engine import UploadSinkError, is_staging_name, staging_name
+
 T = TypeVar("T")
+
+# Coalesce streamed request chunks before touching the SSH transport. One
+# paramiko write per 64 KiB read buffer costs a thread hop and a 32 KiB SFTP
+# packet each; batching to this size cuts executor hops by ~64x and keeps the
+# pipelined write window full.
+UPLOAD_FLUSH_BYTES = 4 * 1024 * 1024
 
 
 class SFTPError(Exception):
@@ -44,12 +51,147 @@ class SFTPSession:
     target: tuple[str, int, str] | None = None
 
 
+def _sink_error(exc: Exception, path: str) -> UploadSinkError:
+    """Translate a paramiko failure into the protocol's error envelope."""
+    mapped = _map_error(exc, path)
+    if mapped.code == "FILE_NOT_FOUND":
+        status = 404
+    elif mapped.code == "PERMISSION_DENIED":
+        status = 403
+    else:
+        status = 502
+    return UploadSinkError(mapped.message, code=mapped.code, status=status)
+
+
+class SFTPSink:
+    """Ranged writes into a remote staging file over one SFTP handle.
+
+    paramiko's SFTP client cannot be shared between threads, so each upload
+    session owns a dedicated channel on the tab's SSH transport. Writes are
+    coalesced up to ``UPLOAD_FLUSH_BYTES``: a request body arrives as many
+    small reads, and one paramiko write per read would cost a thread hop and a
+    32 KiB packet each.
+
+    Bytes are only visible at the destination after :meth:`finalize` renames
+    the staging file, so a failed or abandoned upload never leaves a partial
+    file in place.
+    """
+
+    def __init__(
+        self,
+        *,
+        manager: "SFTPManager",
+        tab_id: str,
+        client: paramiko.SFTPClient,
+        directory: str,
+        filename: str,
+        session_id: str,
+        run_blocking: Callable[..., Any],
+    ) -> None:
+        self._manager = manager
+        self._tab_id = tab_id
+        self._client = client
+        self._staging = posixpath.join(directory, staging_name(filename, session_id))
+        self._destination = posixpath.join(directory, filename)
+        self._run = run_blocking
+        self._handle: Any = None
+        self._cursor = 0
+        self._buffer = bytearray()
+        self._lock = asyncio.Lock()
+        self._client_closed = False
+        self._closed = False
+
+    @property
+    def destination(self) -> str:
+        return self._destination
+
+    async def _flush(self) -> None:
+        if not self._buffer:
+            return
+        data = bytes(self._buffer)
+        self._buffer.clear()
+        try:
+            await self._run(self._handle.write, data)
+        except Exception as exc:
+            # A failed pipelined write leaves the handle's position undefined,
+            # so force the next write to seek rather than trust `_cursor`.
+            self._cursor = -1
+            raise _sink_error(exc, self._destination) from exc
+        self._cursor += len(data)
+
+    async def write_at(self, offset: int, data: bytes) -> None:
+        async with self._lock:
+            if self._closed:
+                raise UploadSinkError(
+                    "Upload session already finished.", code="CONNECTION_CLOSED"
+                )
+            if self._handle is None:
+                try:
+                    self._handle = await self._run(
+                        self._client.open, self._staging, "wb"
+                    )
+                    await self._run(self._handle.set_pipelined, True)
+                except Exception as exc:
+                    raise _sink_error(exc, self._destination) from exc
+            if offset != self._cursor + len(self._buffer):
+                await self._flush()
+                try:
+                    await self._run(self._handle.seek, offset)
+                except Exception as exc:
+                    raise _sink_error(exc, self._destination) from exc
+                self._cursor = offset
+            self._buffer.extend(data)
+            if len(self._buffer) >= UPLOAD_FLUSH_BYTES:
+                await self._flush()
+
+    async def _close_handle(self) -> None:
+        handle, self._handle = self._handle, None
+        if handle is not None:
+            await self._run(handle.close)
+
+    async def _close_client(self) -> None:
+        if self._client_closed:
+            return
+        self._client_closed = True
+        self._manager.forget_upload_client(self._tab_id, self._client)
+        try:
+            await self._run(self._client.close)
+        except Exception:
+            pass
+
+    async def finalize(self) -> None:
+        async with self._lock:
+            self._closed = True
+            try:
+                await self._flush()
+                await self._close_handle()
+            except Exception as exc:
+                raise _sink_error(exc, self._destination) from exc
+            try:
+                await self._run(self._client.rename, self._staging, self._destination)
+            except Exception as exc:
+                raise _sink_error(exc, self._destination) from exc
+            await self._close_client()
+
+    async def abort(self) -> None:
+        async with self._lock:
+            self._closed = True
+            try:
+                await self._close_handle()
+            except Exception:
+                pass
+            try:
+                await self._run(self._client.remove, self._staging)
+            except Exception:
+                pass
+            await self._close_client()
+
+
 class SFTPManager:
     def __init__(self, max_workers: int | None = None):
         self._sessions: dict[str, SFTPSession] = {}
         self._locks: dict[str, asyncio.Lock] = {}
-        self._upload_sessions: dict[tuple[str, str], SFTPSession] = {}
-        self._upload_locks: dict[tuple[str, str], asyncio.Lock] = {}
+        self._upload_clients: dict[str, set[paramiko.SFTPClient]] = {}
         workers = max_workers or max(16, min(64, (os.cpu_count() or 4) * 4))
         self._executor = concurrent.futures.ThreadPoolExecutor(
             max_workers=workers, thread_name_prefix="sftp"
@@ -100,39 +242,44 @@ class SFTPManager:
             self._sessions[tab_id] = sftp_session
             return True
 
-    async def open_upload_channel(
+    def forget_upload_client(self, tab_id: str, client: paramiko.SFTPClient) -> None:
+        self._upload_clients.get(tab_id, set()).discard(client)
+
+    def resolve_upload_path(
+        self, tab_id: str, remote_path: str, expected_session_id: str | None = None
+    ) -> str:
+        """Absolute remote path for an upload destination on an open tab."""
+        session = self._get_session(tab_id, expected_session_id=expected_session_id)
+        return _resolve_remote_path(session.cwd, remote_path, session.home)
+
+    async def open_upload_sink(
         self,
         tab_id: str,
         upload_id: str,
+        directory: str,
+        filename: str,
         ssh_manager,
         expected_session_id: str | None = None,
-    ) -> bool:
-        key = (tab_id, upload_id)
-        lock = self._upload_locks.setdefault(key, asyncio.Lock())
-        async with lock:
-            existing = self._upload_sessions.get(key)
-            if existing is not None:
-                return (
-                    existing.session_id == expected_session_id
-                    if expected_session_id
-                    else True
-                )
-            base = self._get_session(tab_id, expected_session_id=expected_session_id)
-            client = await ssh_manager.open_sftp_channel(
-                base.session_id, base.source_tab_id or tab_id
+    ) -> SFTPSink:
+        """Open a dedicated SFTP channel for one upload session."""
+        base = self._get_session(tab_id, expected_session_id=expected_session_id)
+        client = await ssh_manager.open_sftp_channel(
+            base.session_id, base.source_tab_id or tab_id
+        )
+        if client is None:
+            raise SFTPError(
+                "CONNECTION_CLOSED", "SSH connection lost. Reconnect to continue."
             )
-            if client is None:
-                return False
-            self._upload_sessions[key] = SFTPSession(
-                session_id=base.session_id,
-                tab_id=tab_id,
-                client=client,
-                source_tab_id=base.source_tab_id,
-                cwd=base.cwd,
-                home=base.home,
-                target=base.target,
-            )
-            return True
+        self._upload_clients.setdefault(tab_id, set()).add(client)
+        return SFTPSink(
+            manager=self,
+            tab_id=tab_id,
+            client=client,
+            directory=directory,
+            filename=filename,
+            session_id=upload_id,
+            run_blocking=self._run_blocking,
+        )
 
     async def close_sftp(self, tab_id: str) -> None:
         lock = self._locks.setdefault(tab_id, asyncio.Lock())
@@ -140,10 +287,9 @@ class SFTPManager:
             await self._close_sftp_unlocked(tab_id)
 
     async def _close_sftp_unlocked(self, tab_id: str) -> None:
-        for key in [key for key in self._upload_sessions if key[0] == tab_id]:
-            upload = self._upload_sessions.pop(key)
+        for client in self._upload_clients.pop(tab_id, set()):
             try:
-                await self._run_blocking(upload.client.close)
+                await self._run_blocking(client.close)
             except Exception:
                 pass
         session = self._sessions.pop(tab_id, None)
@@ -182,13 +328,6 @@ class SFTPManager:
                 raise
             except Exception as exc:
                 raise _map_error(exc, getattr(exc, "filename", "")) from exc
-
-    async def upload_file(
-        self, tab_id: str, remote_path: str, data: bytes
-    ) -> dict[str, Any]:
-        return await self._locked(
-            tab_id, lambda session: self._upload_file_sync(session, remote_path, data)
-        )
 
     async def download_file(
         self, tab_id: str, remote_path: str, max_bytes: int | None = None
@@ -231,6 +370,37 @@ class SFTPManager:
             expected_session_id=expected_session_id,
         )
 
+    async def prepare_upload_directories(
+        self,
+        tab_id: str,
+        paths: list[str],
+        expected_session_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Create the destination tree for a folder upload.
+
+        `mkdir -p` semantics in one round trip: directories that already exist
+        are left alone, missing ones are created shallowest first. Returns the
+        directories this call actually created, so they can be audited.
+        """
+
+        def prepare(session: SFTPSession) -> dict[str, Any]:
+            created: list[str] = []
+            for path in paths:
+                resolved = _resolve_remote_path(session.cwd, path, session.home)
+                try:
+                    session.client.stat(resolved)
+                    continue
+                except IOError:
+                    pass
+                try:
+                    session.client.mkdir(resolved)
+                except Exception as exc:
+                    raise _map_error(exc, resolved) from exc
+                created.append(resolved)
+            return {"ok": True, "created": created}
+
+        return await self._locked(tab_id, prepare, expected_session_id=expected_session_id)
+
     async def delete(self, tab_id: str, path: str) -> dict[str, Any]:
         return await self._locked(
             tab_id, lambda session: self._delete_sync(session, path)
@@ -258,151 +428,6 @@ class SFTPManager:
 
     async def accounts(self, tab_id: str) -> dict[str, Any]:
         return await self._locked(tab_id, self._accounts_sync)
-
-    async def stream_upload(
-        self,
-        tab_id: str,
-        remote_path: str,
-        chunks,
-        max_bytes: int,
-        expected_session_id: str | None = None,
-    ) -> dict[str, Any]:
-        async def write_stream(session: SFTPSession) -> dict[str, Any]:
-            resolved = _resolve_remote_path(session.cwd, remote_path, session.home)
-            wrote = 0
-            remove_partial = False
-            try:
-                remote_file = await self._run_blocking(
-                    session.client.open, resolved, "wb"
-                )
-                try:
-                    await self._run_blocking(remote_file.set_pipelined, True)
-                    async for chunk in chunks:
-                        wrote += len(chunk)
-                        if wrote > max_bytes:
-                            remove_partial = True
-                            raise SFTPError(
-                                "FILE_TOO_LARGE",
-                                f"File too large for browser transfer ({wrote} bytes).",
-                            )
-                        await self._run_blocking(remote_file.write, chunk)
-                finally:
-                    pending_error = sys.exc_info()[1]
-                    try:
-                        await self._run_blocking(remote_file.close)
-                    except Exception:
-                        if pending_error is None:
-                            raise
-                    if remove_partial:
-                        await self._remove_partial_upload(session, resolved)
-            except Exception as exc:
-                raise _map_error(exc, resolved) from exc
-            return {"ok": True, "path": resolved, "size": wrote}
-
-        return await self._locked_stream(
-            tab_id, write_stream, expected_session_id=expected_session_id
-        )
-
-    async def upload_chunk(
-        self,
-        tab_id: str,
-        remote_path: str,
-        upload_id: str,
-        offset: int,
-        total: int,
-        chunks,
-        complete: bool,
-        expected_session_id: str | None = None,
-    ) -> dict[str, Any]:
-        """Write one resumable upload chunk to a temporary remote file.
-
-        The final path is only replaced after the last chunk is fully written.
-        Retrying a chunk at the same offset is safe because it overwrites that
-        range of the temporary file.
-        """
-        if offset < 0 or total < 0 or offset > total:
-            raise SFTPError("INVALID_UPLOAD", "Invalid upload offset.")
-
-        async def write_chunk(session: SFTPSession) -> dict[str, Any]:
-            resolved = _resolve_remote_path(session.cwd, remote_path, session.home)
-            directory, filename = posixpath.split(resolved)
-            temporary = posixpath.join(
-                directory, f".{filename}.torrus-upload-{upload_id}"
-            )
-            written = 0
-            remote_file = None
-            try:
-                try:
-                    remote_file = await self._run_blocking(
-                        session.client.open, temporary, "r+b" if offset else "wb"
-                    )
-                except IOError:
-                    if offset and complete:
-                        try:
-                            existing = await self._run_blocking(
-                                session.client.stat, resolved
-                            )
-                        except Exception:
-                            raise
-                        if existing.st_size == total:
-                            return {
-                                "ok": True,
-                                "path": resolved,
-                                "offset": total,
-                                "complete": True,
-                            }
-                    raise
-                await self._run_blocking(remote_file.set_pipelined, True)
-                await self._run_blocking(remote_file.seek, offset)
-                async for chunk in chunks:
-                    if written + len(chunk) > total - offset:
-                        raise SFTPError(
-                            "INVALID_UPLOAD", "Upload data exceeds declared size."
-                        )
-                    await self._run_blocking(remote_file.write, chunk)
-                    written += len(chunk)
-            except Exception as exc:
-                raise _map_error(exc, resolved) from exc
-            finally:
-                if remote_file is not None:
-                    pending_error = sys.exc_info()[1]
-                    try:
-                        await self._run_blocking(remote_file.close)
-                    except Exception:
-                        if pending_error is None:
-                            raise
-
-            next_offset = offset + written
-            if complete:
-                if next_offset != total:
-                    raise SFTPError(
-                        "INVALID_UPLOAD", "Final upload chunk is incomplete."
-                    )
-                try:
-                    await self._run_blocking(session.client.rename, temporary, resolved)
-                except Exception as exc:
-                    raise _map_error(exc, resolved) from exc
-                upload = self._upload_sessions.pop((tab_id, upload_id), None)
-                if upload is not None:
-                    try:
-                        await self._run_blocking(upload.client.close)
-                    except Exception:
-                        pass
-            return {
-                "ok": True,
-                "path": resolved,
-                "offset": next_offset,
-                "complete": complete,
-            }
-
-        key = (tab_id, upload_id)
-        if key not in self._upload_sessions:
-            return await self._locked_stream(
-                tab_id, write_chunk, expected_session_id=expected_session_id
-            )
-        return await self._locked_upload(
-            key, write_chunk, expected_session_id=expected_session_id
-        )
 
     async def stream_download(
         self,
@@ -516,31 +541,6 @@ class SFTPManager:
             except Exception as exc:
                 raise _map_error(exc, getattr(exc, "filename", "")) from exc
 
-    async def _locked_upload(
-        self, key: tuple[str, str], work, expected_session_id: str | None = None
-    ):
-        lock = self._upload_locks.setdefault(key, asyncio.Lock())
-        async with lock:
-            session = self._upload_sessions.get(key)
-            if session is None:
-                raise SFTPError(
-                    "CONNECTION_CLOSED", "Upload channel closed. Reconnect and retry."
-                )
-            if (
-                expected_session_id is not None
-                and session.session_id != expected_session_id
-            ):
-                raise SFTPError(
-                    "PERMISSION_DENIED", "SFTP tab is not available for this session."
-                )
-            session.last_activity = time.time()
-            try:
-                return await work(session)
-            except SFTPError:
-                raise
-            except Exception as exc:
-                raise _map_error(exc, getattr(exc, "filename", "")) from exc
-
     async def _run_blocking(self, fn: Callable[..., T], *args: Any) -> T:
         loop = asyncio.get_running_loop()
         read_fd, write_fd = os.pipe()
@@ -585,12 +585,6 @@ class SFTPManager:
             os.close(read_fd)
             os.close(write_fd)
 
-    async def _remove_partial_upload(self, session: SFTPSession, path: str) -> None:
-        try:
-            await self._run_blocking(session.client.remove, path)
-        except Exception:
-            pass
-
     def _get_session(
         self, tab_id: str, expected_session_id: str | None = None
     ) -> SFTPSession:
@@ -627,7 +621,7 @@ class SFTPManager:
             users, groups = self._account_maps_sync(session)
             entries = []
             for attr in session.client.listdir_attr(resolved):
-                if ".torrus-upload-" in attr.filename:
+                if is_staging_name(attr.filename):
                     continue
                 mode = attr.st_mode or 0
                 is_dir = stat.S_ISDIR(mode)
@@ -663,17 +657,6 @@ class SFTPManager:
                 key=lambda item: (item["type"] != "directory", item["name"].lower())
             )
             return {"ok": True, "path": resolved, "entries": entries}
-        except Exception as exc:
-            raise _map_error(exc, resolved) from exc
-
-    def _upload_file_sync(
-        self, session: SFTPSession, remote_path: str, data: bytes
-    ) -> dict[str, Any]:
-        resolved = _resolve_remote_path(session.cwd, remote_path, session.home)
-        try:
-            with session.client.open(resolved, "wb") as remote_file:
-                remote_file.write(data)
-            return {"ok": True, "path": resolved, "size": len(data)}
         except Exception as exc:
             raise _map_error(exc, resolved) from exc
 

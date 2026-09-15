@@ -9,6 +9,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from torrus.sftp_manager import SFTPError, SFTPManager
+
 
 class FakeRemoteFile:
     def __init__(
@@ -25,8 +27,13 @@ class FakeRemoteFile:
         self.position = 0
         self.pipelined = False
         self.close_error = close_error
+        self.write_count = 0
 
     def write(self, data: bytes) -> None:
+        self.write_count += 1
+        # Model a sparse file so out-of-order ranged writes behave like SFTP.
+        if self.position > len(self.buffer):
+            self.buffer += b"\x00" * (self.position - len(self.buffer))
         self.buffer = (
             self.buffer[: self.position]
             + data
@@ -128,6 +135,9 @@ class FakeSFTP:
             path = f"{self.cwd.rstrip('/')}/{path}"
         if "r" in mode and path not in self.fs:
             raise FileNotFoundError(errno.ENOENT, "missing", path)
+        parent = posixpath.dirname(path)
+        if ("w" in mode or "+" in mode) and parent not in self.dirs:
+            raise FileNotFoundError(errno.ENOENT, "missing", path)
         close_error = self.next_file_close_error
         self.next_file_close_error = None
         self.last_file = FakeRemoteFile(self.fs, path, mode, close_error=close_error)
@@ -215,7 +225,6 @@ class QueueSSHManager:
 
 @pytest.mark.asyncio
 async def test_list_directory_returns_sorted_schema():
-    from torrus.sftp_manager import SFTPManager
 
     sftp = FakeSFTP()
     ssh_manager = FakeSSHManager(sftp)
@@ -238,7 +247,6 @@ async def test_list_directory_returns_sorted_schema():
 
 @pytest.mark.asyncio
 async def test_accounts_returns_remote_users_and_groups():
-    from torrus.sftp_manager import SFTPManager
 
     sftp = FakeSFTP()
     manager = SFTPManager()
@@ -254,7 +262,6 @@ async def test_accounts_returns_remote_users_and_groups():
 
 @pytest.mark.asyncio
 async def test_open_sftp_uses_source_tab_without_private_state_move():
-    from torrus.sftp_manager import SFTPManager
 
     sftp = FakeSFTP()
     ssh_manager = FakeSSHManager(sftp)
@@ -278,15 +285,17 @@ async def test_open_sftp_uses_source_tab_without_private_state_move():
 
 @pytest.mark.asyncio
 async def test_upload_download_rename_delete_and_mkdir():
-    from torrus.sftp_manager import SFTPManager
 
     sftp = FakeSFTP()
     ssh_manager = FakeSSHManager(sftp)
     manager = SFTPManager()
     try:
         await manager.open_sftp("sess1", "tab1", ssh_manager)
-        upload = await manager.upload_file("tab1", "new.txt", b"new")
-        assert upload["size"] == 3
+        sink = await manager.open_upload_sink(
+            "tab1", "upload1", "/home/app", "new.txt", ssh_manager
+        )
+        await sink.write_at(0, b"new")
+        await sink.finalize()
         download = await manager.download_file("tab1", "new.txt")
         assert download["data"] == "bmV3"
         renamed = await manager.rename("tab1", "new.txt", "renamed.txt")
@@ -309,7 +318,6 @@ async def test_upload_download_rename_delete_and_mkdir():
 
 @pytest.mark.asyncio
 async def test_missing_file_maps_to_file_not_found():
-    from torrus.sftp_manager import SFTPError, SFTPManager
 
     sftp = FakeSFTP()
     ssh_manager = FakeSSHManager(sftp)
@@ -326,7 +334,6 @@ async def test_missing_file_maps_to_file_not_found():
 
 @pytest.mark.asyncio
 async def test_nonempty_directory_delete_reports_actionable_error():
-    from torrus.sftp_manager import SFTPError, SFTPManager
 
     sftp = FakeSFTP()
     sftp.dirs.add("/home/app/full")
@@ -350,7 +357,6 @@ async def test_nonempty_directory_delete_reports_actionable_error():
 
 @pytest.mark.asyncio
 async def test_chmod_missing_file_maps_to_file_not_found():
-    from torrus.sftp_manager import SFTPError, SFTPManager
 
     sftp = FakeSFTP()
     manager = SFTPManager()
@@ -366,7 +372,6 @@ async def test_chmod_missing_file_maps_to_file_not_found():
 
 @pytest.mark.asyncio
 async def test_chown_missing_file_maps_to_file_not_found():
-    from torrus.sftp_manager import SFTPError, SFTPManager
 
     sftp = FakeSFTP()
     manager = SFTPManager()
@@ -390,7 +395,6 @@ def test_connection_closed_maps_from_errno_not_only_message():
 
 @pytest.mark.asyncio
 async def test_prepare_download_errors_before_streaming_headers():
-    from torrus.sftp_manager import SFTPError, SFTPManager
 
     sftp = FakeSFTP()
     ssh_manager = FakeSSHManager(sftp)
@@ -410,7 +414,6 @@ async def test_prepare_download_errors_before_streaming_headers():
 
 @pytest.mark.asyncio
 async def test_tilde_resolves_to_home_directory():
-    from torrus.sftp_manager import SFTPManager
 
     sftp = FakeSFTP()
     sftp.fs["/home/app/from-home.txt"] = b"home"
@@ -428,7 +431,6 @@ async def test_tilde_resolves_to_home_directory():
 
 @pytest.mark.asyncio
 async def test_run_blocking_uses_executor_without_polling(monkeypatch):
-    from torrus.sftp_manager import SFTPManager
 
     async def fail_sleep(_seconds):
         raise AssertionError("_run_blocking must await the executor instead of polling")
@@ -444,111 +446,179 @@ async def test_run_blocking_uses_executor_without_polling(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_stream_upload_enforces_max_bytes():
-    from torrus.sftp_manager import SFTPError, SFTPManager
-
-    async def chunks():
-        yield b"abc"
-        yield b"def"
-
-    sftp = FakeSFTP()
-    ssh_manager = FakeSSHManager(sftp)
-    manager = SFTPManager()
-    try:
-        await manager.open_sftp("sess1", "tab1", ssh_manager)
-        with pytest.raises(SFTPError) as exc:
-            await manager.stream_upload("tab1", "too-big.txt", chunks(), max_bytes=5)
-    finally:
-        await manager.shutdown()
-
-    assert exc.value.code == "FILE_TOO_LARGE"
-    assert "/home/app/too-big.txt" not in sftp.fs
-
-
-@pytest.mark.asyncio
-async def test_stream_upload_size_error_survives_close_failure():
-    from torrus.sftp_manager import SFTPError, SFTPManager
-
-    async def chunks():
-        yield b"abc"
-        yield b"def"
-
-    sftp = FakeSFTP()
-    sftp.next_file_close_error = OSError("Socket is closed")
-    ssh_manager = FakeSSHManager(sftp)
-    manager = SFTPManager()
-    try:
-        await manager.open_sftp("sess1", "tab1", ssh_manager)
-        with pytest.raises(SFTPError) as exc:
-            await manager.stream_upload("tab1", "too-big.txt", chunks(), max_bytes=5)
-    finally:
-        await manager.shutdown()
-
-    assert exc.value.code == "FILE_TOO_LARGE"
-    assert "/home/app/too-big.txt" not in sftp.fs
-
-
-@pytest.mark.asyncio
-async def test_upload_chunk_retries_and_only_replaces_target_when_complete():
+async def test_prepare_upload_directories_creates_only_the_missing_ones():
     from torrus.sftp_manager import SFTPManager
 
-    async def first_chunk():
-        yield b"abc"
-
-    async def final_chunk():
-        yield b"def"
-
     sftp = FakeSFTP()
-    ssh_manager = FakeSSHManager(sftp)
+    sftp.dirs.add("/home/app/trip")
     manager = SFTPManager()
     try:
-        await manager.open_sftp("sess1", "tab1", ssh_manager)
-        await manager.upload_chunk(
-            "tab1", "readme.txt", "upload1", 0, 6, first_chunk(), False
-        )
-        await manager.upload_chunk(
-            "tab1", "readme.txt", "upload1", 0, 6, first_chunk(), False
-        )
-        assert sftp.fs["/home/app/readme.txt"] == b"hello"
-        assert sftp.fs["/home/app/.readme.txt.torrus-upload-upload1"] == b"abc"
-
-        result = await manager.upload_chunk(
-            "tab1", "readme.txt", "upload1", 3, 6, final_chunk(), True
+        await manager.open_sftp("sess1", "tab1", FakeSSHManager(sftp))
+        result = await manager.prepare_upload_directories(
+            "tab1", ["trip", "trip/photos", "trip/photos/2026"]
         )
     finally:
         await manager.shutdown()
 
     assert result == {
         "ok": True,
-        "path": "/home/app/readme.txt",
-        "offset": 6,
-        "complete": True,
+        "created": ["/home/app/trip/photos", "/home/app/trip/photos/2026"],
     }
+    assert "/home/app/trip/photos/2026" in sftp.dirs
+
+
+@pytest.mark.asyncio
+async def test_prepare_upload_directories_reports_a_refused_mkdir():
+    from torrus.sftp_manager import SFTPError, SFTPManager
+
+    sftp = FakeSFTP()
+
+    def refuse(path):
+        raise PermissionError(errno.EACCES, "permission denied", path)
+
+    sftp.mkdir = refuse
+    manager = SFTPManager()
+    try:
+        await manager.open_sftp("sess1", "tab1", FakeSSHManager(sftp))
+        with pytest.raises(SFTPError) as exc:
+            await manager.prepare_upload_directories("tab1", ["locked"])
+    finally:
+        await manager.shutdown()
+
+    assert exc.value.code == "PERMISSION_DENIED"
+    assert "/home/app/locked" in exc.value.message
+
+
+@pytest.mark.asyncio
+async def test_upload_sink_writes_ranges_and_publishes_atomically():
+    from torrus.upload_engine import staging_name
+
+    sftp = FakeSFTP()
+    manager = SFTPManager()
+    try:
+        await manager.open_sftp("sess1", "tab1", FakeSSHManager(sftp))
+        sink = await manager.open_upload_sink(
+            "tab1", "upload1", "/home/app", "readme.txt", FakeSSHManager(sftp)
+        )
+        await sink.write_at(3, b"def")
+        await sink.write_at(0, b"abc")
+        await sink.finalize()
+    finally:
+        await manager.shutdown()
+
     assert sftp.fs["/home/app/readme.txt"] == b"abcdef"
-    assert "/home/app/.readme.txt.torrus-upload-upload1" not in sftp.fs
+    assert staging_name("readme.txt", "upload1") not in sftp.fs
     assert sftp.last_file is not None and sftp.last_file.pipelined
 
 
 @pytest.mark.asyncio
-async def test_expected_session_id_blocks_cross_session_tab_access():
-    from torrus.sftp_manager import SFTPError, SFTPManager
-
-    async def chunks():
-        yield b"ok"
+async def test_upload_sink_keeps_the_destination_untouched_until_finalize():
+    from torrus.upload_engine import staging_name
 
     sftp = FakeSFTP()
-    ssh_manager = FakeSSHManager(sftp)
     manager = SFTPManager()
     try:
-        await manager.open_sftp("session-a", "tab1", ssh_manager)
+        await manager.open_sftp("sess1", "tab1", FakeSSHManager(sftp))
+        sink = await manager.open_upload_sink(
+            "tab1", "upload1", "/home/app", "readme.txt", FakeSSHManager(sftp)
+        )
+        await sink.write_at(0, b"replacement")
+        await sink.abort()
+    finally:
+        await manager.shutdown()
+
+    assert sftp.fs["/home/app/readme.txt"] == b"hello"
+    assert not [path for path in sftp.fs if staging_name("readme.txt", "upload1") in path]
+
+
+@pytest.mark.asyncio
+async def test_upload_sink_coalesces_sequential_writes_into_one_sftp_write():
+    sftp = FakeSFTP()
+    manager = SFTPManager()
+    try:
+        await manager.open_sftp("sess1", "tab1", FakeSSHManager(sftp))
+        sink = await manager.open_upload_sink(
+            "tab1", "upload1", "/home/app", "coalesced.bin", FakeSSHManager(sftp)
+        )
+        for index in range(64):
+            await sink.write_at(index * 1024, b"x" * 1024)
+        await sink.finalize()
+    finally:
+        await manager.shutdown()
+
+    assert sftp.fs["/home/app/coalesced.bin"] == b"x" * (64 * 1024)
+    # One write per flush, not one per streamed buffer.
+    assert sftp.last_file is not None and sftp.last_file.write_count == 1
+
+
+@pytest.mark.asyncio
+async def test_upload_sink_releases_its_channel_on_abort():
+    sftp = FakeSFTP()
+    manager = SFTPManager()
+    try:
+        await manager.open_sftp("sess1", "tab1", FakeSSHManager(sftp))
+        sink = await manager.open_upload_sink(
+            "tab1", "upload1", "/home/app", "channelled.bin", FakeSSHManager(sftp)
+        )
+        await sink.write_at(0, b"data")
+        assert sftp.close_count == 0
+        await sink.abort()
+        # The upload channel is released immediately, not when the tab closes.
+        assert sftp.close_count == 1
+    finally:
+        await manager.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_upload_sink_reports_a_missing_destination_directory():
+    from torrus.upload_engine import UploadSinkError
+
+    sftp = FakeSFTP()
+    manager = SFTPManager()
+    try:
+        await manager.open_sftp("sess1", "tab1", FakeSSHManager(sftp))
+        sink = await manager.open_upload_sink(
+            "tab1", "upload1", "/home/app/nope", "x.txt", FakeSSHManager(sftp)
+        )
+        with pytest.raises(UploadSinkError) as exc:
+            await sink.write_at(0, b"data")
+        await sink.abort()
+    finally:
+        await manager.shutdown()
+
+    assert exc.value.code == "FILE_NOT_FOUND"
+    assert exc.value.status == 404
+
+
+@pytest.mark.asyncio
+async def test_open_upload_sink_rejects_cross_session_tab_access():
+
+    sftp = FakeSFTP()
+    manager = SFTPManager()
+    try:
+        await manager.open_sftp("session-a", "tab1", FakeSSHManager(sftp))
         with pytest.raises(SFTPError) as upload_exc:
-            await manager.stream_upload(
-                "tab1", "x.txt", chunks(), max_bytes=10, expected_session_id="session-b"
+            await manager.open_upload_sink(
+                "tab1",
+                "upload1",
+                "/home/app",
+                "x.txt",
+                FakeSSHManager(sftp),
+                expected_session_id="session-b",
             )
+        sink = await manager.open_upload_sink(
+            "tab1",
+            "upload1",
+            "/home/app",
+            "x.txt",
+            FakeSSHManager(sftp),
+            expected_session_id="session-a",
+        )
         with pytest.raises(SFTPError) as download_exc:
             await manager.prepare_download(
                 "tab1", "readme.txt", expected_session_id="session-b"
             )
+        await sink.abort()
     finally:
         await manager.shutdown()
 
@@ -558,28 +628,7 @@ async def test_expected_session_id_blocks_cross_session_tab_access():
 
 
 @pytest.mark.asyncio
-async def test_concurrent_open_sftp_closes_superseded_client():
-    from torrus.sftp_manager import SFTPManager
-
-    first = FakeSFTP()
-    second = FakeSFTP()
-    ssh_manager = QueueSSHManager([first, second])
-    manager = SFTPManager()
-    try:
-        await asyncio.gather(
-            manager.open_sftp("sess1", "tab1", ssh_manager),
-            manager.open_sftp("sess1", "tab1", ssh_manager),
-        )
-    finally:
-        await manager.shutdown()
-
-    assert first.close_count == 1
-    assert second.close_count == 1
-
-
-@pytest.mark.asyncio
 async def test_stream_download_releases_tab_lock_between_chunks():
-    from torrus.sftp_manager import SFTPManager
 
     sftp = FakeSFTP()
     sftp.fs["/home/app/big.txt"] = b"abcdef"
@@ -603,7 +652,6 @@ async def test_stream_download_releases_tab_lock_between_chunks():
 
 @pytest.mark.asyncio
 async def test_stream_download_maps_midstream_disconnect_to_interrupted():
-    from torrus.sftp_manager import SFTPError, SFTPManager
 
     class InterruptingFile(FakeRemoteFile):
         def read(self, size: int | None = None) -> bytes:
@@ -636,7 +684,6 @@ async def test_stream_download_maps_midstream_disconnect_to_interrupted():
 
 @pytest.mark.asyncio
 async def test_run_blocking_closes_fds_when_add_reader_fails(monkeypatch):
-    from torrus.sftp_manager import SFTPManager
 
     closed: list[int] = []
 
@@ -664,7 +711,6 @@ async def test_run_blocking_closes_fds_when_add_reader_fails(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_stream_download_yields_chunks():
-    from torrus.sftp_manager import SFTPManager
 
     sftp = FakeSFTP()
     ssh_manager = FakeSSHManager(sftp)
@@ -685,7 +731,6 @@ async def test_stream_download_yields_chunks():
 
 @pytest.mark.asyncio
 async def test_ssh_disconnect_cleans_matching_sftp_sessions():
-    from torrus.sftp_manager import SFTPManager
 
     sftp = FakeSFTP()
     manager = SFTPManager()
@@ -702,7 +747,6 @@ async def test_ssh_disconnect_cleans_matching_sftp_sessions():
 
 @pytest.mark.asyncio
 async def test_ssh_tab_disconnect_cleans_dependent_sftp_sessions():
-    from torrus.sftp_manager import SFTPManager
 
     sftp = FakeSFTP()
     manager = SFTPManager()

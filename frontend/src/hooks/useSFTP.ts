@@ -3,19 +3,15 @@ import type { Socket } from 'socket.io-client'
 import { useSFTPStore } from '@/store/sftpStore'
 import { useTerminalStore } from '@/store/terminalStore'
 import type { SFTPEntry, SFTPGroup, SFTPUser } from '@/types'
+import { SpeedTracker, UploadClient, UploadState, uploadFile } from '@/lib/upload-engine'
 import { uuid } from '@/utils/uuid'
 
 // Keep inline Socket.IO downloads below server memory/message limits. Larger
 // files automatically use streaming HTTP; users do not need to choose a path.
 const LARGE_UPLOAD_THRESHOLD = 5 * 1024 * 1024
-const MIN_UPLOAD_CHUNK_BYTES = 8 * 1024 * 1024
-const MAX_UPLOAD_CHUNK_BYTES = 64 * 1024 * 1024
-const TARGET_UPLOAD_CHUNKS = 128
-const UPLOAD_RETRY_LIMIT = 3
+/** Files uploaded at the same time; each file's chunks are pipelined inside the engine. */
 const MAX_CONCURRENT_UPLOADS = 2
 const LISTING_TIMEOUT_MS = 15_000
-// Max time a single chunk XHR may take before it is aborted and retried.
-const UPLOAD_CHUNK_TIMEOUT_MS = 30_000
 
 interface ListingPayload {
   tab_id: string
@@ -56,11 +52,31 @@ interface AccountsPayload {
   message?: string
 }
 
+/** A file plus the folder path it was dropped under. */
+export interface UploadCandidate {
+  file: File
+  relativePath: string
+}
+
+interface MkdirsResult {
+  ok?: boolean
+  message?: string
+}
+
+/** How long a folder-upload request may wait for its directories to exist. */
+const MKDIRS_TIMEOUT_MS = 15_000
+
 interface PendingUpload {
   file: File
   remotePath: string
-  uploadId: string
-  offset: number
+  /** Server-confirmed session, reused so a retry resumes from committed bytes. */
+  session: {
+    uploadId: string
+    chunkSize: number
+    concurrency: number
+    ranges: number[][]
+    size: number
+  } | null
 }
 
 function joinPath(base: string, name: string): string {
@@ -107,95 +123,6 @@ function itemLabel(path?: string): string {
 
 function plural(count: number, singular: string): string {
   return `${count} ${singular}${count === 1 ? '' : 's'}`
-}
-
-/**
- * Tracks upload progress samples to compute a sliding-window transfer speed.
- * One instance is owned by each active upload transfer.
- */
-export class SpeedTracker {
-  private samples: Array<{ t: number; b: number }> = []
-  private windowMs = 5000
-  private maxSamples = 20
-
-  sample(bytes: number) {
-    const now = Date.now()
-    this.samples.push({ t: now, b: bytes })
-    this.evict(now)
-  }
-
-  /** Bytes per second over the last 5 seconds (0 when there is not enough data). */
-  speed(): number {
-    const now = Date.now()
-    this.evict(now)
-    if (this.samples.length < 2) return 0
-    const oldest = this.samples[0]
-    const newest = this.samples[this.samples.length - 1]
-    const deltaBytes = newest.b - oldest.b
-    const deltaMs = newest.t - oldest.t
-    if (deltaMs <= 0) return 0
-    return Math.max(0, (deltaBytes / deltaMs) * 1000)
-  }
-
-  reset() {
-    this.samples = []
-  }
-
-  private evict(now: number) {
-    this.samples = this.samples.filter(s => now - s.t < this.windowMs)
-    if (this.samples.length > this.maxSamples) this.samples.shift()
-  }
-}
-
-/**
- * Clamps per-chunk XHR progress to a monotonically non-decreasing byte count.
- * A retried chunk creates a fresh XHR whose `loaded` starts back at 0; without
- * clamping the displayed transfer bytes would jump backwards on every retry.
- */
-export function clampUploadProgress(
-  lastReported: number,
-  offset: number,
-  loaded: number,
-  fileSize: number,
-): number {
-  return Math.min(fileSize, Math.max(lastReported, offset + loaded))
-}
-
-export function uploadChunkSize(fileSize: number): number {
-  if (fileSize <= 0) return MIN_UPLOAD_CHUNK_BYTES
-  return Math.min(
-    MAX_UPLOAD_CHUNK_BYTES,
-    Math.max(MIN_UPLOAD_CHUNK_BYTES, Math.ceil(fileSize / TARGET_UPLOAD_CHUNKS)),
-  )
-}
-
-function uploadChunkWithProgress(url: string, body: Blob, onProgress: (bytes: number) => void): Promise<{ offset?: number }> {
-  return new Promise((resolve, reject) => {
-    const request = new XMLHttpRequest()
-    request.open('POST', url)
-    request.timeout = UPLOAD_CHUNK_TIMEOUT_MS
-    request.upload.onprogress = event => onProgress(event.loaded)
-    request.onload = () => {
-      let payload: { offset?: number; message?: string; code?: string } | null = null
-      try { payload = JSON.parse(request.responseText) } catch { /* response handled below */ }
-      if (request.status >= 200 && request.status < 300) {
-        resolve(payload ?? {})
-      } else {
-        const transientCode =
-          payload?.code === 'CONNECTION_CLOSED' || payload?.code === 'TRANSFER_FAILED'
-        reject(Object.assign(new Error(payload?.message ?? `Upload failed (${request.status})`), {
-          retryable:
-            request.status >= 500 || request.status === 408 || request.status === 429 || transientCode,
-        }))
-      }
-    }
-    request.ontimeout = () => reject(Object.assign(
-      new Error(`Upload timed out after ${UPLOAD_CHUNK_TIMEOUT_MS / 1000}s`),
-      { retryable: true },
-    ))
-    request.onerror = () => reject(Object.assign(new Error('Upload connection failed'), { retryable: true }))
-    request.send(body)
-  })
 }
 
 function deleteSuccessMessage(payload: ListingPayload): string {
@@ -272,6 +199,7 @@ export function useSFTP(tabId: string, sourceTabId: string | undefined, socket: 
   const [groups, setGroups] = useState<SFTPGroup[]>([])
   const openedRef = useRef(false)
   const pendingUploadsRef = useRef(new Map<string, PendingUpload>())
+  const pendingMkdirsRef = useRef(new Map<string, (result: MkdirsResult) => void>())
   const pendingListingPathRef = useRef<string | null>(null)
   const queuedSamePathRefreshRef = useRef(false)
   const listingTimeoutRef = useRef<number | null>(null)
@@ -492,7 +420,13 @@ export function useSFTP(tabId: string, sourceTabId: string | undefined, socket: 
       }
       refreshCurrentDirectory()
     }
-    const onUpload = mutationHandler('Upload failed')
+    const onMkdirs = (payload: { tab_id?: string; request_id?: string; ok?: boolean; message?: string }) => {
+      if (payload.tab_id !== tabId || !payload.request_id) return
+      const settle = pendingMkdirsRef.current.get(payload.request_id)
+      if (!settle) return
+      pendingMkdirsRef.current.delete(payload.request_id)
+      settle({ ok: payload.ok, message: payload.message })
+    }
     const onRename = mutationHandler('Could not rename item')
     const onMkdir = mutationHandler('Could not create folder')
     const onDelete = (payload: ListingPayload) => {
@@ -536,10 +470,10 @@ export function useSFTP(tabId: string, sourceTabId: string | undefined, socket: 
     socket.on('sftp:open:result', onListing)
     socket.on('sftp:list:result', onListing)
     socket.on('sftp:error', onError)
-    socket.on('sftp:upload:result', onUpload)
     socket.on('sftp:delete:result', onDelete)
     socket.on('sftp:rename:result', onRename)
     socket.on('sftp:mkdir:result', onMkdir)
+    socket.on('sftp:mkdirs:result', onMkdirs)
     socket.on('sftp:chmod:result', onChmod)
     socket.on('sftp:chown:result', onChown)
     socket.on('sftp:download:result', onDownload)
@@ -548,10 +482,10 @@ export function useSFTP(tabId: string, sourceTabId: string | undefined, socket: 
       socket.off('sftp:open:result', onListing)
       socket.off('sftp:list:result', onListing)
       socket.off('sftp:error', onError)
-      socket.off('sftp:upload:result', onUpload)
       socket.off('sftp:delete:result', onDelete)
       socket.off('sftp:rename:result', onRename)
       socket.off('sftp:mkdir:result', onMkdir)
+      socket.off('sftp:mkdirs:result', onMkdirs)
       socket.off('sftp:chmod:result', onChmod)
       socket.off('sftp:chown:result', onChown)
       socket.off('sftp:download:result', onDownload)
@@ -562,61 +496,39 @@ export function useSFTP(tabId: string, sourceTabId: string | undefined, socket: 
   const resumeUpload = useCallback(async (transferId: string, tracker?: SpeedTracker) => {
     const pending = pendingUploadsRef.current.get(transferId)
     if (!pending) return
-    const { file, remotePath, uploadId } = pending
-    const chunkSize = uploadChunkSize(file.size)
+    const { file, remotePath } = pending
+    const speed = tracker ?? new SpeedTracker()
     updateTransfer(transferId, { status: 'active', error: undefined })
     try {
-      const initResponse = await fetch(
-        `/sftp/upload/init?session_id=${encodeURIComponent(sessionId)}&tab_id=${encodeURIComponent(tabId)}&upload_id=${uploadId}`,
-        { method: 'POST' },
-      )
-      if (!initResponse.ok) {
-        const body = await initResponse.json().catch(() => null) as { message?: string } | null
-        throw new Error(body?.message ?? `Upload failed (${initResponse.status})`)
-      }
-      let lastReportedBytes = 0
-      do {
-        const offset = pending.offset
-        const end = Math.min(offset + chunkSize, file.size)
-        const complete = end === file.size
-        let result: { offset?: number } | undefined
-        let lastError: unknown
-        for (let attempt = 0; attempt < UPLOAD_RETRY_LIMIT; attempt++) {
-          try {
-            result = await uploadChunkWithProgress(
-              `/sftp/upload?session_id=${encodeURIComponent(sessionId)}&tab_id=${encodeURIComponent(tabId)}&path=${encodeURIComponent(remotePath)}&upload_id=${uploadId}&offset=${offset}&total=${file.size}&complete=${complete}`,
-              file.slice(offset, end),
-              loaded => {
-                const clamped = clampUploadProgress(lastReportedBytes, offset, loaded, file.size)
-                lastReportedBytes = clamped
-                tracker?.sample(clamped)
-                updateTransfer(transferId, {
-                  bytes: clamped,
-                  progress: Math.round((clamped / file.size) * 100),
-                  speed: tracker?.speed() ?? 0,
-                })
-              },
-            )
-            break
-          } catch (error) {
-            lastError = error
-            if ((error as { retryable?: boolean }).retryable === false) break
-            if (attempt + 1 < UPLOAD_RETRY_LIMIT) {
-              await new Promise(resolve => window.setTimeout(resolve, 500 * (attempt + 1)))
+      const client = new UploadClient({
+        params: { session_id: sessionId, tab_id: tabId },
+      })
+      await uploadFile({
+        client,
+        file,
+        destDir: parentPath(remotePath),
+        session: pending.session,
+        callbacks: {
+          onSession: session => {
+            pending.session = session
+          },
+          onProgress: committed => {
+            speed.sample(committed)
+            updateTransfer(transferId, {
+              bytes: committed,
+              progress: file.size > 0 ? Math.round((committed / file.size) * 100) : 0,
+              speed: speed.speed(),
+            })
+          },
+          onState: state => {
+            if (state === UploadState.PROCESSING) {
+              // The server is writing to the remote host (or a DLP scanner is
+              // holding the response). Show the wait instead of looking stuck.
+              updateTransfer(transferId, { speed: speed.speed() })
             }
-          }
-        }
-        if (!result) throw lastError instanceof Error ? lastError : new Error('Upload failed')
-        const nextOffset = result.offset ?? end
-        if ((!complete && nextOffset <= offset) || nextOffset > file.size) throw new Error('Upload did not advance')
-        pending.offset = nextOffset
-        lastReportedBytes = nextOffset
-        updateTransfer(transferId, {
-          bytes: nextOffset,
-          progress: Math.round((nextOffset / file.size) * 100),
-          speed: tracker?.speed() ?? 0,
-        })
-      } while (pending.offset < file.size)
+          },
+        },
+      })
       pendingUploadsRef.current.delete(transferId)
       updateTransfer(transferId, { status: 'done', progress: 100, bytes: file.size, speed: 0 })
       refreshCurrentDirectory()
@@ -629,21 +541,75 @@ export function useSFTP(tabId: string, sourceTabId: string | undefined, socket: 
     }
   }, [refreshCurrentDirectory, sessionId, tabId, updateTransfer])
 
-  const uploadFiles = useCallback(async (files: FileList | File[]) => {
+  /**
+   * Create the destination folders for a folder upload.
+   *
+   * One request covers the whole tree: the server checks each path and only
+   * creates the missing ones, so re-uploading into an existing folder works.
+   */
+  const prepareUploadDirectories = useCallback(
+    (paths: string[]) => new Promise<MkdirsResult>(resolve => {
+      const requestId = uuid().replace(/-/g, '')
+      const timer = window.setTimeout(() => {
+        pendingMkdirsRef.current.delete(requestId)
+        resolve({ ok: false, message: 'Timed out creating the folders for this upload.' })
+      }, MKDIRS_TIMEOUT_MS)
+      pendingMkdirsRef.current.set(requestId, result => {
+        window.clearTimeout(timer)
+        resolve(result)
+      })
+      socket.emit('sftp:mkdirs', {
+        session_id: sessionId,
+        tab_id: tabId,
+        paths,
+        request_id: requestId,
+      })
+    }),
+    [socket, sessionId, tabId],
+  )
+
+  const uploadFiles = useCallback(async (files: Iterable<File | UploadCandidate>) => {
     const currentPath = useSFTPStore.getState().tabs[tabId]?.path ?? '.'
     // Defensive: enterprise browser extensions (Menlo, ForcePoint) and other
     // content scripts can corrupt a dropped FileList with null or partially-
     // formed entries. Filter them out instead of crashing on `file.name`.
-    const validFiles = Array.from(files).filter((f): f is File =>
-      f != null && typeof f.name === 'string'
-    )
-    if (validFiles.length === 0) return
-    const pendingIds = validFiles.map(file => {
-      const transferId = `${tabId}-${file.name}-${Date.now()}`
+    const candidates: UploadCandidate[] = []
+    for (const candidate of files) {
+      const file = candidate instanceof File ? candidate : candidate?.file
+      if (!file || typeof file.name !== 'string') continue
+      const relativePath =
+        (candidate instanceof File ? '' : candidate.relativePath) ||
+        file.webkitRelativePath ||
+        file.name
+      candidates.push({ file, relativePath })
+    }
+    if (candidates.length === 0) return
+
+    const needed = new Set<string>()
+    for (const { relativePath } of candidates) {
+      const parts = relativePath.split('/').filter(Boolean).slice(0, -1)
+      for (let depth = 1; depth <= parts.length; depth += 1) {
+        needed.add(joinPath(currentPath, parts.slice(0, depth).join('/')))
+      }
+    }
+    if (needed.size > 0) {
+      // Shallowest first: a child cannot be created before its parent.
+      const ordered = [...needed].sort(
+        (a, b) => a.split('/').length - b.split('/').length
+      )
+      const prepared = await prepareUploadDirectories(ordered)
+      if (prepared.ok === false) {
+        setError(tabId, prepared.message ?? 'Could not create the folders for this upload.')
+        return
+      }
+    }
+
+    const pendingIds = candidates.map(({ file, relativePath }) => {
+      const transferId = `${tabId}-${relativePath}-${Date.now()}`
       addTransfer({
         id: transferId,
         tabId,
-        name: file.name,
+        name: relativePath,
         direction: 'upload',
         status: 'active',
         progress: 0,
@@ -652,22 +618,22 @@ export function useSFTP(tabId: string, sourceTabId: string | undefined, socket: 
       })
       pendingUploadsRef.current.set(transferId, {
         file,
-        remotePath: joinPath(currentPath, file.name),
-        uploadId: uuid().replace(/-/g, ''),
-        offset: 0,
+        remotePath: joinPath(currentPath, relativePath),
+        session: null,
       })
       return transferId
     })
     let next = 0
+    // Chunk concurrency per file is the server's call: one SFTP handle serves a
+    // session, so parallel chunk requests would only queue at the sink.
     const worker = async () => {
       while (next < pendingIds.length) {
         const transferId = pendingIds[next++]
-        const tracker = new SpeedTracker()
-        await resumeUpload(transferId, tracker)
+        await resumeUpload(transferId, new SpeedTracker())
       }
     }
     await Promise.all(Array.from({ length: Math.min(MAX_CONCURRENT_UPLOADS, pendingIds.length) }, worker))
-  }, [tabId, addTransfer, resumeUpload])
+  }, [tabId, addTransfer, resumeUpload, prepareUploadDirectories, setError])
 
   const retryUpload = useCallback((transferId: string) => {
     void resumeUpload(transferId, new SpeedTracker())

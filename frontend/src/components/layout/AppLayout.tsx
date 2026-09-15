@@ -40,7 +40,6 @@ const SFTP_AUTH_RESULT_EVENTS = [
   'sftp:error',
   'sftp:open:result',
   'sftp:list:result',
-  'sftp:upload:result',
   'sftp:delete:result',
   'sftp:rename:result',
   'sftp:mkdir:result',

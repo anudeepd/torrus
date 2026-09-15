@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.2.47] - 2026-09-15
+
+### Changed
+
+- Route SFTP uploads through the chunked upload engine shared with x-wing: the server tracks committed byte ranges, so a stalled or interrupted upload resumes from the bytes it already holds instead of re-sending a whole chunk.
+- Keep one SFTP channel and one remote staging file per upload session, coalesce writes before they reach the transport, and publish with a single rename so the destination never shows a partial file.
+- Drop the per-chunk 30-second client timeout that killed slow or DLP-inspected uploads; a request is abandoned only after a period with no byte movement.
+- Chunk size no longer grows with file size: large files transfer in fixed 8 MB windows that the server may tune.
+- Remove the Socket.IO inline upload path (`sftp:upload`), superseded by the chunked engine for every file size.
+
+### Added
+
+- Upload a whole folder by dragging it onto the file browser: the drop is walked locally, the destination folders are created on the remote host in one request (`sftp:mkdirs`), and each file uploads into its own folder. Re-uploading into an existing folder is a no-op for the folders that are already there.
+
+### Fixed
+
+- Show "waiting for server" while the server writes to the remote host instead of an apparently frozen upload.
+- Explain an unreadable drag-drop instead of silently creating a zero-byte file named after the dropped folder.
+- Keep the zip progress overlay on screen while an archive is building: a second "Download N as zip" request is ignored instead of clearing the overlay when the first request finishes.
+
 ## [0.2.45] - 2026-09-01
 
 ### Added

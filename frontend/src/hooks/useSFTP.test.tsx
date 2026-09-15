@@ -1,10 +1,80 @@
 import { act, renderHook } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Socket } from 'socket.io-client'
-import { uploadChunkSize, useSFTP } from './useSFTP'
+import { useSFTP } from './useSFTP'
 import { useSFTPStore } from '@/store/sftpStore'
 import { useTerminalStore } from '@/store/terminalStore'
 import { createMockSocket } from '@/test/mocks/socket'
+
+/**
+ * Engine-compatible XMLHttpRequest stand-in: `send` reports progress and then
+ * the server's committed ranges, so the upload finishes inside `act`.
+ */
+interface UploadScriptEntry {
+  ranges?: number[][]
+  received?: number
+  status?: number
+  code?: string
+  message?: string
+}
+
+class MockUploadRequest {
+  static script: UploadScriptEntry[] = []
+  status = 200
+  responseText = ''
+  url = ''
+  upload = {
+    listeners: new Map<string, Array<(event: { loaded: number }) => void>>(),
+    addEventListener(type: string, handler: (event: { loaded: number }) => void) {
+      const handlers = this.listeners.get(type) ?? []
+      handlers.push(handler)
+      this.listeners.set(type, handlers)
+    },
+    emit(type: string, event: { loaded: number }) {
+      for (const handler of this.listeners.get(type) ?? []) handler(event)
+    },
+  }
+  private listeners = new Map<string, Array<() => void>>()
+
+  addEventListener(type: string, handler: () => void) {
+    const handlers = this.listeners.get(type) ?? []
+    handlers.push(handler)
+    this.listeners.set(type, handlers)
+  }
+
+  removeEventListener() {}
+
+  open(_method: string, url: string) {
+    this.url = url
+  }
+
+  abort() {
+    queueMicrotask(() => this.emit('abort'))
+  }
+
+  send(body: Blob) {
+    const step = MockUploadRequest.script.shift() ?? {}
+    this.upload.emit('loadstart', { loaded: 0 })
+    this.upload.emit('progress', { loaded: body.size })
+    this.upload.emit('load', { loaded: body.size })
+    this.status = step.status ?? 200
+    this.responseText = JSON.stringify(
+      step.status
+        ? { code: step.code ?? 'TRANSFER_FAILED', message: step.message ?? 'SFTP write failed' }
+        : { ranges: step.ranges ?? [], received: step.received ?? 0 },
+    )
+    this.emit('load')
+  }
+
+  private emit(type: string) {
+    for (const handler of this.listeners.get(type) ?? []) handler()
+  }
+}
+
+function createMockUploadRequest(script: UploadScriptEntry[]) {
+  MockUploadRequest.script = script
+  return MockUploadRequest
+}
 
 describe('useSFTP', () => {
   const tabId = 'sftp-tab'
@@ -30,13 +100,6 @@ describe('useSFTP', () => {
 
   afterEach(() => {
     vi.useRealTimers()
-  })
-
-  it('uses larger upload chunks for very large files without exceeding 64 MB', () => {
-    expect(uploadChunkSize(0)).toBe(8 * 1024 * 1024)
-    expect(uploadChunkSize(1024 * 1024 * 1024)).toBe(8 * 1024 * 1024)
-    expect(uploadChunkSize(5 * 1024 * 1024 * 1024)).toBe(40 * 1024 * 1024)
-    expect(uploadChunkSize(10 * 1024 * 1024 * 1024)).toBe(64 * 1024 * 1024)
   })
 
   it('marks the tab dead when a directory listing reports a closed connection', () => {
@@ -86,7 +149,7 @@ describe('useSFTP', () => {
     renderHook(() => useSFTP(tabId, 'terminal-tab', socket as unknown as Socket))
 
     act(() => {
-      socket._trigger('sftp:upload:result', {
+      socket._trigger('sftp:rename:result', {
         tab_id: tabId,
         ok: false,
         code: 'CONNECTION_CLOSED',
@@ -96,7 +159,7 @@ describe('useSFTP', () => {
 
     expect(useSFTPStore.getState().tabs[tabId]).toMatchObject({
       disconnected: true,
-      error: 'Upload failed: SSH connection lost. Reconnect to continue.',
+      error: 'Could not rename item: SSH connection lost. Reconnect to continue.',
     })
     expect(useTerminalStore.getState().tabs[0].status).toBe('dead')
   })
@@ -334,26 +397,18 @@ describe('useSFTP', () => {
     })
   })
 
-  it('uploads through the resumable chunk endpoint and reports byte progress', async () => {
+  it('uploads through the resumable protocol and reports byte progress', async () => {
     const socket = createMockSocket()
-    const fetchMock = vi.fn().mockResolvedValue({
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => ({
       ok: true,
-      json: async () => ({ offset: 5 }),
-    })
+      status: 200,
+      json: async () =>
+        String(input).includes('/init')
+          ? { upload_id: 'abc', chunk_size: 5, concurrency: 1, size: 5 }
+          : { path: 'release.txt', size: 5 },
+    }))
     vi.stubGlobal('fetch', fetchMock)
-    class MockUploadRequest {
-      status = 200
-      responseText = '{"offset":5}'
-      upload: { onprogress?: (event: { loaded: number }) => void } = {}
-      onload: (() => void) | null = null
-      onerror: (() => void) | null = null
-      open() {}
-      send() {
-        this.upload.onprogress?.({ loaded: 5 })
-        this.onload?.()
-      }
-    }
-    vi.stubGlobal('XMLHttpRequest', MockUploadRequest)
+    vi.stubGlobal('XMLHttpRequest', createMockUploadRequest([{ ranges: [[0, 5]], received: 5 }]))
     const { result } = renderHook(() => useSFTP(tabId, 'terminal-tab', socket as unknown as Socket))
     socket.emit.mockClear()
 
@@ -361,17 +416,152 @@ describe('useSFTP', () => {
       await result.current.uploadFiles([new File(['hello'], 'release.txt')])
     })
 
-    expect(fetchMock).toHaveBeenCalledOnce()
-    expect(String(fetchMock.mock.calls[0][0])).toContain('/sftp/upload/init?')
+    // init and complete go through fetch; the body goes through the engine's XHR.
+    expect(fetchMock.mock.calls.map(call => String(call[0]))).toEqual([
+      '/_upload/init?session_id=test-session&tab_id=sftp-tab',
+      '/_upload/abc/complete?session_id=test-session&tab_id=sftp-tab',
+    ])
     expect(useSFTPStore.getState().transfers[0]).toMatchObject({
       status: 'done',
       bytes: 5,
       progress: 100,
     })
-    expect(socket.emit).not.toHaveBeenCalledWith('sftp:upload', expect.anything())
     expect(socket.emit).toHaveBeenCalledWith('sftp:list', expect.objectContaining({ path: '.' }))
   })
 
+  it('creates the folders a dropped tree needs before uploading into them', async () => {
+    const socket = createMockSocket()
+    const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<unknown>>(async input => ({
+      ok: true,
+      status: 200,
+      json: async () =>
+        String(input).includes('/init')
+          ? { upload_id: 'abc', chunk_size: 5, concurrency: 1, size: 5 }
+          : { path: 'note.txt', size: 5 },
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal(
+      'XMLHttpRequest',
+      createMockUploadRequest([
+        { ranges: [[0, 5]], received: 5 },
+        { ranges: [[0, 5]], received: 5 },
+      ]),
+    )
+    const { result } = renderHook(() => useSFTP(tabId, 'terminal-tab', socket as unknown as Socket))
+
+    const upload = result.current.uploadFiles([
+      { file: new File(['hello'], 'note.txt'), relativePath: 'trip/photos/note.txt' },
+      { file: new File(['world'], 'deep.txt'), relativePath: 'trip/deep.txt' },
+    ])
+
+    await vi.waitFor(() =>
+      expect(socket.emit).toHaveBeenCalledWith(
+        'sftp:mkdirs',
+        expect.objectContaining({ paths: ['trip', 'trip/photos'], tab_id: tabId }),
+      ),
+    )
+    // Nothing is uploaded until the folders exist.
+    expect(fetchMock).not.toHaveBeenCalled()
+
+    const mkdirs = socket.emit.mock.calls.find(call => call[0] === 'sftp:mkdirs')![1] as {
+      request_id: string
+    }
+    await act(async () => {
+      socket._trigger('sftp:mkdirs:result', {
+        tab_id: tabId,
+        request_id: mkdirs.request_id,
+        ok: true,
+        created: ['trip', 'trip/photos'],
+      })
+      await upload
+    })
+
+    // Each file uploads into its own folder on the remote host.
+    const bodies = fetchMock.mock.calls
+      .filter(call => String(call[0]).includes('/init'))
+      .map(call => JSON.parse(String((call[1] as RequestInit).body)))
+      .sort((a, b) => a.dir.localeCompare(b.dir))
+    expect(bodies).toEqual([
+      { filename: 'deep.txt', size: 5, dir: 'trip' },
+      { filename: 'note.txt', size: 5, dir: 'trip/photos' },
+    ])
+    expect(useSFTPStore.getState().transfers.map(item => item.name).sort()).toEqual([
+      'trip/deep.txt',
+      'trip/photos/note.txt',
+    ])
+    expect(useSFTPStore.getState().transfers.every(item => item.status === 'done')).toBe(true)
+  })
+
+  it('surfaces a folder that could not be created instead of uploading into it', async () => {
+    const socket = createMockSocket()
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const { result } = renderHook(() => useSFTP(tabId, 'terminal-tab', socket as unknown as Socket))
+
+    const upload = result.current.uploadFiles([
+      { file: new File(['hello'], 'note.txt'), relativePath: 'locked/note.txt' },
+    ])
+    await vi.waitFor(() => expect(socket.emit).toHaveBeenCalledWith('sftp:mkdirs', expect.anything()))
+    const mkdirs = socket.emit.mock.calls.find(call => call[0] === 'sftp:mkdirs')![1] as {
+      request_id: string
+    }
+
+    await act(async () => {
+      socket._trigger('sftp:mkdirs:result', {
+        tab_id: tabId,
+        request_id: mkdirs.request_id,
+        ok: false,
+        code: 'PERMISSION_DENIED',
+        message: 'Permission denied: /locked',
+      })
+      await upload
+    })
+
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(useSFTPStore.getState().tabs[tabId]?.error).toBe('Permission denied: /locked')
+  })
+
+  it('resumes a failed window from the bytes the server confirmed', async () => {
+    const socket = createMockSocket()
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => ({
+      ok: true,
+      status: 200,
+      json: async () =>
+        String(input).includes('/init')
+          ? { upload_id: 'abc', chunk_size: 4, concurrency: 1, size: 8 }
+          : { path: 'resume.txt', size: 8 },
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    const requests: MockUploadRequest[] = []
+    vi.stubGlobal(
+      'XMLHttpRequest',
+      class extends MockUploadRequest {
+        constructor() {
+          super()
+          requests.push(this)
+        }
+      },
+    )
+    createMockUploadRequest([
+      { ranges: [[0, 4]], received: 4 },
+      { status: 502, code: 'TRANSFER_FAILED', message: 'SFTP write failed' },
+      { ranges: [[0, 8]], received: 4 },
+    ])
+    const { result } = renderHook(() => useSFTP(tabId, 'terminal-tab', socket as unknown as Socket))
+
+    await act(async () => {
+      await result.current.uploadFiles([new File(['abcdefgh'], 'resume.txt')])
+    })
+
+    expect(useSFTPStore.getState().transfers[0]).toMatchObject({
+      status: 'done',
+      bytes: 8,
+      progress: 100,
+    })
+    // The retry re-sent the failed window only: never back to offset 0.
+    expect(requests.map(request => new URL(request.url, 'http://x').searchParams.get('offset')))
+      .toEqual(['0', '4', '4'])
+  })
 
   it('starts large downloads through the browser without buffering the file', async () => {
     const socket = createMockSocket()

@@ -604,6 +604,58 @@ describe('SFTPBrowser', () => {
     }))
   })
 
+  it('shows a live zip overlay while the archive is built, once', async () => {
+    const socket = createMockSocket()
+    const pending: Array<(response: Response) => void> = []
+    const fetcher = vi.fn(
+      () => new Promise<Response>(resolve => { pending.push(resolve) }),
+    )
+    vi.stubGlobal('fetch', fetcher)
+    render(<SFTPBrowser tabId={tabId} sourceTabId="terminal-tab" socket={socket as unknown as Socket} />)
+
+    act(() => {
+      socket._trigger('sftp:open:result', {
+        tab_id: tabId,
+        ok: true,
+        path: '/var/log',
+        entries: [
+          { name: 'alpha.log', path: '/var/log/alpha.log', type: 'file', size: 2, mtime: 1 },
+          { name: 'bravo.log', path: '/var/log/bravo.log', type: 'file', size: 2, mtime: 1 },
+        ],
+      })
+    })
+
+    const alpha = screen.getByRole('option', { name: /alpha\.log/i })
+    const bravo = screen.getByRole('option', { name: /bravo\.log/i })
+    fireEvent.click(alpha)
+    fireEvent.click(bravo, { shiftKey: true })
+    fireEvent.contextMenu(bravo, { clientX: 40, clientY: 40 })
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Download 2 as zip' }))
+
+    const overlay = screen.getByRole('status', { name: '' })
+    expect(screen.getByText('Zipping 2 files…')).toBeInTheDocument()
+    expect(overlay).toHaveAttribute('aria-live', 'polite')
+
+    // A second request while the first is in flight must not start, or the
+    // first one finishing would clear the overlay of the second.
+    fireEvent.contextMenu(bravo, { clientX: 40, clientY: 40 })
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Download 2 as zip' }))
+    expect(fetcher).toHaveBeenCalledTimes(1)
+
+    Object.defineProperty(URL, 'createObjectURL', { value: vi.fn(() => 'blob:zip'), writable: true })
+    Object.defineProperty(URL, 'revokeObjectURL', { value: vi.fn(), writable: true })
+    await act(async () => {
+      pending[0]!({
+        ok: true,
+        status: 200,
+        headers: new Headers({ 'Content-Disposition': "attachment; filename*=UTF-8''logs.zip" }),
+        blob: async () => new Blob(['zip']),
+      } as unknown as Response)
+    })
+
+    expect(screen.queryByText('Zipping 2 files…')).not.toBeInTheDocument()
+  })
+
   it('selects files with row and select-all checkboxes', () => {
     const socket = createMockSocket()
     render(<SFTPBrowser tabId={tabId} sourceTabId="terminal-tab" socket={socket as unknown as Socket} />)

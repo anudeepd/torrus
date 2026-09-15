@@ -25,6 +25,7 @@ import Button from '@/components/ui/Button'
 import FileIcon from './FileIcon'
 import TransferQueue from './TransferQueue'
 import { useSFTP } from '@/hooks/useSFTP'
+import { collectDroppedEntries } from '@/lib/drop-entries'
 import { useDialogPresence } from '@/hooks/useDialogPresence'
 import { useSFTPStore } from '@/store/sftpStore'
 import type { SFTPEntry } from '@/types'
@@ -717,10 +718,35 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
     else void download(entry)
   }, [download, list])
 
+  /**
+   * Dropping a folder hands us the folder itself, not its contents, so the
+   * drop is walked before anything is uploaded. `collectDroppedEntries` reads
+   * `dataTransfer.items` synchronously for that reason.
+   */
+  const dropFiles = useCallback(async (dataTransfer: DataTransfer | null) => {
+    const { entries, skipped } = await collectDroppedEntries(dataTransfer)
+    if (entries.length === 0) {
+      // Enterprise browser extensions (DLP, security tools such as Menlo and
+      // ForcePoint) can intercept drag-drop and strip the DataTransfer before
+      // our handler sees it. Say so instead of silently swallowing the event.
+      setError(
+        tabId,
+        skipped > 0
+          ? 'Could not read that folder. Use the upload button to select files instead.'
+          : 'Drag-drop is blocked by a browser extension or security policy. Use the upload button to select files.',
+      )
+      return
+    }
+    await uploadFiles(entries)
+  }, [setError, tabId, uploadFiles])
+
   const handleBulkDownload = useCallback((entries: SFTPEntry[]) => {
+    // One archive at a time: the count is the overlay's label, so a second
+    // request would have its overlay cleared by the first one finishing.
+    if (bulkZipBusy !== null) return
     setBulkZipBusy(entries.length)
     void bulkDownload(entries).finally(() => setBulkZipBusy(null))
-  }, [bulkDownload])
+  }, [bulkDownload, bulkZipBusy])
 
   const openPermissions = useCallback((entries: SFTPEntry[]) => {
     const entry = entries[0]
@@ -1064,18 +1090,7 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
         onDrop={event => {
           event.preventDefault()
           clearDropFeedback()
-          const files = event.dataTransfer?.files
-          // Enterprise browser extensions (DLP, security tools such as Menlo
-          // and ForcePoint) can intercept drag-drop and strip the DataTransfer
-          // before our handler sees it. Detect that and tell the user how to
-          // upload anyway instead of silently swallowing the event.
-          if (!files
-            || files.length === 0
-            || Array.from(files).every(f => !f || typeof f.name !== 'string')) {
-            setError(tabId, 'Drag-drop is blocked by a browser extension or security policy. Use the upload button to select files.')
-            return
-          }
-          void uploadFiles(files)
+          void dropFiles(event.dataTransfer)
         }}
         className={clsx('relative min-h-0 flex-1 select-none overflow-y-auto outline-none focus-visible:ring-2 focus-visible:ring-brand-500', {
           'pointer-events-none opacity-50': disconnected,

@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 from dataclasses import dataclass, field
 from http.cookies import SimpleCookie
 import ipaddress
 import logging
 import os
+import posixpath
 import re
 import secrets
 import time
@@ -16,10 +16,10 @@ from contextlib import asynccontextmanager
 from importlib.resources import files
 from pathlib import Path
 from tempfile import SpooledTemporaryFile
-from urllib.parse import quote, urlparse
+from urllib.parse import quote, unquote, urlparse
 
 import socketio
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -31,8 +31,15 @@ from torrus.admin_state import (
     PolicyError,
 )
 from torrus.logging_utils import configure_logging, suppress_routine_polling_logs
-from torrus.sftp_manager import SFTPError, SFTPManager
+from torrus.sftp_manager import SFTPError, SFTPSink, SFTPManager
 from torrus.ssh_manager import SSHManager
+from torrus.upload_engine import (
+    AuthContext,
+    UploadSinkError,
+    UploadStore,
+    UploadTarget,
+    create_upload_router,
+)
 
 logger = logging.getLogger("torrus.server")
 
@@ -120,9 +127,24 @@ async def lifespan(app):
     if _ldap_enabled:
         audit_store.init_db()
     ssh_manager.start_background_tasks()
+    sweeper = asyncio.create_task(_sweep_upload_sessions())
     yield
+    sweeper.cancel()
+    await upload_store.close()
     await sftp_manager.shutdown()
     await ssh_manager.stop_background_tasks()
+
+
+async def _sweep_upload_sessions() -> None:
+    """Abandoned uploads hold a remote staging file and an SFTP channel."""
+    while True:
+        await asyncio.sleep(300)
+        try:
+            reclaimed = await upload_store.sweep()
+            if reclaimed:
+                logger.info("reclaimed %s stale upload sessions", reclaimed)
+        except Exception:
+            logger.exception("upload session sweep failed")
 
 
 fastapi_app = FastAPI(title="torrus", docs_url=None, redoc_url=None, lifespan=lifespan)
@@ -162,6 +184,7 @@ _ldap_session_manager = None
 _RATE_LIMIT_WINDOW_SEC = 60
 _RATE_LIMIT_MAX = 10
 _connection_attempts: dict[str, list[float]] = {}
+# Bound for one inline Socket.IO transfer; larger transfers use HTTP streaming.
 _SFTP_INLINE_TRANSFER_MAX = int(
     os.getenv("TORRUS_SFTP_INLINE_MAX_BYTES", str(5 * 1024 * 1024))
 )
@@ -1378,106 +1401,6 @@ async def admin_purge(request: Request):
     )
 
 
-@fastapi_app.post("/sftp/upload", include_in_schema=False)
-async def sftp_stream_upload(request: Request):
-    session_id = request.query_params.get("session_id", "")
-    tab_id = request.query_params.get("tab_id", "")
-    remote_path = request.query_params.get("path", "")
-    upload_id = request.query_params.get("upload_id", "")
-    try:
-        offset = int(request.query_params.get("offset", "0"))
-        total = int(request.query_params.get("total", "-1"))
-    except ValueError:
-        return JSONResponse(
-            status_code=400, content={"ok": False, "code": "invalid_request"}
-        )
-    complete = request.query_params.get("complete", "false").lower() == "true"
-    if (
-        not _valid_id(session_id)
-        or not _valid_id(tab_id)
-        or not _valid_id(upload_id)
-        or not remote_path
-    ):
-        return JSONResponse(
-            status_code=400, content={"ok": False, "code": "invalid_request"}
-        )
-    owner = _http_owner(request)
-    if _ldap_enabled and not owner:
-        return JSONResponse(
-            status_code=401, content={"ok": False, "code": "auth_required"}
-        )
-    if _ldap_enabled and not await _sftp_session_owned(session_id, tab_id, owner):
-        return JSONResponse(
-            status_code=403, content={"ok": False, "code": "session_owner_mismatch"}
-        )
-    try:
-        result = await sftp_manager.upload_chunk(
-            tab_id,
-            remote_path,
-            upload_id,
-            offset,
-            total,
-            request.stream(),
-            complete,
-            expected_session_id=session_id,
-        )
-        if result.get("complete"):
-            await _record_sftp_events_audit(
-                owner=owner,
-                session_id=session_id,
-                tab_id=tab_id,
-                operation="upload",
-                entries=[(result["path"], result.get("offset", 0), "")],
-            )
-        return JSONResponse(content=result)
-    except SFTPError as exc:
-        return JSONResponse(
-            status_code=404
-            if exc.code == "FILE_NOT_FOUND"
-            else 403
-            if exc.code == "PERMISSION_DENIED"
-            else 400,
-            content={"ok": False, "code": exc.code, "message": exc.message},
-        )
-
-
-@fastapi_app.post("/sftp/upload/init", include_in_schema=False)
-async def sftp_upload_init(request: Request):
-    session_id = request.query_params.get("session_id", "")
-    tab_id = request.query_params.get("tab_id", "")
-    upload_id = request.query_params.get("upload_id", "")
-    if not _valid_id(session_id) or not _valid_id(tab_id) or not _valid_id(upload_id):
-        return JSONResponse(
-            status_code=400, content={"ok": False, "code": "invalid_request"}
-        )
-    owner = _http_owner(request)
-    if _ldap_enabled and not owner:
-        return JSONResponse(
-            status_code=401, content={"ok": False, "code": "auth_required"}
-        )
-    if _ldap_enabled and not await _sftp_session_owned(session_id, tab_id, owner):
-        return JSONResponse(
-            status_code=403, content={"ok": False, "code": "session_owner_mismatch"}
-        )
-    try:
-        opened = await sftp_manager.open_upload_channel(
-            tab_id,
-            upload_id,
-            ssh_manager,
-            expected_session_id=session_id,
-        )
-    except SFTPError as exc:
-        return JSONResponse(
-            status_code=403,
-            content={"ok": False, "code": exc.code, "message": exc.message},
-        )
-    if not opened:
-        return JSONResponse(
-            status_code=400, content={"ok": False, "code": "CONNECTION_CLOSED"}
-        )
-    return JSONResponse(content={"ok": True})
-
-
 @fastapi_app.get("/sftp/download", include_in_schema=False)
 async def sftp_stream_download(request: Request):
     session_id = request.query_params.get("session_id", "")
@@ -2532,45 +2455,6 @@ async def on_sftp_list(sid, data):
         )
 
 
-@sio.on("sftp:upload")
-async def on_sftp_upload(sid, data):
-    session_id, tab_id = _sftp_request_ids(data)
-    if not _valid_id(session_id) or not _valid_id(tab_id):
-        return
-    if not await _require_auth(sid, tab_id):
-        return
-    if not await _require_sftp_session_owner(sid, session_id, tab_id, "upload"):
-        return
-    owner = await _owner_for_sid(sid)
-    try:
-        raw = base64.b64decode(data.get("data", ""), validate=True)
-        if len(raw) >= _SFTP_INLINE_TRANSFER_MAX:
-            raise SFTPError(
-                "TRANSFER_TOO_LARGE",
-                f"Files of {len(raw)} bytes or more must use HTTP upload endpoint /sftp/upload.",
-            )
-        result = await sftp_manager.upload_file(tab_id, data.get("path", ""), raw)
-        await sio.emit("sftp:upload:result", {"tab_id": tab_id, **result}, to=sid)
-        await _record_sftp_events_audit(
-            owner=owner,
-            session_id=session_id,
-            tab_id=tab_id,
-            operation="upload",
-            entries=[(result["path"], result.get("size", 0), "")],
-        )
-    except SFTPError as exc:
-        await _emit_sftp_error(sid, tab_id, exc, "upload")
-    except Exception:
-        await _emit_sftp_error(
-            sid,
-            tab_id,
-            SFTPError(
-                "TRANSFER_FAILED", "Transfer failed. Check connection and retry."
-            ),
-            "upload",
-        )
-
-
 @sio.on("sftp:download")
 async def on_sftp_download(sid, data):
     session_id, tab_id = _sftp_request_ids(data)
@@ -2699,6 +2583,75 @@ async def on_sftp_mkdir(sid, data):
         await _emit_sftp_error(sid, tab_id, exc, "mkdir")
 
 
+@sio.on("sftp:mkdirs")
+async def on_sftp_mkdirs(sid, data):
+    """Create a folder-upload's destination tree in one round trip."""
+    session_id, tab_id = _sftp_request_ids(data)
+    request_id = data.get("request_id", "")
+    if (
+        not _valid_id(session_id)
+        or not _valid_id(tab_id)
+        or not _valid_id(request_id)
+    ):
+        return
+    if not await _require_auth(sid, tab_id):
+        return
+    if not await _require_sftp_session_owner(sid, session_id, tab_id, "mkdir"):
+        return
+
+    paths = data.get("paths")
+    if (
+        not isinstance(paths, list)
+        or not paths
+        or len(paths) > 500
+        or not all(isinstance(path, str) and path for path in paths)
+    ):
+        await sio.emit(
+            "sftp:mkdirs:result",
+            {
+                "tab_id": tab_id,
+                "request_id": request_id,
+                "ok": False,
+                "code": "invalid_request",
+                "message": "Folder list was not valid.",
+            },
+            to=sid,
+        )
+        return
+
+    owner = await _owner_for_sid(sid)
+    try:
+        result = await sftp_manager.prepare_upload_directories(
+            tab_id, paths, expected_session_id=session_id
+        )
+    except SFTPError as exc:
+        await sio.emit(
+            "sftp:mkdirs:result",
+            {
+                "tab_id": tab_id,
+                "request_id": request_id,
+                "ok": False,
+                "code": exc.code,
+                "message": exc.message,
+            },
+            to=sid,
+        )
+        return
+    await sio.emit(
+        "sftp:mkdirs:result",
+        {"tab_id": tab_id, "request_id": request_id, **result},
+        to=sid,
+    )
+    if result["created"]:
+        await _record_sftp_events_audit(
+            owner=owner,
+            session_id=session_id,
+            tab_id=tab_id,
+            operation="mkdir",
+            entries=[(path, 0, "") for path in result["created"]],
+        )
+
+
 @sio.on("sftp:chmod")
 async def on_sftp_chmod(sid, data):
     session_id, tab_id = _sftp_request_ids(data)
@@ -2810,3 +2763,128 @@ async def on_sftp_accounts(sid, data):
         )
         return
     await sio.emit("sftp:accounts:result", {"tab_id": tab_id, **result}, to=sid)
+
+
+# ---------------------------------------------------------------------------
+# Chunked upload engine
+#
+# The wire protocol, session table and byte-range accounting are shared with
+# x-wing (see upload_engine.py). Torrus supplies only the destination: an SFTP
+# sink on the tab's SSH transport.
+# ---------------------------------------------------------------------------
+
+_UPLOAD_MAX_BYTES = int(os.getenv("TORRUS_MAX_UPLOAD_BYTES", str(1024**4)))
+_UPLOAD_CHUNK_BYTES = int(os.getenv("TORRUS_UPLOAD_CHUNK_BYTES", str(8 * 1024 * 1024)))
+_UPLOAD_SESSION_TTL = int(os.getenv("TORRUS_UPLOAD_SESSION_TTL", "3600"))
+
+upload_store = UploadStore(
+    ttl_seconds=_UPLOAD_SESSION_TTL,
+    chunk_size=_UPLOAD_CHUNK_BYTES,
+    # One SFTP handle serves a session, so parallel requests would serialise at
+    # the sink anyway; telling the client to use one avoids queueing body bytes
+    # in memory for nothing.
+    concurrency=1,
+    max_session_bytes=_UPLOAD_MAX_BYTES,
+)
+
+
+def _upload_ids(request: Request) -> tuple[str, str]:
+    session_id = request.query_params.get("session_id", "")
+    tab_id = request.query_params.get("tab_id", "")
+    if not _valid_id(session_id) or not _valid_id(tab_id):
+        raise HTTPException(status_code=400, detail="invalid_request")
+    return session_id, tab_id
+
+
+def _sftp_status_for(exc: SFTPError) -> int:
+    if exc.code == "FILE_NOT_FOUND":
+        return 404
+    if exc.code == "PERMISSION_DENIED":
+        return 403
+    return 400
+
+
+async def _upload_authorize(request: Request, action: str) -> AuthContext:
+    session_id, tab_id = _upload_ids(request)
+    owner = _http_owner(request)
+    if _ldap_enabled and not owner:
+        raise HTTPException(status_code=401, detail="auth_required")
+    if _ldap_enabled and not await _sftp_session_owned(session_id, tab_id, owner):
+        raise HTTPException(status_code=403, detail="session_owner_mismatch")
+    return AuthContext(user=owner, extra={"session_id": session_id, "tab_id": tab_id})
+
+
+async def _upload_open_target(request: Request, body) -> UploadTarget:
+    session_id, tab_id = _upload_ids(request)
+    raw_name = body.get("filename", "upload")
+    if not isinstance(raw_name, str):
+        raise HTTPException(status_code=400, detail="invalid_filename")
+    filename = posixpath.basename(raw_name)
+    if not filename or filename in (".", ".."):
+        raise HTTPException(status_code=400, detail="invalid_filename")
+
+    try:
+        size = int(body.get("size", 0))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="invalid_size") from None
+
+    raw_dir = body.get("dir", "")
+    if not isinstance(raw_dir, str):
+        raise HTTPException(status_code=400, detail="invalid_directory")
+    remote = posixpath.join(unquote(raw_dir), filename)
+    try:
+        resolved = sftp_manager.resolve_upload_path(
+            tab_id, remote, expected_session_id=session_id
+        )
+    except SFTPError as exc:
+        raise HTTPException(status_code=_sftp_status_for(exc), detail=exc.message) from exc
+
+    directory, name = posixpath.split(resolved)
+    return UploadTarget(
+        session_id=str(body["session_id"]),
+        user=_http_owner(request),
+        directory=directory,
+        filename=name,
+        size=size,
+        extra={"session_id": session_id, "tab_id": tab_id, "resolved": resolved},
+    )
+
+
+async def _upload_open_sink(target: UploadTarget) -> SFTPSink:
+    try:
+        return await sftp_manager.open_upload_sink(
+            target.extra["tab_id"],
+            target.session_id,
+            target.directory,
+            target.filename,
+            ssh_manager,
+            expected_session_id=target.extra["session_id"],
+        )
+    except SFTPError as exc:
+        raise UploadSinkError(
+            exc.message,
+            code=exc.code,
+            status=_sftp_status_for(exc) if exc.code != "CONNECTION_CLOSED" else 502,
+        ) from exc
+
+
+async def _upload_complete(session, destination: str) -> None:
+    extra = session.target.extra
+    await _record_sftp_events_audit(
+        owner=session.user,
+        session_id=extra["session_id"],
+        tab_id=extra["tab_id"],
+        operation="upload",
+        entries=[(extra["resolved"], session.ranges.total(), "")],
+    )
+
+
+fastapi_app.include_router(
+    create_upload_router(
+        store=upload_store,
+        authorize=_upload_authorize,
+        open_target=_upload_open_target,
+        open_sink=_upload_open_sink,
+        on_complete=_upload_complete,
+    )
+)
