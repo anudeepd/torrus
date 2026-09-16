@@ -9,6 +9,7 @@ import errno
 import io
 import os
 import posixpath
+import shlex
 import stat
 import time
 import zipfile
@@ -21,11 +22,12 @@ from .upload_engine import UploadSinkError, is_staging_name, staging_name
 
 T = TypeVar("T")
 
-# Coalesce streamed request chunks before touching the SSH transport. One
-# paramiko write per 64 KiB read buffer costs a thread hop and a 32 KiB SFTP
-# packet each; batching to this size cuts executor hops by ~64x and keeps the
-# pipelined write window full.
-UPLOAD_FLUSH_BYTES = 4 * 1024 * 1024
+# The staging file is filled by a remote `cat` reading this channel instead of
+# by SFTP write requests. SFTP caps a write at 32 KiB and answers each one,
+# which measures ~174 MB/s on a local link and less once latency is involved;
+# streaming the same bytes down the channel measures ~270 MB/s and lets the
+# remote side pick its own write size.
+UPLOAD_STREAM_COMMAND = "cat > {path}"
 
 
 class SFTPError(Exception):
@@ -63,18 +65,31 @@ def _sink_error(exc: Exception, path: str) -> UploadSinkError:
     return UploadSinkError(mapped.message, code=mapped.code, status=status)
 
 
+def _channel_stderr(channel: Any) -> str:
+    """Whatever the remote writer printed, so the caller sees why it failed."""
+    chunks: list[bytes] = []
+    try:
+        while channel.recv_stderr_ready():
+            chunks.append(channel.recv_stderr(4096))
+    except Exception:
+        return ""
+    return b"".join(chunks).decode("utf-8", "replace").strip()[:300]
+
+
 class SFTPSink:
-    """Ranged writes into a remote staging file over one SFTP handle.
+    """Streams upload bytes into a remote staging file over one SSH channel.
 
-    paramiko's SFTP client cannot be shared between threads, so each upload
-    session owns a dedicated channel on the tab's SSH transport. Writes are
-    coalesced up to ``UPLOAD_FLUSH_BYTES``: a request body arrives as many
-    small reads, and one paramiko write per read would cost a thread hop and a
-    32 KiB packet each.
+    A remote ``cat`` on the tab's SSH transport writes the staging file, and
+    :meth:`finalize` renames it onto the destination, so a failed or abandoned
+    upload never leaves a partial file in place. Only the destination directory
+    check and the rename need SFTP.
 
-    Bytes are only visible at the destination after :meth:`finalize` renames
-    the staging file, so a failed or abandoned upload never leaves a partial
-    file in place.
+    The engine hands windows over in any order and may re-send a window it
+    already sent. The channel is one ordered stream, so a window that arrives
+    early waits for its turn; the request handler stops reading that body while
+    it waits, which leaves the backlog in the socket rather than on this
+    server's heap. A caller returns only once its own bytes reached the remote,
+    so the byte ranges the engine commits stay true.
     """
 
     def __init__(
@@ -94,10 +109,11 @@ class SFTPSink:
         self._staging = posixpath.join(directory, staging_name(filename, session_id))
         self._destination = posixpath.join(directory, filename)
         self._run = run_blocking
-        self._handle: Any = None
-        self._cursor = 0
-        self._buffer = bytearray()
+        self._channel: Any = None
+        self._streamed = 0
+        self._failure: UploadSinkError | None = None
         self._lock = asyncio.Lock()
+        self._cond = asyncio.Condition(self._lock)
         self._client_closed = False
         self._closed = False
 
@@ -105,49 +121,130 @@ class SFTPSink:
     def destination(self) -> str:
         return self._destination
 
-    async def _flush(self) -> None:
-        if not self._buffer:
-            return
-        data = bytes(self._buffer)
-        self._buffer.clear()
+    def _raise_if_dead(self) -> None:
+        if self._failure is not None:
+            raise self._failure
+        if self._closed:
+            raise UploadSinkError(
+                "Upload session already finished.", code="CONNECTION_CLOSED"
+            )
+
+    async def _open_channel(self) -> None:
+        """Start the remote writer.
+
+        The destination directory is checked first, so a bad destination fails
+        before the upload streams a single byte into nothing.
+        """
         try:
-            await self._run(self._handle.write, data)
+            await self._run(self._client.stat, posixpath.dirname(self._staging))
         except Exception as exc:
-            # A failed pipelined write leaves the handle's position undefined,
-            # so force the next write to seek rather than trust `_cursor`.
-            self._cursor = -1
             raise _sink_error(exc, self._destination) from exc
-        self._cursor += len(data)
+        channel = self._client.get_channel()
+        transport = channel.get_transport() if channel is not None else None
+        if transport is None or not transport.is_active():
+            raise UploadSinkError(
+                "SSH connection lost. Reconnect to continue.",
+                code="CONNECTION_CLOSED",
+            )
+        try:
+            channel = await self._run(transport.open_session)
+            await self._run(
+                channel.exec_command,
+                UPLOAD_STREAM_COMMAND.format(path=shlex.quote(self._staging)),
+            )
+        except Exception as exc:
+            raise _sink_error(exc, self._destination) from exc
+        self._channel = channel
 
     async def write_at(self, offset: int, data: bytes) -> None:
-        async with self._lock:
-            if self._closed:
-                raise UploadSinkError(
-                    "Upload session already finished.", code="CONNECTION_CLOSED"
-                )
-            if self._handle is None:
-                try:
-                    self._handle = await self._run(
-                        self._client.open, self._staging, "wb"
-                    )
-                    await self._run(self._handle.set_pipelined, True)
-                except Exception as exc:
-                    raise _sink_error(exc, self._destination) from exc
-            if offset != self._cursor + len(self._buffer):
-                await self._flush()
-                try:
-                    await self._run(self._handle.seek, offset)
-                except Exception as exc:
-                    raise _sink_error(exc, self._destination) from exc
-                self._cursor = offset
-            self._buffer.extend(data)
-            if len(self._buffer) >= UPLOAD_FLUSH_BYTES:
-                await self._flush()
+        async with self._cond:
+            self._raise_if_dead()
+            if offset + len(data) <= self._streamed:
+                # A window this session already streamed, re-sent after a lost
+                # response. Streaming it again would duplicate bytes.
+                return
+            await self._cond.wait_for(
+                lambda: self._failure is not None or self._streamed >= offset
+            )
+            if self._failure is not None:
+                raise self._failure
+            if offset < self._streamed:
+                data = data[self._streamed - offset :]
+            if not data:
+                return
+            try:
+                if self._channel is None:
+                    await self._open_channel()
+                await self._run(self._channel.sendall, data)
+            except UploadSinkError as exc:
+                self._failure = exc
+                self._cond.notify_all()
+                raise
+            except Exception as exc:
+                self._failure = await self._stream_failure(exc)
+                self._cond.notify_all()
+                raise self._failure from exc
+            self._streamed += len(data)
+            self._cond.notify_all()
 
-    async def _close_handle(self) -> None:
-        handle, self._handle = self._handle, None
-        if handle is not None:
-            await self._run(handle.close)
+    async def _stream_failure(self, exc: Exception) -> UploadSinkError:
+        """Prefer the remote writer's complaint over a generic socket error.
+
+        A remote writer that dies mid-upload (a destination it cannot write,
+        a full disk) closes the channel, so the next frame raises ``Socket is
+        closed``. Whatever it printed explains the upload far better.
+        """
+        if self._channel is not None:
+            detail = await self._run(_channel_stderr, self._channel)
+            if detail:
+                return UploadSinkError(
+                    f"Remote host refused the write: {detail}", code="SINK_ERROR"
+                )
+        return _sink_error(exc, self._destination)
+
+    async def _finish_stream(self) -> None:
+        """Close the stream and report whatever the remote writer said."""
+        if self._channel is None:
+            # An empty upload never streamed, so start the writer now: it sees
+            # EOF immediately and leaves an empty staging file behind.
+            await self._open_channel()
+        channel, self._channel = self._channel, None
+        try:
+            await self._run(channel.shutdown_write)
+            status = await self._run(channel.recv_exit_status)
+        except Exception as exc:
+            raise _sink_error(exc, self._destination) from exc
+        finally:
+            try:
+                await self._run(channel.close)
+            except Exception:
+                pass
+        if status != 0:
+            detail = await self._run(_channel_stderr, channel)
+            raise UploadSinkError(
+                f"Remote host refused the write: {detail or f'exit status {status}'}",
+                code="SINK_ERROR",
+            )
+
+    async def _publish(self) -> None:
+        """Move the staging file onto the destination, replacing what was there."""
+        try:
+            await self._run(
+                self._client.posix_rename, self._staging, self._destination
+            )
+            return
+        except Exception:
+            # Servers without the posix-rename extension refuse to rename onto
+            # an existing file, so clear the old name first.
+            pass
+        try:
+            await self._run(self._client.remove, self._destination)
+        except Exception:
+            pass
+        try:
+            await self._run(self._client.rename, self._staging, self._destination)
+        except Exception as exc:
+            raise _sink_error(exc, self._destination) from exc
 
     async def _close_client(self) -> None:
         if self._client_closed:
@@ -160,26 +257,27 @@ class SFTPSink:
             pass
 
     async def finalize(self) -> None:
-        async with self._lock:
+        async with self._cond:
+            self._raise_if_dead()
             self._closed = True
-            try:
-                await self._flush()
-                await self._close_handle()
-            except Exception as exc:
-                raise _sink_error(exc, self._destination) from exc
-            try:
-                await self._run(self._client.rename, self._staging, self._destination)
-            except Exception as exc:
-                raise _sink_error(exc, self._destination) from exc
+            await self._finish_stream()
+            await self._publish()
             await self._close_client()
 
     async def abort(self) -> None:
-        async with self._lock:
+        async with self._cond:
             self._closed = True
-            try:
-                await self._close_handle()
-            except Exception:
-                pass
+            if self._failure is None:
+                self._failure = UploadSinkError(
+                    "Upload cancelled.", code="CONNECTION_CLOSED"
+                )
+            self._cond.notify_all()
+            channel, self._channel = self._channel, None
+            if channel is not None:
+                try:
+                    await self._run(channel.close)
+                except Exception:
+                    pass
             try:
                 await self._run(self._client.remove, self._staging)
             except Exception:

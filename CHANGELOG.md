@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.2.48] - 2026-09-16
+
+### Changed
+
+- Send upload bytes down an SSH exec channel (`cat`) instead of as SFTP write requests. SFTP caps a write at 32 KiB and answers each one, which measured ~117 MB/s through the upload sink and ~174 MB/s for the raw protocol on a local link; the same bytes measured ~254 MB/s through the channel on that link. The staging file, the range accounting and the atomic rename are unchanged.
+- Upload 32 MB windows instead of 8 MB ones, and run four of them per file instead of one. Every window is a request, so an upload used to wait for the remote write plus a full round trip before it could send the next bytes; several windows in flight keep the remote host busy while the request socket is still filling. Tunable with `TORRUS_UPLOAD_CHUNK_BYTES` and `TORRUS_UPLOAD_CONCURRENCY`.
+
+### Fixed
+
+- Uploading a zero-byte file was refused with "Upload session has no data". The chunked engine now opens the destination itself when a file has no bytes, so the empty file lands like any other upload.
+- Overwriting a file that already exists on the remote host failed at the final rename with "Failure". The staging file is now renamed over the destination when the server supports the posix-rename extension, and the old name is cleared first when it does not.
+- An upload the remote host refuses partway through (a destination it cannot write, a full disk) reported "SSH connection lost. Reconnect to continue." instead of what the host actually said. Uploads now surface the remote writer's own message.
+
 ## [0.2.47] - 2026-09-15
 
 ### Changed

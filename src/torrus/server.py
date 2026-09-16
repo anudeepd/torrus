@@ -2774,16 +2774,19 @@ async def on_sftp_accounts(sid, data):
 # ---------------------------------------------------------------------------
 
 _UPLOAD_MAX_BYTES = int(os.getenv("TORRUS_MAX_UPLOAD_BYTES", str(1024**4)))
-_UPLOAD_CHUNK_BYTES = int(os.getenv("TORRUS_UPLOAD_CHUNK_BYTES", str(8 * 1024 * 1024)))
+_UPLOAD_CHUNK_BYTES = int(os.getenv("TORRUS_UPLOAD_CHUNK_BYTES", str(32 * 1024 * 1024)))
 _UPLOAD_SESSION_TTL = int(os.getenv("TORRUS_UPLOAD_SESSION_TTL", "3600"))
+_UPLOAD_CONCURRENCY = int(os.getenv("TORRUS_UPLOAD_CONCURRENCY", "4"))
 
 upload_store = UploadStore(
     ttl_seconds=_UPLOAD_SESSION_TTL,
     chunk_size=_UPLOAD_CHUNK_BYTES,
-    # One SFTP handle serves a session, so parallel requests would serialise at
-    # the sink anyway; telling the client to use one avoids queueing body bytes
-    # in memory for nothing.
-    concurrency=1,
+    # The sink serialises the SFTP writes, but the windows must not: with one
+    # window in flight the client waits for the remote write and the round trip
+    # before it may send the next bytes, so throughput is the slowest of
+    # send/write per window. Several windows in flight keep the remote busy
+    # while the request socket is still filling.
+    concurrency=_UPLOAD_CONCURRENCY,
     max_session_bytes=_UPLOAD_MAX_BYTES,
 )
 

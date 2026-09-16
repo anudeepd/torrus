@@ -624,8 +624,10 @@ export function useSFTP(tabId: string, sourceTabId: string | undefined, socket: 
       return transferId
     })
     let next = 0
-    // Chunk concurrency per file is the server's call: one SFTP handle serves a
-    // session, so parallel chunk requests would only queue at the sink.
+    // Files run MAX_CONCURRENT_UPLOADS at a time. Chunk concurrency inside one
+    // file is the server's call (the 'concurrency' field on init): the SFTP
+    // sink serialises writes, but several windows in flight still hide the
+    // remote write and the round trip.
     const worker = async () => {
       while (next < pendingIds.length) {
         const transferId = pendingIds[next++]

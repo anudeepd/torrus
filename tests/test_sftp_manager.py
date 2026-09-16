@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import errno
 import posixpath
+import shlex
 from types import SimpleNamespace
 
 import pytest
@@ -67,6 +68,70 @@ class FakeRemoteFile:
         self.close()
 
 
+class FakeChannel:
+    """A paramiko exec channel running the sink's remote writer."""
+
+    def __init__(self, sftp: "FakeSFTP"):
+        self.sftp = sftp
+        self.command: str | None = None
+        self.path: str | None = None
+        self.buffer = bytearray()
+        self.closed = False
+        self.send_count = 0
+        self.write_error: Exception | None = None
+        self.stderr = b""
+
+    def exec_command(self, command: str) -> None:
+        self.command = command
+        parts = shlex.split(command)
+        if parts[:2] != ["cat", ">"] or len(parts) != 3:
+            raise AssertionError(f"unexpected upload command: {command}")
+        self.path = parts[2]
+
+    def sendall(self, data: bytes) -> None:
+        if self.write_error is not None:
+            raise self.write_error
+        self.send_count += 1
+        self.buffer.extend(data)
+
+    def shutdown_write(self) -> None:
+        if self.path is not None:
+            self.sftp.fs[self.path] = bytes(self.buffer)
+
+    def recv_exit_status(self) -> int:
+        return 0
+
+    def recv_stderr_ready(self) -> bool:
+        return bool(self.stderr)
+
+    def recv_stderr(self, size: int) -> bytes:
+        chunk, self.stderr = self.stderr[:size], self.stderr[size:]
+        return chunk
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class FakeTransport:
+    def __init__(self, sftp: "FakeSFTP"):
+        self.sftp = sftp
+
+    def is_active(self) -> bool:
+        return True
+
+    def get_transport(self) -> "FakeTransport":
+        return self
+
+    def open_session(self) -> FakeChannel:
+        channel = FakeChannel(self.sftp)
+        channel.write_error = self.sftp.next_channel_error
+        channel.stderr = self.sftp.next_channel_stderr
+        self.sftp.next_channel_error = None
+        self.sftp.next_channel_stderr = b""
+        self.sftp.sessions.append(channel)
+        return channel
+
+
 class FakeSFTP:
     def __init__(self):
         self.fs: dict[str, bytes] = {
@@ -82,6 +147,14 @@ class FakeSFTP:
         self.close_count = 0
         self.next_file_close_error: Exception | None = None
         self.last_file: FakeRemoteFile | None = None
+        self.sessions: list[FakeChannel] = []
+        self.next_channel_error: Exception | None = None
+        self.next_channel_stderr = b""
+        self.transport = FakeTransport(self)
+
+    def get_channel(self) -> FakeTransport:
+        """paramiko: SFTPClient.get_channel() -> Channel, whose transport we open the writer on."""
+        return self.transport
 
     def chdir(self, path: str) -> None:
         if path == ".":
@@ -177,6 +250,10 @@ class FakeSFTP:
         if not new_path.startswith("/"):
             new_path = f"{self.cwd.rstrip('/')}/{new_path}"
         self.fs[new_path] = self.fs.pop(old_path)
+
+    def posix_rename(self, old_path: str, new_path: str) -> None:
+        """OpenSSH's extension: rename even when the destination exists."""
+        self.rename(old_path, new_path)
 
     def mkdir(self, path: str) -> None:
         if not path.startswith("/"):
@@ -490,7 +567,7 @@ async def test_prepare_upload_directories_reports_a_refused_mkdir():
 
 
 @pytest.mark.asyncio
-async def test_upload_sink_writes_ranges_and_publishes_atomically():
+async def test_upload_sink_streams_windows_in_offset_order():
     from torrus.upload_engine import staging_name
 
     sftp = FakeSFTP()
@@ -500,15 +577,137 @@ async def test_upload_sink_writes_ranges_and_publishes_atomically():
         sink = await manager.open_upload_sink(
             "tab1", "upload1", "/home/app", "readme.txt", FakeSSHManager(sftp)
         )
-        await sink.write_at(3, b"def")
-        await sink.write_at(0, b"abc")
+        # Two windows in flight at once, as two concurrent PUT requests.
+        await asyncio.gather(sink.write_at(3, b"def"), sink.write_at(0, b"abc"))
         await sink.finalize()
     finally:
         await manager.shutdown()
 
     assert sftp.fs["/home/app/readme.txt"] == b"abcdef"
     assert staging_name("readme.txt", "upload1") not in sftp.fs
-    assert sftp.last_file is not None and sftp.last_file.pipelined
+    assert sftp.sessions[0].buffer == b"abcdef"
+
+
+@pytest.mark.asyncio
+async def test_upload_sink_drops_a_window_it_already_streamed():
+    """A response lost on the way back makes the client re-send a window."""
+    sftp = FakeSFTP()
+    manager = SFTPManager()
+    try:
+        await manager.open_sftp("sess1", "tab1", FakeSSHManager(sftp))
+        sink = await manager.open_upload_sink(
+            "tab1", "upload1", "/home/app", "dupe.bin", FakeSSHManager(sftp)
+        )
+        await sink.write_at(0, b"abc")
+        await sink.write_at(0, b"abc")
+        await sink.finalize()
+    finally:
+        await manager.shutdown()
+
+    assert sftp.fs["/home/app/dupe.bin"] == b"abc"
+
+
+@pytest.mark.asyncio
+async def test_upload_sink_reports_a_broken_stream_to_every_writer():
+    from torrus.upload_engine import UploadSinkError
+
+    sftp = FakeSFTP()
+    sftp.next_channel_error = OSError(errno.ECONNRESET, "connection reset")
+    manager = SFTPManager()
+    try:
+        await manager.open_sftp("sess1", "tab1", FakeSSHManager(sftp))
+        sink = await manager.open_upload_sink(
+            "tab1", "upload1", "/home/app", "broken.bin", FakeSSHManager(sftp)
+        )
+        with pytest.raises(UploadSinkError):
+            await sink.write_at(0, b"data")
+        # A writer waiting for its turn must fail too, not wait forever.
+        with pytest.raises(UploadSinkError):
+            await sink.write_at(4, b"more")
+        await sink.abort()
+    finally:
+        await manager.shutdown()
+
+    assert "/home/app/broken.bin" not in sftp.fs
+
+
+@pytest.mark.asyncio
+async def test_upload_sink_publishes_an_empty_file():
+    """A zero-byte upload never writes, and still has to appear at its destination."""
+    sftp = FakeSFTP()
+    manager = SFTPManager()
+    try:
+        await manager.open_sftp("sess1", "tab1", FakeSSHManager(sftp))
+        sink = await manager.open_upload_sink(
+            "tab1", "upload1", "/home/app", "empty.txt", FakeSSHManager(sftp)
+        )
+        await sink.finalize()
+    finally:
+        await manager.shutdown()
+
+    assert sftp.fs["/home/app/empty.txt"] == b""
+
+
+@pytest.mark.asyncio
+async def test_upload_sink_reports_what_the_remote_writer_said():
+    """A writer that dies mid-upload explains the failure; the socket error does not."""
+    from torrus.upload_engine import UploadSinkError
+
+    sftp = FakeSFTP()
+    sftp.next_channel_error = OSError("Socket is closed")
+    sftp.next_channel_stderr = b"bash: /home/app/x.txt: Permission denied"
+    manager = SFTPManager()
+    try:
+        await manager.open_sftp("sess1", "tab1", FakeSSHManager(sftp))
+        sink = await manager.open_upload_sink(
+            "tab1", "upload1", "/home/app", "x.txt", FakeSSHManager(sftp)
+        )
+        with pytest.raises(UploadSinkError) as exc:
+            await sink.write_at(0, b"data")
+        await sink.abort()
+    finally:
+        await manager.shutdown()
+
+    assert exc.value.code == "SINK_ERROR"
+    assert "Permission denied" in exc.value.message
+
+
+@pytest.mark.asyncio
+async def test_upload_sink_replaces_an_existing_destination():
+    sftp = FakeSFTP()
+    manager = SFTPManager()
+    try:
+        await manager.open_sftp("sess1", "tab1", FakeSSHManager(sftp))
+        sink = await manager.open_upload_sink(
+            "tab1", "upload1", "/home/app", "readme.txt", FakeSSHManager(sftp)
+        )
+        await sink.write_at(0, b"replacement")
+        await sink.finalize()
+    finally:
+        await manager.shutdown()
+
+    assert sftp.fs["/home/app/readme.txt"] == b"replacement"
+
+
+@pytest.mark.asyncio
+async def test_upload_sink_publishes_without_the_posix_rename_extension():
+    class NoPosixRename(FakeSFTP):
+        def posix_rename(self, old_path: str, new_path: str) -> None:
+            raise OSError(errno.EOPNOTSUPP, "Operation unsupported")
+
+    sftp = NoPosixRename()
+    manager = SFTPManager()
+    try:
+        await manager.open_sftp("sess1", "tab1", FakeSSHManager(sftp))
+        sink = await manager.open_upload_sink(
+            "tab1", "upload1", "/home/app", "readme.txt", FakeSSHManager(sftp)
+        )
+        await sink.write_at(0, b"replacement")
+        await sink.finalize()
+    finally:
+        await manager.shutdown()
+
+    assert sftp.fs["/home/app/readme.txt"] == b"replacement"
 
 
 @pytest.mark.asyncio
@@ -532,26 +731,6 @@ async def test_upload_sink_keeps_the_destination_untouched_until_finalize():
 
 
 @pytest.mark.asyncio
-async def test_upload_sink_coalesces_sequential_writes_into_one_sftp_write():
-    sftp = FakeSFTP()
-    manager = SFTPManager()
-    try:
-        await manager.open_sftp("sess1", "tab1", FakeSSHManager(sftp))
-        sink = await manager.open_upload_sink(
-            "tab1", "upload1", "/home/app", "coalesced.bin", FakeSSHManager(sftp)
-        )
-        for index in range(64):
-            await sink.write_at(index * 1024, b"x" * 1024)
-        await sink.finalize()
-    finally:
-        await manager.shutdown()
-
-    assert sftp.fs["/home/app/coalesced.bin"] == b"x" * (64 * 1024)
-    # One write per flush, not one per streamed buffer.
-    assert sftp.last_file is not None and sftp.last_file.write_count == 1
-
-
-@pytest.mark.asyncio
 async def test_upload_sink_releases_its_channel_on_abort():
     sftp = FakeSFTP()
     manager = SFTPManager()
@@ -563,7 +742,9 @@ async def test_upload_sink_releases_its_channel_on_abort():
         await sink.write_at(0, b"data")
         assert sftp.close_count == 0
         await sink.abort()
-        # The upload channel is released immediately, not when the tab closes.
+        # The upload channel and its SSH client are released immediately, not
+        # when the tab closes.
+        assert sftp.sessions[0].closed
         assert sftp.close_count == 1
     finally:
         await manager.shutdown()
