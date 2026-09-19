@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.2.49] - 2026-09-19
+
+### Added
+
+- Re-read the open SFTP folder every 15 seconds, so a file another session creates, deletes or renames shows up on its own. The listing is replaced without a loading state or a cleared selection, and the refresh stands down while a dialog or menu is open, a transfer is queued or running, the pane is off screen, or the window is hidden; returning to the tab or the window refreshes straight away.
+
+### Fixed
+
+- Reloading the page dropped an SFTP tab back to the home directory, because the folder only lived in memory. A tab now remembers the folder it was showing and reopens there, falling back to the home directory when that folder is gone.
+- Closing a dialog cut out in a single frame in two places: the "Close tab?" / "Close all tabs?" confirmation was never wrapped in `AnimatePresence`, and the Save Session dialog had no motion at all, while every other dialog faded. The SFTP folder listing and its "Loading folder…" strip were unmounted the same way, so neither played the transition their props described.
+
 ## [0.2.48] - 2026-09-16
 
 ### Changed

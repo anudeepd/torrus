@@ -11,6 +11,8 @@ export interface Tab {
   status: TabStatus
   sessionKey: string  // `${sessionId}:${tabId}` — used as Socket.IO room key
   sourceTabId?: string
+  /** Last folder an SFTP tab was showing, so a reload reopens it instead of the home directory. */
+  sftpPath?: string | null
 }
 
 export interface SFTPEntry {

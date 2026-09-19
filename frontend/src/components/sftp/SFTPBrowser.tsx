@@ -28,6 +28,7 @@ import { useSFTP } from '@/hooks/useSFTP'
 import { collectDroppedEntries } from '@/lib/drop-entries'
 import { useDialogPresence } from '@/hooks/useDialogPresence'
 import { useSFTPStore } from '@/store/sftpStore'
+import { useTerminalStore } from '@/store/terminalStore'
 import type { SFTPEntry } from '@/types'
 import { anchoredSurface, completedTransferRetentionMs, exitTransition, fade, surface, surfaceSpring, surfaceTransition } from '@/motion/tokens'
 import * as m from 'motion/react-m'
@@ -68,6 +69,8 @@ interface SortRule {
 
 const DRAG_OVERLAY_STALE_MS = 1_500
 const DROP_DELAYED_MS = 15_000
+/** How often the open folder is re-read so changes made elsewhere show up on their own. */
+const SFTP_REFRESH_MS = 15_000
 
 function provideContextFeedback() {
   if (window.matchMedia?.('(pointer: coarse)').matches) navigator.vibrate?.(10)
@@ -468,6 +471,9 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
   const [sortRules, setSortRules] = useState<SortRule[]>([])
   const [selectionAnchorPath, setSelectionAnchorPath] = useState<string | null>(null)
   const [bulkZipBusy, setBulkZipBusy] = useState<number | null>(null)
+  // Auto refresh yields to anything the user is doing in this pane. A ref keeps
+  // the interval stable instead of restarting it on every keystroke.
+  const backgroundBusy = useRef(false)
   const {
     path,
     username,
@@ -498,11 +504,51 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
     parentPath,
   } = useSFTP(tabId, sourceTabId, socket)
   const { toggleSelected, setSelected, clearSelected, removeTransfer, setError } = useSFTPStore()
+  const isActiveTab = useTerminalStore(s => s.activeTabId === tabId)
+  const paneBusy = loading
+    || disconnected
+    || dragging
+    || editingPath
+    || renamePath !== null
+    || deletePaths !== null
+    || newFolderOpen
+    || chmodDialog !== null
+    || contextMenu !== null
+    || helpOpen
+    || moreActionsOpen
+    || transfers.some(transfer => transfer.status === 'queued' || transfer.status === 'active')
+  // Kept in a ref so the interval below is not re-created on every keystroke.
+  useEffect(() => { backgroundBusy.current = paneBusy })
   const statusNotice = error ? { tone: 'error' as const, message: error } : notice
   const clearFileSelection = useCallback(() => {
     clearSelected(tabId)
     setSelectionAnchorPath(null)
   }, [clearSelected, tabId])
+
+  // Background refresh of the open folder: contents only, never a loading state
+  // or a cleared selection, and never while the user is mid-action in the pane.
+  useEffect(() => {
+    const tick = (): void => {
+      if (document.visibilityState !== 'visible') return
+      // Hidden tabs stay mounted, so ask the DOM whether this pane is on screen.
+      if (rootRef.current?.offsetParent == null) return
+      if (backgroundBusy.current) return
+      list(undefined, { quiet: true })
+    }
+    const timer = window.setInterval(tick, SFTP_REFRESH_MS)
+    const onVisibilityChange = (): void => { if (document.visibilityState === 'visible') tick() }
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    return () => {
+      window.clearInterval(timer)
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+    }
+  }, [list])
+
+  // Switching to this tab should show the current folder contents straight away.
+  useEffect(() => {
+    if (!isActiveTab || backgroundBusy.current) return
+    list(undefined, { quiet: true })
+  }, [isActiveTab, list])
 
   const clearDropFeedback = useCallback(() => {
     if (dragOverlayTimerRef.current !== null) {
@@ -1116,6 +1162,7 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
           <div className="flex h-full items-center justify-center text-xs text-slate-500">This folder is empty</div>
         )}
 
+        <AnimatePresence initial={false} mode="wait">
         {entries.length > 0 && (
           <m.div key={path} {...fade} transition={exitTransition} className={clsx({ 'pointer-events-none opacity-60': loading })} aria-busy={loading}>
             <div className="sticky top-0 z-10 grid h-8 grid-cols-[20px_24px_minmax(0,1fr)_96px_104px_112px_144px] items-center gap-2 border-b border-surface-800 bg-surface-950 px-2 font-mono text-[11px] font-medium text-slate-500 max-[600px]:grid-cols-[20px_24px_minmax(0,1fr)]">
@@ -1228,12 +1275,15 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
             })}
           </m.div>
         )}
+        </AnimatePresence>
 
+        <AnimatePresence initial={false}>
         {loading && entries.length > 0 && (
-          <m.div {...fade} role="status" className="pointer-events-none absolute inset-x-0 top-0 z-20 flex h-8 items-center justify-center border-b border-surface-800 bg-surface-950/75 text-[11px] text-slate-400 backdrop-blur-sm">
+          <m.div key="folder-loading" {...fade} transition={exitTransition} role="status" className="pointer-events-none absolute inset-x-0 top-0 z-20 flex h-8 items-center justify-center border-b border-surface-800 bg-surface-950/75 text-[11px] text-slate-400 backdrop-blur-sm">
             <LoaderCircle className="mr-2 h-3.5 w-3.5 animate-spin motion-reduce:animate-none" /> Loading folder…
           </m.div>
         )}
+        </AnimatePresence>
 
         <AnimatePresence initial={false}>
         {dragging && (

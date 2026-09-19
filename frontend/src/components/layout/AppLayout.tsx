@@ -15,13 +15,13 @@ import SettingsDialog from '@/components/settings/SettingsDialog'
 import Logo from '@/components/ui/Logo'
 import AuthRedirectOverlay from '@/components/ui/AuthRedirectOverlay'
 import CommandPalette from '@/components/ui/CommandPalette'
-import { useModalFocus } from '@/hooks/useModalFocus'
+import PendingCloseDialog from './PendingCloseDialog'
 import { AUTH_REDIRECT_EVENT, redirectToLdapLogin } from '@/utils/authRedirect'
 import type { PaneNode } from '@/store/layoutStore'
 import type { SavedServer, Tab } from '@/types'
 import { AnimatePresence } from 'motion/react'
 import * as m from 'motion/react-m'
-import { fade, surface, surfaceSpring, surfaceTransition } from '@/motion/tokens'
+import { fade, surfaceTransition } from '@/motion/tokens'
 
 const SESSION_RESTORE_RETRY_MS = 3_000
 
@@ -106,7 +106,6 @@ export default function AppLayout({ navigateToAdmin = () => window.location.assi
   const [pendingClose, setPendingClose] = useState<PendingClose>(null)
   const pendingCloseCancelRef = useRef<HTMLButtonElement>(null)
   const dismissPendingClose = useCallback(() => setPendingClose(null), [])
-  const pendingCloseDialogRef = useModalFocus(Boolean(pendingClose), dismissPendingClose, pendingCloseCancelRef)
   const skipBeforeUnloadRef = useRef(false)
 
   const shouldWarnBeforeClosingTab = useCallback((tabId: string) => {
@@ -589,40 +588,21 @@ export default function AppLayout({ navigateToAdmin = () => window.location.assi
       )}
       </AnimatePresence>
 
+      <AnimatePresence initial={false}>
       {pendingClose && (
-        <m.div {...fade}
-          className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center"
-          onMouseDown={e => { if (e.target === e.currentTarget) dismissPendingClose() }}
-        >
-          <m.div {...surface} transition={surfaceSpring} ref={pendingCloseDialogRef} role="dialog" aria-modal="true" aria-label={pendingClose.kind === 'all' ? 'Close all tabs' : 'Close tab'} tabIndex={-1} className="w-80 bg-surface-900 border border-surface-700 rounded-xl shadow-2xl p-5 flex flex-col gap-4">
-            <div>
-              <h2 className="text-sm font-semibold text-slate-200">{pendingClose.kind === 'all' ? 'Close all tabs?' : getCloseTitle(pendingCloseTab)}</h2>
-              <p className="mt-2 text-xs text-slate-400 leading-relaxed">
-                {pendingClose.kind === 'all'
-                  ? 'Closing all tabs will disconnect SSH sessions and close SFTP browsers.'
-                  : getCloseMessage(pendingCloseTab)}
-              </p>
-            </div>
-            <div className="flex gap-2">
-              <button
-                ref={pendingCloseCancelRef}
-                type="button"
-                onClick={dismissPendingClose}
-                className="flex-1 px-3 py-2 rounded-md text-sm text-slate-400 bg-surface-800 hover:bg-surface-700 hover:text-slate-200 transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={handleConfirmPendingClose}
-                className="flex-1 px-3 py-2 rounded-md text-sm font-medium text-white bg-red-600 hover:bg-red-500 transition-colors"
-              >
-                {pendingClose.kind === 'all' ? 'Close all tabs' : 'Close tab'}
-              </button>
-            </div>
-          </m.div>
-        </m.div>
+        <PendingCloseDialog
+          key="pending-close"
+          kind={pendingClose.kind}
+          title={pendingClose.kind === 'all' ? 'Close all tabs?' : getCloseTitle(pendingCloseTab)}
+          message={pendingClose.kind === 'all'
+            ? 'Closing all tabs will disconnect SSH sessions and close SFTP browsers.'
+            : getCloseMessage(pendingCloseTab)}
+          cancelRef={pendingCloseCancelRef}
+          onCancel={dismissPendingClose}
+          onConfirm={handleConfirmPendingClose}
+        />
       )}
+      </AnimatePresence>
     </m.div>
   )
 }

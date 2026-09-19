@@ -31,6 +31,7 @@ interface TerminalState {
   setTabConnection: (id: string, host: string, port: number, username: string) => void
   setSourceTab: (id: string, sourceTabId: string) => void
   renameTab: (id: string, label: string | null) => void
+  setTabSftpPath: (id: string, path: string) => void
   getActiveTab: () => Tab | null
 }
 
@@ -130,6 +131,11 @@ export const useTerminalStore = create<TerminalState>()(
           tabs: s.tabs.map(t =>
             t.id === id ? { ...t, label: label && label.trim() ? label.trim() : null } : t
           ),
+        })),
+
+      setTabSftpPath: (id, path) =>
+        set(s => ({
+          tabs: s.tabs.map(t => (t.id === id && t.sftpPath !== path ? { ...t, sftpPath: path } : t)),
         })),
 
       getActiveTab: () => {

@@ -203,17 +203,24 @@ export function useSFTP(tabId: string, sourceTabId: string | undefined, socket: 
   const pendingListingPathRef = useRef<string | null>(null)
   const queuedSamePathRefreshRef = useRef(false)
   const listingTimeoutRef = useRef<number | null>(null)
+  const quietListingRef = useRef(false)
+  // Read once: the tab remembers where the user was before the reload.
+  const restorePathRef = useRef<string | null>(
+    useTerminalStore.getState().tabs.find(current => current.id === tabId)?.sftpPath ?? null,
+  )
   const sessionId = useTerminalStore(s => s.sessionId)
   const addTab = useTerminalStore(s => s.addTab)
   const setActiveTab = useTerminalStore(s => s.setActiveTab)
   const setSourceTab = useTerminalStore(s => s.setSourceTab)
   const setTabConnection = useTerminalStore(s => s.setTabConnection)
   const setTabStatus = useTerminalStore(s => s.setTabStatus)
+  const setTabSftpPath = useTerminalStore(s => s.setTabSftpPath)
   const sourceStatus = useTerminalStore(s => sourceTabId ? s.tabs.find(tab => tab.id === sourceTabId)?.status : 'connected')
   const tab = useSFTPStore(s => s.tabs[tabId])
   const transfers = useSFTPStore(s => s.transfers.filter(t => t.tabId === tabId))
   const ensureTab = useSFTPStore(s => s.ensureTab)
   const setListing = useSFTPStore(s => s.setListing)
+  const setListingQuiet = useSFTPStore(s => s.setListingQuiet)
   const setUsername = useSFTPStore(s => s.setUsername)
   const setIsRoot = useSFTPStore(s => s.setIsRoot)
   const setLoading = useSFTPStore(s => s.setLoading)
@@ -248,6 +255,11 @@ export function useSFTP(tabId: string, sourceTabId: string | undefined, socket: 
       if (pendingListingPathRef.current !== path) return
       pendingListingPathRef.current = null
       queuedSamePathRefreshRef.current = false
+      // A background refresh never interrupts the view with an error surface.
+      if (quietListingRef.current) {
+        quietListingRef.current = false
+        return
+      }
       setError(tabId, 'Folder listing timed out. Refresh to try again.')
     }, LISTING_TIMEOUT_MS)
   }, [clearListingTimeout, setError, tabId])
@@ -255,7 +267,7 @@ export function useSFTP(tabId: string, sourceTabId: string | undefined, socket: 
   useEffect(() => () => clearListingTimeout(), [clearListingTimeout])
 
 
-  const list = useCallback((path?: string) => {
+  const list = useCallback((path?: string, options?: { quiet?: boolean }) => {
     const targetPath = path ?? useSFTPStore.getState().tabs[tabId]?.path ?? '.'
     const normalized = normalizePath(targetPath)
     if (pendingListingPathRef.current === normalized) {
@@ -263,10 +275,12 @@ export function useSFTP(tabId: string, sourceTabId: string | undefined, socket: 
       return
     }
     pendingListingPathRef.current = normalized
+    quietListingRef.current = options?.quiet === true
     queuedSamePathRefreshRef.current = false
     scheduleListingTimeout(normalized)
     ensureTab(tabId)
-    setLoading(tabId, true)
+    // A background refresh leaves the pane interactive: no loading state.
+    if (options?.quiet !== true) setLoading(tabId, true)
     socket.emit('sftp:list', { session_id: sessionId, tab_id: tabId, path: targetPath })
   }, [scheduleListingTimeout, socket, sessionId, tabId, ensureTab, setLoading])
 
@@ -300,6 +314,9 @@ export function useSFTP(tabId: string, sourceTabId: string | undefined, socket: 
       session_id: sessionId,
       tab_id: tabId,
       source_tab_id: sourceTabId ?? tabId,
+      // Reopen the folder this tab was in before the reload; the server falls
+      // back to the SFTP home directory when it no longer exists.
+      ...(restorePathRef.current ? { path: restorePathRef.current } : {}),
     })
   }, [addTab, ensureTab, sessionId, setActiveTab, setDisconnected, setSourceTab, setTabConnection, socket, tabId, sourceTabId, setLoading])
 
@@ -366,8 +383,15 @@ export function useSFTP(tabId: string, sourceTabId: string | undefined, socket: 
         && requestedPath.startsWith('/') && !requestedPath.startsWith('~/')
       ) return
       clearListingTimeout()
+      const quiet = quietListingRef.current
+      quietListingRef.current = false
       if (payload.ok === false) {
         pendingListingPathRef.current = null
+        // A background refresh stays invisible: keep the listing on screen.
+        if (quiet) {
+          queuedSamePathRefreshRef.current = false
+          return
+        }
         showFailure(payload, 'Could not load folder', 'Check the path and retry.')
         if (queuedSamePathRefreshRef.current) {
           queuedSamePathRefreshRef.current = false
@@ -377,12 +401,16 @@ export function useSFTP(tabId: string, sourceTabId: string | undefined, socket: 
       }
       if (payload.username !== undefined) setUsername(tabId, payload.username)
       if (payload.is_root !== undefined) setIsRoot(tabId, payload.is_root)
-      setListing(tabId, payload.path ?? '.', payload.entries ?? [])
+      const nextPath = payload.path ?? '.'
+      if (quiet) setListingQuiet(tabId, nextPath, payload.entries ?? [])
+      else setListing(tabId, nextPath, payload.entries ?? [])
+      restorePathRef.current = null
+      setTabSftpPath(tabId, nextPath)
       setTabStatus(tabId, 'connected')
       pendingListingPathRef.current = null
       if (queuedSamePathRefreshRef.current) {
         queuedSamePathRefreshRef.current = false
-        list(payload.path ?? requestedPath ?? '.')
+        list(nextPath)
       }
     }
     const showFailure = (
@@ -491,7 +519,7 @@ export function useSFTP(tabId: string, sourceTabId: string | undefined, socket: 
       socket.off('sftp:download:result', onDownload)
       socket.off('sftp:accounts:result', onAccounts)
     }
-  }, [clearListingTimeout, socket, tabId, list, refreshCurrentDirectory, setTabStatus, setError, setNotice, setListing, setUsername, setIsRoot, setDisconnected])
+  }, [clearListingTimeout, socket, tabId, list, refreshCurrentDirectory, setTabStatus, setError, setNotice, setListing, setListingQuiet, setTabSftpPath, setUsername, setIsRoot, setDisconnected])
 
   const resumeUpload = useCallback(async (transferId: string, tracker?: SpeedTracker) => {
     const pending = pendingUploadsRef.current.get(transferId)

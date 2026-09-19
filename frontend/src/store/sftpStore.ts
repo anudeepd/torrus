@@ -42,6 +42,7 @@ interface SFTPStore {
   transfers: TransferItem[]
   ensureTab: (tabId: string) => void
   setListing: (tabId: string, path: string, entries: SFTPEntry[]) => void
+  setListingQuiet: (tabId: string, path: string, entries: SFTPEntry[]) => void
   setUsername: (tabId: string, username: string | null) => void
   setIsRoot: (tabId: string, isRoot: boolean) => void
   setLoading: (tabId: string, loading: boolean) => void
@@ -83,6 +84,26 @@ export const useSFTPStore = create<SFTPStore>((set, get) => ({
         [tabId]: { ...(s.tabs[tabId] ?? emptyTab()), path, entries, loading: false, error: null, selectedPaths: [] },
       },
     })),
+
+  // Background refresh: swap in the new contents but leave the loading state,
+  // the selection (minus entries that disappeared) and the scroll alone.
+  setListingQuiet: (tabId, path, entries) =>
+    set(s => {
+      const tab = s.tabs[tabId] ?? emptyTab()
+      const present = new Set(entries.map(entry => entry.path))
+      return {
+        tabs: {
+          ...s.tabs,
+          [tabId]: {
+            ...tab,
+            path,
+            entries,
+            error: null,
+            selectedPaths: tab.selectedPaths.filter(selected => present.has(selected)),
+          },
+        },
+      }
+    }),
 
   setUsername: (tabId, username) =>
     set(s => ({ tabs: { ...s.tabs, [tabId]: { ...(s.tabs[tabId] ?? emptyTab()), username } } })),

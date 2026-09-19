@@ -2397,15 +2397,35 @@ async def on_sftp_open(sid, data):
             to=sid,
         )
         return
+    restore_path = data.get("path")
+    if not isinstance(restore_path, str) or not restore_path:
+        restore_path = "."
     try:
-        result = await sftp_manager.list_directory(tab_id, ".")
+        result = await sftp_manager.list_directory(tab_id, restore_path)
     except SFTPError as exc:
-        await sio.emit(
-            "sftp:open:result",
-            {"tab_id": tab_id, "ok": False, "code": exc.code, "message": exc.message},
-            to=sid,
-        )
-        return
+        if restore_path == ".":
+            await sio.emit(
+                "sftp:open:result",
+                {"tab_id": tab_id, "ok": False, "code": exc.code, "message": exc.message},
+                to=sid,
+            )
+            return
+        # The folder a client remembered across a reload can be gone; fall back
+        # to the SFTP home directory instead of failing the whole open.
+        try:
+            result = await sftp_manager.list_directory(tab_id, ".")
+        except SFTPError as fallback_exc:
+            await sio.emit(
+                "sftp:open:result",
+                {
+                    "tab_id": tab_id,
+                    "ok": False,
+                    "code": fallback_exc.code,
+                    "message": fallback_exc.message,
+                },
+                to=sid,
+            )
+            return
 
     try:
         target = await ssh_manager.get_session_target(session_id, source_tab_id)

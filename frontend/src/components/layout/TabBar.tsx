@@ -9,10 +9,10 @@ import Logo from '@/components/ui/Logo'
 import type { Tab } from '@/types'
 import { modKey } from '@/utils/platform'
 import { submitLdapLogout } from '@/utils/authRedirect'
-import { useModalFocus } from '@/hooks/useModalFocus'
+import { useDialogPresence } from '@/hooks/useDialogPresence'
 import { AnimatePresence } from 'motion/react'
 import * as m from 'motion/react-m'
-import { anchoredSurface, exitTransition, surfaceSpring } from '@/motion/tokens'
+import { anchoredSurface, exitTransition, fade, surface, surfaceSpring } from '@/motion/tokens'
 
 interface TabBarProps {
   onAddTab: () => void
@@ -96,7 +96,7 @@ function SaveSessionDialog({ state, onSave, onClose }: {
     inputRef.current?.select()
   }, [])
 
-  const dialogRef = useModalFocus(true, onClose, inputRef)
+  const { ref: dialogRef, presenceProps } = useDialogPresence(onClose, inputRef)
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault()
@@ -105,11 +105,23 @@ function SaveSessionDialog({ state, onSave, onClose }: {
   }
 
   return (
-    <div
+    <m.div
+      {...fade}
+      transition={exitTransition}
       className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center"
       onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}
     >
-      <div ref={dialogRef} role="dialog" aria-modal="true" aria-label="Save Session" tabIndex={-1} className="bg-surface-900 border border-surface-700 rounded-xl p-5 w-72 shadow-2xl flex flex-col gap-3">
+      <m.div
+        {...surface}
+        {...presenceProps}
+        transition={surfaceSpring}
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Save Session"
+        tabIndex={-1}
+        className="bg-surface-900 border border-surface-700 rounded-xl p-5 w-72 shadow-2xl flex flex-col gap-3"
+      >
         <div className="flex items-center gap-2">
           <Bookmark className="w-4 h-4 text-brand-400" />
           <h2 className="text-sm font-semibold text-slate-200">Save Session</h2>
@@ -146,8 +158,8 @@ function SaveSessionDialog({ state, onSave, onClose }: {
             </button>
           </div>
         </form>
-      </div>
-    </div>
+      </m.div>
+    </m.div>
   )
 }
 
@@ -530,8 +542,10 @@ export default function TabBar({ onAddTab, onCloseTab, onCloneTab, onOpenSftpTab
     </div>
 
     {/* Save session dialog — rendered outside the overflow-hidden TabBar */}
+    <AnimatePresence initial={false}>
     {saveDialog && (
       <SaveSessionDialog
+        key="save-session"
         state={saveDialog}
         onSave={(name) => {
           const ok = addServer({
@@ -546,6 +560,7 @@ export default function TabBar({ onAddTab, onCloseTab, onCloneTab, onOpenSftpTab
         onClose={() => setSaveDialog(null)}
       />
     )}
+    </AnimatePresence>
     </>
   )
 }

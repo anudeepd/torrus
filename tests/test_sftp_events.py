@@ -828,3 +828,83 @@ async def test_sftp_mkdirs_event_requires_a_known_request_id(reset_server_state)
 
     server_module.sftp_manager.prepare_upload_directories.assert_not_called()
     sio_mock.emit.assert_not_awaited()
+
+
+def _open_test_server(server_module, list_directory):
+    import torrus.server as server_module_local
+
+    server_module_local.sftp_manager = MagicMock()
+    server_module_local.sftp_manager.open_sftp = AsyncMock(return_value=True)
+    server_module_local.sftp_manager.list_directory = list_directory
+    server_module_local.ssh_manager = MagicMock()
+    server_module_local.ssh_manager.get_session_target = AsyncMock(return_value=None)
+    server_module_local.ssh_manager.is_root_session = AsyncMock(return_value=False)
+
+
+@pytest.mark.asyncio
+async def test_sftp_open_lists_the_path_remembered_by_the_client(reset_server_state):
+    from torrus.server import on_sftp_open
+    import torrus.server as server_module
+
+    sio_mock = MagicMock()
+    sio_mock.emit = AsyncMock()
+    list_directory = AsyncMock(return_value={"ok": True, "path": "/srv/app", "entries": []})
+    _open_test_server(server_module, list_directory)
+
+    with patch("torrus.server.sio", sio_mock):
+        await on_sftp_open(
+            "sid-1",
+            {
+                "session_id": "sess1",
+                "tab_id": "sftp-tab",
+                "source_tab_id": "terminal-tab",
+                "path": "/srv/app",
+            },
+        )
+
+    list_directory.assert_awaited_once_with("sftp-tab", "/srv/app")
+    assert sio_mock.emit.await_args.args[1]["path"] == "/srv/app"
+
+
+@pytest.mark.asyncio
+async def test_sftp_open_falls_back_to_home_when_the_remembered_path_is_gone(
+    reset_server_state,
+):
+    from torrus.server import on_sftp_open
+    from torrus.sftp_manager import SFTPError
+    import torrus.server as server_module
+
+    sio_mock = MagicMock()
+    sio_mock.emit = AsyncMock()
+    list_directory = AsyncMock(
+        side_effect=[
+            SFTPError("NO_SUCH_FILE", "No such file: /srv/gone"),
+            {"ok": True, "path": ".", "entries": []},
+        ]
+    )
+    _open_test_server(server_module, list_directory)
+
+    with patch("torrus.server.sio", sio_mock):
+        await on_sftp_open(
+            "sid-1",
+            {
+                "session_id": "sess1",
+                "tab_id": "sftp-tab",
+                "source_tab_id": "terminal-tab",
+                "path": "/srv/gone",
+            },
+        )
+
+    assert [call.args[1] for call in list_directory.await_args_list] == ["/srv/gone", "."]
+    sio_mock.emit.assert_awaited_once_with(
+        "sftp:open:result",
+        {
+            "tab_id": "sftp-tab",
+            "username": None,
+            "is_root": False,
+            "ok": True,
+            "path": ".",
+            "entries": [],
+        },
+        to="sid-1",
+    )
