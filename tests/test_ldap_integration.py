@@ -60,8 +60,8 @@ def test_login_template_uses_nonce_for_inline_assets():
     assert (
         '<input type="hidden" name="csrf_token" value="{{ csrf_token }}">' in template
     )
-    assert "torrus-card-in" in template
-    assert "torrus-error-up" in template
+    assert "animation: login-card-in 340ms" in template
+    assert "animation: login-error-up 180ms" in template
     assert "torrus:login:username" in template
     assert "Signing in" in template
     assert "Secured by" in template

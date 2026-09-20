@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.2.50] - 2026-09-20
+
+### Changed
+
+- Share one login card with ldapgate, lagun and xwing: the same two animations (`login-card-in` 340ms, `login-error-up` 180ms), an always-present error slot whose message carries `role="alert"` with both fields linked to it by `aria-describedby`, one `:root` block instead of colours scattered through the stylesheet, and the same username rule (restore the saved name only after a failed attempt). The card now differs from the other three only by colours, name, brand mark, title and favicon.
+- Take the darker green `#047857` for the submit fill and lighten to `#168163` on hover, so the white label keeps 4.82:1 while the hover still brightens the way the rest of the app does. The previous pair measured 3.77:1 at rest and 2.54:1 on hover against a white label; the app's own `brand-500` (`#10b981`) cannot carry white text at all.
+- Move placeholders and secondary copy to `#86909d`: the old `#475569` measured 1.93:1 on the input surface and 2.66:1 on the page.
+- Require ldapgate 0.1.28 in the `ldap` extra.
+
 ## [0.2.49] - 2026-09-19
 
 ### Added
