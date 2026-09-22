@@ -153,7 +153,7 @@ describe('SFTPBrowser', () => {
     })
 
     expect(screen.queryByRole('button', { name: '~' })).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: '/' })).toHaveClass('text-slate-600', 'text-xs')
+    expect(screen.getByRole('button', { name: '/' })).toHaveClass('text-slate-400', 'text-xs')
     expect(screen.getByText('/', { selector: 'span' })).toHaveClass('font-mono', 'text-xs')
     expect(screen.getByRole('button', { name: 'tmp' })).toHaveAttribute('title', '/tmp')
     expect(screen.getByRole('button', { name: 'anudeep' })).toHaveAttribute('title', '/tmp/anudeep')
@@ -379,7 +379,7 @@ describe('SFTPBrowser', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('Failed to delete item: Permission denied.')
     expect(screen.getByRole('alert')).toHaveTextContent('ERROR')
     expect(screen.getByText('Failed to delete item: Permission denied.')).toHaveClass('break-words')
-    expect(screen.getByRole('button', { name: 'Dismiss message' })).toHaveClass('max-[600px]:h-11', 'max-[600px]:w-11')
+    expect(screen.getByRole('button', { name: 'Dismiss message' })).toHaveClass('max-xs:h-11', 'max-xs:w-11')
 
     act(() => vi.advanceTimersByTime(11999))
     expect(screen.getByRole('alert')).toBeInTheDocument()

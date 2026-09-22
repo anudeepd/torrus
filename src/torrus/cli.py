@@ -13,7 +13,6 @@ from torrus.logging_utils import configure_logging
 @click.group()
 def main():
     """torrus — web-based SSH terminal."""
-    pass
 
 
 @main.command()
@@ -150,7 +149,7 @@ def audit_show(username: str | None, since: str | None, limit: int):
     help="Age in days.",
 )
 def audit_purge(older_than: int):
-    from torrus.audit_store import init_db, purge_terminal_input_events
+    from torrus.audit_store import init_db, purge_audit_events_older_than
 
     init_db()
-    click.echo(f"Purged {purge_terminal_input_events(older_than)} audit events")
+    click.echo(f"Purged {purge_audit_events_older_than(older_than)} audit events")

@@ -6,19 +6,22 @@ import asyncio
 import base64
 import concurrent.futures
 import errno
-import io
 import os
 import posixpath
 import shlex
 import stat
+import tempfile
 import time
 import zipfile
 from dataclasses import dataclass, field
-from typing import Any, Callable, AsyncIterator, Iterator, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 
 import paramiko
 
 from .upload_engine import UploadSinkError, is_staging_name, staging_name
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator, Callable, Iterator
 
 T = TypeVar("T")
 
@@ -95,7 +98,7 @@ class SFTPSink:
     def __init__(
         self,
         *,
-        manager: "SFTPManager",
+        manager: SFTPManager,
         tab_id: str,
         client: paramiko.SFTPClient,
         directory: str,
@@ -383,6 +386,10 @@ class SFTPManager:
         lock = self._locks.setdefault(tab_id, asyncio.Lock())
         async with lock:
             await self._close_sftp_unlocked(tab_id)
+        # The tab is gone, so its lock is dead weight; without this the map keeps
+        # one entry per tab ever opened. A late request creates a fresh lock and
+        # finds no session.
+        self._locks.pop(tab_id, None)
 
     async def _close_sftp_unlocked(self, tab_id: str) -> None:
         for client in self._upload_clients.pop(tab_id, set()):
@@ -462,11 +469,21 @@ class SFTPManager:
         Returns ``{"ok": True, "files": [(resolved_path, arcname), ...]}``
         ready for ``stream_bulk_zip``.
         """
-        return await self._locked(
+        prepared = await self._locked(
             tab_id,
             lambda session: self._prepare_bulk_download_sync(session, paths),
             expected_session_id=expected_session_id,
         )
+        if not prepared.get("ok"):
+            return prepared
+        total = sum(size for _path, _arcname, size in prepared["files"])
+        if total > BULK_ZIP_MAX_BYTES:
+            raise SFTPError(
+                "ARCHIVE_TOO_LARGE",
+                "This selection is larger than the archive limit "
+                f"({BULK_ZIP_MAX_BYTES // (1024 ** 2)} MB). Download files individually.",
+            )
+        return prepared
 
     async def prepare_upload_directories(
         self,
@@ -488,7 +505,7 @@ class SFTPManager:
                 try:
                     session.client.stat(resolved)
                     continue
-                except IOError:
+                except OSError:
                     pass
                 try:
                     session.client.mkdir(resolved)
@@ -548,7 +565,12 @@ class SFTPManager:
 
         try:
             while True:
-                chunk = await self._run_blocking(remote_file.read, chunk_size)
+                # Every SFTP request on this tab takes the lock: one paramiko
+                # client carries a single request stream, so a concurrent
+                # list/chmod/delete must not overlap a read. The lock is never
+                # held across a yield, so an abandoned download cannot strand it.
+                async with lock:
+                    chunk = await self._run_blocking(remote_file.read, chunk_size)
                 if not chunk:
                     break
                 session.last_activity = time.time()
@@ -562,8 +584,8 @@ class SFTPManager:
                 ) from exc
             raise mapped from exc
         finally:
+            session.last_activity = time.time()
             async with lock:
-                session.last_activity = time.time()
                 try:
                     await self._run_blocking(remote_file.close)
                 except Exception:
@@ -580,10 +602,9 @@ class SFTPManager:
 
         Remote file bytes are read through the SSH executor and the archive is
         compressed with ``zipfile.ZIP_DEFLATED`` (matching xwing's
-        ``/_bulk/zip``). The tab lock is only held while the session is
-        resolved, mirroring ``stream_download`` so other SFTP operations on
-        the tab can interleave between archive chunks. Files must already be
-        validated by ``prepare_bulk_download``.
+        ``/_bulk/zip``). The tab lock is taken per request, never across a
+        yield, because one paramiko SFTPClient carries a single request stream.
+        Files must already be validated by ``prepare_bulk_download``.
         """
         lock = self._locks.setdefault(tab_id, asyncio.Lock())
         async with lock:
@@ -594,7 +615,8 @@ class SFTPManager:
         archive = self._bulk_zip_sync(session, files, chunk_size)
         try:
             while True:
-                chunk = await self._run_blocking(_next_or_sentinel, archive, sentinel)
+                async with lock:
+                    chunk = await self._run_blocking(_next_or_sentinel, archive, sentinel)
                 if chunk is sentinel:
                     break
                 session.last_activity = time.time()
@@ -610,8 +632,7 @@ class SFTPManager:
                 ) from exc
             raise mapped from exc
         finally:
-            async with lock:
-                session.last_activity = time.time()
+            session.last_activity = time.time()
 
     async def _locked(self, tab_id: str, work, expected_session_id: str | None = None):
         lock = self._locks.setdefault(tab_id, asyncio.Lock())
@@ -620,20 +641,6 @@ class SFTPManager:
             session.last_activity = time.time()
             try:
                 return await self._run_blocking(work, session)
-            except SFTPError:
-                raise
-            except Exception as exc:
-                raise _map_error(exc, getattr(exc, "filename", "")) from exc
-
-    async def _locked_stream(
-        self, tab_id: str, work, expected_session_id: str | None = None
-    ):
-        lock = self._locks.setdefault(tab_id, asyncio.Lock())
-        async with lock:
-            session = self._get_session(tab_id, expected_session_id=expected_session_id)
-            session.last_activity = time.time()
-            try:
-                return await work(session)
             except SFTPError:
                 raise
             except Exception as exc:
@@ -661,19 +668,31 @@ class SFTPManager:
                 os.read(read_fd, 1)
             except OSError:
                 pass
+            # A cancelled caller no longer wants the result; setting it would
+            # raise InvalidStateError inside the event loop's reader callback.
+            if result_future.cancelled():
+                return
             if "error" in result:
                 result_future.set_exception(result["error"])
             else:
                 result_future.set_result(result["value"])
 
-        worker_future = None
         try:
             worker_future = self._executor.submit(work)
+        except BaseException:
+            os.close(read_fd)
+            os.close(write_fd)
+            raise
+        # The worker owns the write end from here: closing it in this coroutine
+        # while the thread may still be writing could hand the descriptor number
+        # to an unrelated file. The callback runs once the thread is done.
+        worker_future.add_done_callback(lambda _future: os.close(write_fd))
+        try:
             loop.add_reader(read_fd, complete)
             return await result_future
         except asyncio.CancelledError:
-            if worker_future is not None:
-                worker_future.cancel()
+            # Cannot stop a running thread; the result is simply discarded.
+            worker_future.cancel()
             raise
         finally:
             try:
@@ -681,7 +700,6 @@ class SFTPManager:
             except Exception:
                 pass
             os.close(read_fd)
-            os.close(write_fd)
 
     def _get_session(
         self, tab_id: str, expected_session_id: str | None = None
@@ -728,7 +746,7 @@ class SFTPManager:
                 if is_link:
                     try:
                         is_dir = stat.S_ISDIR(
-                            (session.client.stat(entry_path).st_mode or 0)
+                            session.client.stat(entry_path).st_mode or 0
                         )
                     except Exception:
                         pass
@@ -788,7 +806,7 @@ class SFTPManager:
         resolved = _resolve_remote_path(session.cwd, remote_path, session.home)
         try:
             attr = session.client.stat(resolved)
-            if stat.S_ISDIR((attr.st_mode or 0)):
+            if stat.S_ISDIR(attr.st_mode or 0):
                 raise SFTPError(
                     "TRANSFER_FAILED", f"Cannot download directory: {resolved}"
                 )
@@ -908,29 +926,34 @@ class SFTPManager:
         files: list[tuple[str, str, int]],
         chunk_size: int,
     ) -> Iterator[bytes]:
-        """Build the zip archive entry-by-entry, yielding bytes as it grows."""
-        buffer = io.BytesIO()
-        flushed = 0
-        pending = bytearray()
-        with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
-            for file_path, arcname, _size in files:
-                try:
-                    with session.client.open(file_path, "rb") as remote_file:
-                        data = remote_file.read()
-                except Exception as exc:
-                    raise _map_error(exc, file_path) from exc
-                archive.writestr(arcname, data, compress_type=zipfile.ZIP_DEFLATED)
-                flushed, new_bytes = _drain_zip_bytes(buffer, flushed)
-                if new_bytes:
-                    pending += new_bytes
-                    if len(pending) >= chunk_size:
-                        yield bytes(pending)
-                        pending.clear()
-        flushed, new_bytes = _drain_zip_bytes(buffer, flushed)
-        if new_bytes:
-            pending += new_bytes
-        if pending:
-            yield bytes(pending)
+        """Build the zip archive entry-by-entry, yielding bytes as it grows.
+
+        The archive spools to disk past ``_ZIP_SPOOL_MEMORY_BYTES`` and each
+        member is streamed in bounded reads, so peak memory tracks the chunk size
+        rather than the archive size.
+        """
+        writer = _SpooledZipWriter()
+        try:
+            with zipfile.ZipFile(writer, "w", zipfile.ZIP_DEFLATED) as archive:
+                for file_path, arcname, _size in files:
+                    member = safe_arcname(arcname)
+                    try:
+                        with session.client.open(file_path, "rb") as remote_file, (
+                            archive.open(member, "w")
+                        ) as member_file:
+                            while True:
+                                block = remote_file.read(_ZIP_READ_CHUNK_BYTES)
+                                if not block:
+                                    break
+                                member_file.write(block)
+                                if len(writer.pending) >= chunk_size:
+                                    yield writer.take(chunk_size)
+                    except Exception as exc:
+                        raise _map_error(exc, file_path) from exc
+            while writer.pending:
+                yield writer.take(chunk_size)
+        finally:
+            writer.close()
 
     def _delete_sync(self, session: SFTPSession, path: str) -> dict[str, Any]:
         resolved = _resolve_remote_path(session.cwd, path, session.home)
@@ -1072,13 +1095,69 @@ def _dedupe_arcname(arcname: str, taken: set[str]) -> str:
         index += 1
 
 
-def _drain_zip_bytes(buffer: io.BytesIO, flushed: int) -> tuple[int, bytes]:
-    """Return ``(new_total, bytes_written_since_flushed)`` for a growing zip buffer."""
-    view = memoryview(buffer.getbuffer())
-    total = len(view)
-    new_bytes = view[flushed:total].tobytes()
-    del view
-    return total, new_bytes
+# Bulk archives are spooled to disk past this size and each member is read in
+# bounded blocks, so a large tree cannot be assembled in memory.
+_ZIP_SPOOL_MEMORY_BYTES = 8 * 1024 * 1024
+_ZIP_READ_CHUNK_BYTES = 1 * 1024 * 1024
+# Ceiling for one "download as zip" request; a tree larger than this is refused
+# before the response starts rather than driving the process into the OOM killer.
+BULK_ZIP_MAX_BYTES = int(os.getenv("TORRUS_BULK_ZIP_MAX_BYTES", str(2 * 1024**3)))
+
+
+def safe_arcname(arcname: str) -> str:
+    """Confine an archive member name to the extraction root.
+
+    Member names come from the remote server's directory listing, so they are
+    attacker-controlled: a name like ``../../etc/cron.d/x`` would otherwise be
+    written verbatim and escape the directory the user extracts into. Names are
+    normalised against an absolute root, which removes ``..`` segments and any
+    leading separator instead of trusting them.
+    """
+    normalised = posixpath.normpath("/" + arcname.replace("\\", "/"))
+    return normalised.lstrip("/") or "unnamed"
+
+
+class _SpooledZipWriter:
+    """Archive target that spools to disk and hands back what was just written.
+
+    ``zipfile`` writes through this object, so the bytes it produces can be
+    yielded as they appear without reading the file back — reading while the
+    archive is mid-member moves the shared file position and corrupts it.
+    ``pending`` is drained by the generator on the same thread that writes, and
+    the spool rolls over to disk past ``_ZIP_SPOOL_MEMORY_BYTES``.
+    """
+
+    def __init__(self) -> None:
+        # Owned by this object and closed by the generator's finally block.
+        self._spool = tempfile.SpooledTemporaryFile(  # noqa: SIM115
+            max_size=_ZIP_SPOOL_MEMORY_BYTES, mode="w+b"
+        )
+        self.pending = bytearray()
+
+    def write(self, data: bytes) -> int:
+        written = self._spool.write(data)
+        self.pending += data
+        return written
+
+    def take(self, limit: int) -> bytes:
+        chunk = bytes(self.pending[:limit])
+        del self.pending[:limit]
+        return chunk
+
+    def tell(self) -> int:
+        return self._spool.tell()
+
+    def flush(self) -> None:
+        self._spool.flush()
+
+    def seekable(self) -> bool:
+        # Report non-seekable on purpose: zipfile then writes a data descriptor
+        # after each member instead of seeking back to patch its local header.
+        # Back-patching would rewrite bytes this generator already yielded.
+        return False
+
+    def close(self) -> None:
+        self._spool.close()
 
 
 def _next_or_sentinel(iterator: Iterator[bytes], sentinel: object) -> bytes:

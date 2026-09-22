@@ -1,16 +1,16 @@
 """Tests for SFTP Socket.IO event handlers."""
 
 import posixpath
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from starlette.requests import Request
-from unittest.mock import AsyncMock, MagicMock, patch
 
 
 @pytest.mark.asyncio
 async def test_sftp_list_event_emits_listing(reset_server_state):
-    from torrus.server import on_sftp_list
     import torrus.server as server_module
+    from torrus.server import on_sftp_list
 
     sio_mock = MagicMock()
     sio_mock.emit = AsyncMock()
@@ -34,8 +34,8 @@ async def test_sftp_list_event_emits_listing(reset_server_state):
 
 @pytest.mark.asyncio
 async def test_sftp_list_checks_source_ssh_tab_for_ldap_owner(reset_server_state):
-    from torrus.server import on_sftp_list
     import torrus.server as server_module
+    from torrus.server import on_sftp_list
 
     sio_mock = MagicMock()
     sio_mock.emit = AsyncMock()
@@ -78,9 +78,9 @@ async def test_sftp_list_checks_source_ssh_tab_for_ldap_owner(reset_server_state
 
 @pytest.mark.asyncio
 async def test_sftp_list_event_returns_structured_error(reset_server_state):
+    import torrus.server as server_module
     from torrus.server import on_sftp_list
     from torrus.sftp_manager import SFTPError
-    import torrus.server as server_module
 
     sio_mock = MagicMock()
     sio_mock.emit = AsyncMock()
@@ -108,9 +108,9 @@ async def test_sftp_list_event_returns_structured_error(reset_server_state):
 
 @pytest.mark.asyncio
 async def test_sftp_error_event_on_missing_session(reset_server_state):
+    import torrus.server as server_module
     from torrus.server import on_sftp_download
     from torrus.sftp_manager import SFTPError
-    import torrus.server as server_module
 
     sio_mock = MagicMock()
     sio_mock.emit = AsyncMock()
@@ -140,9 +140,9 @@ async def test_sftp_error_event_on_missing_session(reset_server_state):
 
 @pytest.mark.asyncio
 async def test_sftp_mkdir_error_identifies_operation(reset_server_state):
+    import torrus.server as server_module
     from torrus.server import on_sftp_mkdir
     from torrus.sftp_manager import SFTPError
-    import torrus.server as server_module
 
     sio_mock = MagicMock()
     sio_mock.emit = AsyncMock()
@@ -171,8 +171,8 @@ async def test_sftp_mkdir_error_identifies_operation(reset_server_state):
 
 @pytest.mark.asyncio
 async def test_sftp_open_uses_source_tab_public_api(reset_server_state):
-    from torrus.server import on_sftp_open
     import torrus.server as server_module
+    from torrus.server import on_sftp_open
 
     sio_mock = MagicMock()
     sio_mock.emit = AsyncMock()
@@ -217,8 +217,8 @@ async def test_sftp_open_uses_source_tab_public_api(reset_server_state):
 
 @pytest.mark.asyncio
 async def test_sftp_open_includes_source_ssh_username(reset_server_state):
-    from torrus.server import on_sftp_open
     import torrus.server as server_module
+    from torrus.server import on_sftp_open
 
     sio_mock = MagicMock()
     sio_mock.emit = AsyncMock()
@@ -259,8 +259,8 @@ async def test_sftp_open_includes_source_ssh_username(reset_server_state):
 
 @pytest.mark.asyncio
 async def test_sftp_open_continues_when_username_lookup_fails(reset_server_state):
-    from torrus.server import on_sftp_open
     import torrus.server as server_module
+    from torrus.server import on_sftp_open
 
     sio_mock = MagicMock()
     sio_mock.emit = AsyncMock()
@@ -303,8 +303,8 @@ async def test_sftp_open_continues_when_username_lookup_fails(reset_server_state
 
 @pytest.mark.asyncio
 async def test_sftp_chmod_emits_success_result(reset_server_state):
-    from torrus.server import on_sftp_chmod
     import torrus.server as server_module
+    from torrus.server import on_sftp_chmod
 
     sio_mock = MagicMock()
     sio_mock.emit = AsyncMock()
@@ -330,8 +330,8 @@ async def test_sftp_chmod_emits_success_result(reset_server_state):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mode", ["777", -1, True, False])
 async def test_sftp_chmod_rejects_invalid_mode(reset_server_state, mode):
-    from torrus.server import on_sftp_chmod
     import torrus.server as server_module
+    from torrus.server import on_sftp_chmod
 
     sio_mock = MagicMock()
     sio_mock.emit = AsyncMock()
@@ -358,8 +358,8 @@ async def test_sftp_chmod_rejects_invalid_mode(reset_server_state, mode):
 
 @pytest.mark.asyncio
 async def test_sftp_accounts_emits_remote_users_and_groups(reset_server_state):
-    from torrus.server import on_sftp_accounts
     import torrus.server as server_module
+    from torrus.server import on_sftp_accounts
 
     sio_mock = MagicMock()
     sio_mock.emit = AsyncMock()
@@ -390,8 +390,8 @@ async def test_sftp_accounts_emits_remote_users_and_groups(reset_server_state):
 
 @pytest.mark.asyncio
 async def test_sftp_close_closes_sftp_session(reset_server_state):
-    from torrus.server import on_sftp_close
     import torrus.server as server_module
+    from torrus.server import on_sftp_close
 
     sio_mock = MagicMock()
     sio_mock.emit = AsyncMock()
@@ -413,8 +413,8 @@ async def test_sftp_close_closes_sftp_session(reset_server_state):
 async def test_sftp_open_emits_connection_closed_when_channel_unavailable(
     reset_server_state,
 ):
-    from torrus.server import on_sftp_open
     import torrus.server as server_module
+    from torrus.server import on_sftp_open
 
     sio_mock = MagicMock()
     sio_mock.emit = AsyncMock()
@@ -441,9 +441,9 @@ async def test_sftp_open_emits_connection_closed_when_channel_unavailable(
 
 @pytest.mark.asyncio
 async def test_sftp_delete_returns_partial_results(reset_server_state):
+    import torrus.server as server_module
     from torrus.server import on_sftp_delete
     from torrus.sftp_manager import SFTPError
-    import torrus.server as server_module
 
     async def delete(_tab_id, path):
         if path == "bad.txt":
@@ -482,9 +482,9 @@ async def test_sftp_delete_returns_partial_results(reset_server_state):
 
 @pytest.mark.asyncio
 async def test_sftp_http_download_returns_error_before_stream(reset_server_state):
+    import torrus.server as server_module
     from torrus.server import sftp_stream_download
     from torrus.sftp_manager import SFTPError
-    import torrus.server as server_module
 
     server_module.ssh_manager = MagicMock()
     server_module.ssh_manager.has_session = AsyncMock(return_value=True)
@@ -514,8 +514,8 @@ async def test_sftp_http_download_returns_error_before_stream(reset_server_state
 
 @pytest.mark.asyncio
 async def test_sftp_http_download_reports_stream_size(reset_server_state):
-    from torrus.server import sftp_stream_download
     import torrus.server as server_module
+    from torrus.server import sftp_stream_download
 
     server_module.ssh_manager = MagicMock()
     server_module.ssh_manager.has_session = AsyncMock(return_value=True)
@@ -547,9 +547,9 @@ async def test_sftp_http_download_reports_stream_size(reset_server_state):
 
 @pytest.mark.asyncio
 async def test_sftp_http_download_binds_tab_to_session(reset_server_state):
+    import torrus.server as server_module
     from torrus.server import sftp_stream_download
     from torrus.sftp_manager import SFTPError
-    import torrus.server as server_module
 
     server_module.ssh_manager = MagicMock()
     server_module.ssh_manager.has_session = AsyncMock(return_value=True)
@@ -625,8 +625,9 @@ class _FakeSFTPManager:
 async def test_http_upload_runs_through_the_engine_and_binds_tab_to_session(
     reset_server_state, monkeypatch
 ):
-    import torrus.server as server_module
     from fastapi.testclient import TestClient
+
+    import torrus.server as server_module
 
     sink = _RecordingSink()
     manager = _FakeSFTPManager(sink)
@@ -661,8 +662,9 @@ async def test_http_upload_runs_through_the_engine_and_binds_tab_to_session(
 
 @pytest.mark.asyncio
 async def test_http_upload_rejects_malformed_session_or_tab_ids(reset_server_state):
-    import torrus.server as server_module
     from fastapi.testclient import TestClient
+
+    import torrus.server as server_module
 
     client = TestClient(server_module.fastapi_app)
     for params in (
@@ -682,15 +684,18 @@ async def test_http_upload_rejects_malformed_session_or_tab_ids(reset_server_sta
 async def test_http_upload_audits_one_row_for_the_remote_path(
     reset_server_state, monkeypatch
 ):
-    import torrus.server as server_module
     from fastapi.testclient import TestClient
+
+    import torrus.server as server_module
 
     sink = _RecordingSink()
     manager = _FakeSFTPManager(sink)
-    recorded = AsyncMock()
+    recorded = MagicMock()
     monkeypatch.setattr(server_module, "sftp_manager", manager)
     monkeypatch.setattr(server_module, "_ldap_enabled", True)
-    monkeypatch.setattr(server_module, "_http_owner", lambda request: "alice")
+    monkeypatch.setattr(
+        server_module, "_http_owner", AsyncMock(return_value="alice")
+    )
     monkeypatch.setattr(
         server_module, "_sftp_session_owned", AsyncMock(return_value=True)
     )
@@ -708,22 +713,25 @@ async def test_http_upload_audits_one_row_for_the_remote_path(
     client.put(f"/_upload/{upload_id}", params={**params, "offset": 0}, content=b"data")
     assert client.post(f"/_upload/{upload_id}/complete", params=params).status_code == 200
 
-    recorded.assert_awaited_once()
-    assert recorded.await_args.kwargs["path"] == "/home/app/big.bin"
-    assert recorded.await_args.kwargs["size"] == 4
-    assert recorded.await_args.kwargs["operation"] == "upload"
-    assert recorded.await_args.kwargs["ldap_username"] == "alice"
+    recorded.assert_called_once()
+    assert recorded.call_args.kwargs["path"] == "/home/app/big.bin"
+    assert recorded.call_args.kwargs["size"] == 4
+    assert recorded.call_args.kwargs["operation"] == "upload"
+    assert recorded.call_args.kwargs["ldap_username"] == "alice"
 
 
 @pytest.mark.asyncio
 async def test_http_upload_requires_an_owned_tab_when_ldap_is_enabled(
     reset_server_state, monkeypatch
 ):
-    import torrus.server as server_module
     from fastapi.testclient import TestClient
 
+    import torrus.server as server_module
+
     monkeypatch.setattr(server_module, "_ldap_enabled", True)
-    monkeypatch.setattr(server_module, "_http_owner", lambda request: "alice")
+    monkeypatch.setattr(
+        server_module, "_http_owner", AsyncMock(return_value="alice")
+    )
     monkeypatch.setattr(
         server_module, "_sftp_session_owned", AsyncMock(return_value=False)
     )
@@ -743,8 +751,8 @@ async def test_http_upload_requires_an_owned_tab_when_ldap_is_enabled(
 
 @pytest.mark.asyncio
 async def test_sftp_mkdirs_event_creates_the_tree_and_audits_it(reset_server_state):
-    from torrus.server import on_sftp_mkdirs
     import torrus.server as server_module
+    from torrus.server import on_sftp_mkdirs
 
     sio_mock = MagicMock()
     sio_mock.emit = AsyncMock()
@@ -781,14 +789,14 @@ async def test_sftp_mkdirs_event_creates_the_tree_and_audits_it(reset_server_sta
         },
         to="sid-1",
     )
-    assert audited.await_args.kwargs["operation"] == "mkdir"
-    assert audited.await_args.kwargs["entries"] == [("/home/app/trip/photos", 0, "")]
+    assert audited.call_args.kwargs["operation"] == "mkdir"
+    assert audited.call_args.kwargs["entries"] == [("/home/app/trip/photos", 0, "")]
 
 
 @pytest.mark.asyncio
 async def test_sftp_mkdirs_event_rejects_a_malformed_folder_list(reset_server_state):
-    from torrus.server import on_sftp_mkdirs
     import torrus.server as server_module
+    from torrus.server import on_sftp_mkdirs
 
     sio_mock = MagicMock()
     sio_mock.emit = AsyncMock()
@@ -812,8 +820,8 @@ async def test_sftp_mkdirs_event_rejects_a_malformed_folder_list(reset_server_st
 
 @pytest.mark.asyncio
 async def test_sftp_mkdirs_event_requires_a_known_request_id(reset_server_state):
-    from torrus.server import on_sftp_mkdirs
     import torrus.server as server_module
+    from torrus.server import on_sftp_mkdirs
 
     sio_mock = MagicMock()
     sio_mock.emit = AsyncMock()
@@ -843,8 +851,8 @@ def _open_test_server(server_module, list_directory):
 
 @pytest.mark.asyncio
 async def test_sftp_open_lists_the_path_remembered_by_the_client(reset_server_state):
-    from torrus.server import on_sftp_open
     import torrus.server as server_module
+    from torrus.server import on_sftp_open
 
     sio_mock = MagicMock()
     sio_mock.emit = AsyncMock()
@@ -870,9 +878,9 @@ async def test_sftp_open_lists_the_path_remembered_by_the_client(reset_server_st
 async def test_sftp_open_falls_back_to_home_when_the_remembered_path_is_gone(
     reset_server_state,
 ):
+    import torrus.server as server_module
     from torrus.server import on_sftp_open
     from torrus.sftp_manager import SFTPError
-    import torrus.server as server_module
 
     sio_mock = MagicMock()
     sio_mock.emit = AsyncMock()

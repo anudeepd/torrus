@@ -27,7 +27,9 @@ export default defineConfig({
   build: {
     outDir: '../src/torrus/static',
     emptyOutDir: true,
-    assetsInlineLimit: 200_000,
+    // Keep small assets inline, but never the woff2 faces: inlined they made the
+    // render-blocking stylesheet 415 KB (90% base64) and uncacheable per face.
+    assetsInlineLimit: 4096,
     rollupOptions: {
       output: {
         manualChunks: {

@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import logging
-from pathlib import Path
+from typing import TYPE_CHECKING
 from urllib.parse import parse_qs, urlsplit
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 class RoutinePollingAccessFilter(logging.Filter):
@@ -51,11 +54,10 @@ def suppress_routine_polling_logs() -> None:
 
 def _access_path(record: logging.LogRecord) -> str:
     args = record.args
-    if isinstance(args, tuple):
-        # Uvicorn access records use:
-        # (client_addr, method, full_path, http_version, status_code)
-        if len(args) >= 3 and isinstance(args[2], str):
-            return args[2]
+    # Uvicorn access records use:
+    # (client_addr, method, full_path, http_version, status_code)
+    if isinstance(args, tuple) and len(args) >= 3 and isinstance(args[2], str):
+        return args[2]
     if isinstance(args, dict):
         path = args.get("path") or args.get("full_path")
         if isinstance(path, str):

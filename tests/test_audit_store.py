@@ -7,7 +7,7 @@ async def test_terminal_input_audit_roundtrip(monkeypatch, tmp_path):
     from torrus import audit_store
 
     audit_store.init_db()
-    await audit_store.record_terminal_input(
+    audit_store.record_terminal_input(
         ldap_username="alice",
         session_id="session-1",
         tab_id="tab-1",
@@ -25,7 +25,7 @@ async def test_terminal_input_audit_roundtrip(monkeypatch, tmp_path):
         events[0]["ssh_port"],
         events[0]["ssh_username"],
     ) == ("example.com", 22, "root")
-    assert audit_store.purge_terminal_input_events(0) == 1
+    assert audit_store.purge_audit_events_older_than(0) == 1
     with audit_store._connect() as db:
         assert db.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"
 
@@ -36,7 +36,7 @@ async def test_record_command_event_stores_cleaned_command(monkeypatch, tmp_path
     from torrus import audit_store
 
     audit_store.init_db()
-    await audit_store.record_command_event(
+    audit_store.record_command_event(
         ldap_username="bob",
         session_id="sess",
         tab_id="tab",
@@ -60,13 +60,13 @@ async def test_terminal_input_search_matches_partial_username_and_command(
     from torrus import audit_store
 
     audit_store.init_db()
-    await audit_store.record_terminal_input(
+    audit_store.record_terminal_input(
         ldap_username="alice",
         session_id="sess-1",
         tab_id="tab-1",
         input_data="git status --short",
     )
-    await audit_store.record_terminal_input(
+    audit_store.record_terminal_input(
         ldap_username="bob",
         session_id="sess-2",
         tab_id="tab-2",
@@ -99,7 +99,7 @@ async def test_event_list_filters_by_host_until_kind_and_operation(
     from torrus import audit_store
 
     audit_store.init_db()
-    await audit_store.record_command_event(
+    audit_store.record_command_event(
         ldap_username="alice",
         session_id="sess-1",
         tab_id="tab-1",
@@ -108,7 +108,7 @@ async def test_event_list_filters_by_host_until_kind_and_operation(
         ssh_port=22,
         ssh_username="deploy",
     )
-    await audit_store.record_sensitive_event(
+    audit_store.record_sensitive_event(
         ldap_username="alice",
         session_id="sess-1",
         tab_id="tab-1",
@@ -116,7 +116,7 @@ async def test_event_list_filters_by_host_until_kind_and_operation(
         ssh_port=22,
         ssh_username="deploy",
     )
-    await audit_store.record_sftp_event(
+    audit_store.record_sftp_event(
         ldap_username="bob",
         session_id="sess-2",
         tab_id="tab-1",
@@ -166,7 +166,7 @@ async def test_record_sensitive_event_never_stores_secret(monkeypatch, tmp_path)
     from torrus import audit_store
 
     audit_store.init_db()
-    await audit_store.record_sensitive_event(
+    audit_store.record_sensitive_event(
         ldap_username="alice",
         session_id="sess",
         tab_id="tab",
@@ -206,7 +206,7 @@ async def test_sftp_event_roundtrip_and_purge(monkeypatch, tmp_path):
     from torrus import audit_store
 
     audit_store.init_db()
-    await audit_store.record_sftp_event(
+    audit_store.record_sftp_event(
         ldap_username="alice",
         session_id="sess",
         tab_id="tab",
@@ -218,7 +218,7 @@ async def test_sftp_event_roundtrip_and_purge(monkeypatch, tmp_path):
         ssh_port=22,
         ssh_username="root",
     )
-    await audit_store.record_command_event(
+    audit_store.record_command_event(
         ldap_username="alice", session_id="sess", tab_id="tab", command="ls"
     )
 
@@ -230,6 +230,6 @@ async def test_sftp_event_roundtrip_and_purge(monkeypatch, tmp_path):
     assert audit_store.list_sftp_events(input_query="passwd")
     assert not audit_store.list_sftp_events(input_query="nomatch")
     # Retention count/purge covers both terminal input and SFTP events.
-    assert audit_store.count_terminal_input_events(0) == 2
-    assert audit_store.purge_terminal_input_events(0) == 2
+    assert audit_store.count_audit_events_older_than(0) == 2
+    assert audit_store.purge_audit_events_older_than(0) == 2
     assert audit_store.list_sftp_events() == []

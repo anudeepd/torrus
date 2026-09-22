@@ -71,7 +71,7 @@ class FakeRemoteFile:
 class FakeChannel:
     """A paramiko exec channel running the sink's remote writer."""
 
-    def __init__(self, sftp: "FakeSFTP"):
+    def __init__(self, sftp: FakeSFTP):
         self.sftp = sftp
         self.command: str | None = None
         self.path: str | None = None
@@ -113,13 +113,13 @@ class FakeChannel:
 
 
 class FakeTransport:
-    def __init__(self, sftp: "FakeSFTP"):
+    def __init__(self, sftp: FakeSFTP):
         self.sftp = sftp
 
     def is_active(self) -> bool:
         return True
 
-    def get_transport(self) -> "FakeTransport":
+    def get_transport(self) -> FakeTransport:
         return self
 
     def open_session(self) -> FakeChannel:
@@ -886,6 +886,8 @@ async def test_run_blocking_closes_fds_when_add_reader_fails(monkeypatch):
             await manager._run_blocking(lambda: "ok")
     finally:
         await manager.shutdown()
+        # The worker thread owns the write end now, so drain it before counting.
+        await asyncio.to_thread(manager._executor.shutdown, True)
 
     assert len(closed) == 2
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ArrowUp,
   CircleAlert,
@@ -24,13 +24,14 @@ import type { Socket } from 'socket.io-client'
 import Button from '@/components/ui/Button'
 import FileIcon from './FileIcon'
 import TransferQueue from './TransferQueue'
+import Dialog from '@/components/ui/Dialog'
 import { useSFTP } from '@/hooks/useSFTP'
+import { formatBytes } from '@/lib/format'
 import { collectDroppedEntries } from '@/lib/drop-entries'
-import { useDialogPresence } from '@/hooks/useDialogPresence'
 import { useSFTPStore } from '@/store/sftpStore'
 import { useTerminalStore } from '@/store/terminalStore'
 import type { SFTPEntry } from '@/types'
-import { anchoredSurface, completedTransferRetentionMs, exitTransition, fade, surface, surfaceSpring, surfaceTransition } from '@/motion/tokens'
+import { anchoredSurface, completedTransferRetentionMs, exitTransition, fade, surfaceSpring, surfaceTransition } from '@/motion/tokens'
 import * as m from 'motion/react-m'
 import { AnimatePresence } from 'motion/react'
 
@@ -115,18 +116,6 @@ const SPECIAL_PERMISSION_BITS = [
   { label: 'Sticky', bit: 0o1000 },
 ]
 
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  const units = ['KB', 'MB', 'GB', 'TB']
-  let value = bytes / 1024
-  let unit = units[0]
-  for (let i = 1; value >= 1024 && i < units.length; i++) {
-    value /= 1024
-    unit = units[i]
-  }
-  return `${value.toFixed(value >= 10 ? 0 : 1)} ${unit}`
-}
-
 function formatSize(entry: SFTPEntry): string {
   return entry.type === 'directory' ? '' : formatBytes(entry.size)
 }
@@ -207,7 +196,7 @@ function SortIndicator({ rules, sortKey }: { rules: SortRule[]; sortKey: SortKey
   return (
     <span className="inline-flex items-center gap-0.5 text-brand-400">
       <Icon className="h-3 w-3" />
-      {rules.length > 1 && <span className="text-[10px]">{index + 1}</span>}
+      {rules.length > 1 && <span className="text-3xs">{index + 1}</span>}
     </span>
   )
 }
@@ -295,7 +284,7 @@ function PathInput({ inputRef, path, error, list, onCancel }: PathInputProps) {
         }
       }}
       className={clsx(
-        'h-7 min-w-0 flex-1 border border-surface-800 bg-surface-900 px-2 font-mono text-xs text-slate-200 outline-none focus:border-brand-500 max-[600px]:h-10',
+        'h-7 min-w-0 flex-1 border border-surface-800 bg-surface-900 px-2 font-mono text-xs text-slate-200 outline-none focus:border-brand-500 max-xs:h-10',
         { 'border-red-500 text-red-200': error !== null },
       )}
     />
@@ -316,7 +305,7 @@ function Breadcrumbs({ path, list, onEdit }: BreadcrumbsProps) {
 
   return (
     <div
-      className="flex h-7 min-w-0 flex-1 items-center overflow-hidden border border-transparent px-1 hover:border-surface-800 hover:bg-surface-900 max-[600px]:h-10"
+      className="flex h-7 min-w-0 flex-1 items-center overflow-hidden border border-transparent px-1 hover:border-surface-800 hover:bg-surface-900 max-xs:h-10"
       onClick={event => {
         if (event.target === event.currentTarget) onEdit()
       }}
@@ -324,29 +313,29 @@ function Breadcrumbs({ path, list, onEdit }: BreadcrumbsProps) {
       <AnimatePresence initial={false}>
       {visible.map((segment, index) => (
         <m.span initial={{ opacity: 0, maxWidth: 0 }} animate={{ opacity: 1, maxWidth: 160, transition: surfaceTransition }} exit={{ opacity: 0, maxWidth: 0, transition: exitTransition }} key={`${segment.path}-${index}`} className="flex min-w-0 items-center overflow-hidden">
-          {index > 0 && !(index === 1 && visible[0]?.path === '/') && <span className="px-1 font-mono text-xs text-slate-600">/</span>}
+          {index > 0 && !(index === 1 && visible[0]?.path === '/') && <span className="px-1 font-mono text-xs text-slate-400">/</span>}
           {index === 1 && hiddenCount > 0 && (
             <>
               <button
                 type="button"
-                className="px-1 text-xs text-slate-500 hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 max-[600px]:h-10"
+                className="min-h-6 min-w-6 px-1 text-xs text-slate-400 hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 max-xs:h-10"
                 onClick={() => setExpanded(true)}
                 title={`Show ${hiddenCount} hidden path segments`}
               >
                 ...
               </button>
-              <span className="px-1 font-mono text-xs text-slate-600">/</span>
+              <span className="px-1 font-mono text-xs text-slate-400">/</span>
             </>
           )}
           {index === 1 && expanded && segments.length > 4 && (
-            <button type="button" onClick={() => setExpanded(false)} className="px-1 text-xs text-slate-500 hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500" title="Collapse path" aria-label="Collapse path">…</button>
+            <button type="button" onClick={() => setExpanded(false)} className="min-h-6 min-w-6 px-1 text-xs text-slate-400 hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500" title="Collapse path" aria-label="Collapse path">…</button>
           )}
           <button
             type="button"
             onClick={() => list(segment.path)}
-            className={clsx('max-w-32 truncate px-1 font-mono text-xs hover:text-brand-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 max-[600px]:h-10', {
+            className={clsx('min-h-6 min-w-6 max-w-32 truncate px-1 font-mono text-xs hover:text-brand-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 max-xs:h-10', {
               'font-medium text-brand-400': index === visible.length - 1,
-              'text-slate-600': index !== visible.length - 1,
+              'text-slate-400': index !== visible.length - 1,
             })}
             title={segment.path}
           >
@@ -358,7 +347,7 @@ function Breadcrumbs({ path, list, onEdit }: BreadcrumbsProps) {
       <button
         type="button"
         onClick={onEdit}
-        className="ml-1 flex h-6 w-6 flex-shrink-0 items-center justify-center text-slate-500 hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 max-[600px]:h-10 max-[600px]:w-10"
+        className="ml-1 flex h-6 w-6 flex-shrink-0 items-center justify-center text-slate-400 hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 max-xs:h-10 max-xs:w-10"
         title={isMac ? 'Edit path (Ctrl+L)' : 'Edit path'}
         aria-label="Edit path"
       >
@@ -384,7 +373,7 @@ function StatusRail({
     <m.div
       {...fade}
       transition={exitTransition}
-      className={clsx('flex min-h-9 flex-shrink-0 items-start gap-2 border-b border-surface-800 border-l-2 bg-surface-900 px-3 py-2 font-mono text-[11px] leading-4', {
+      className={clsx('flex min-h-9 flex-shrink-0 items-start gap-2 border-b border-surface-800 border-l-2 bg-surface-900 px-3 py-2 font-mono text-2xs leading-4', {
         'border-l-red-400 text-red-200': tone === 'error',
         'border-l-brand-400 text-slate-300': tone === 'success',
       })}
@@ -399,44 +388,9 @@ function StatusRail({
         'text-brand-400': tone === 'success',
       })}>{label}</span>
       <span className="min-w-0 flex-1 break-words text-slate-300">{message}</span>
-      <button type="button" onClick={onDismiss} className="-my-1 flex h-6 w-6 flex-shrink-0 items-center justify-center text-slate-500 hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 max-[600px]:-my-2 max-[600px]:h-11 max-[600px]:w-11" aria-label="Dismiss message">
+      <button type="button" onClick={onDismiss} className="-my-1 flex h-6 w-6 flex-shrink-0 items-center justify-center text-slate-400 hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 max-xs:-my-2 max-xs:h-11 max-xs:w-11" aria-label="Dismiss message">
         <X className="h-3.5 w-3.5" />
       </button>
-    </m.div>
-  )
-}
-
-interface SFTPDialogProps {
-  labelledBy: string
-  initialFocus?: RefObject<HTMLElement | null>
-  onClose: () => void
-  className: string
-  children: ReactNode
-}
-
-function SFTPDialog({ labelledBy, initialFocus, onClose, className, children }: SFTPDialogProps) {
-  const { ref, presenceProps } = useDialogPresence(onClose, initialFocus)
-
-  return (
-    <m.div
-      {...fade}
-      transition={exitTransition}
-      className="fixed inset-0 z-50 flex items-center justify-center bg-surface-950/70 p-4 backdrop-blur-[1px]"
-      onMouseDown={event => { if (event.target === event.currentTarget) onClose() }}
-    >
-      <m.div
-        {...surface}
-        {...presenceProps}
-        transition={surfaceSpring}
-        ref={ref}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={labelledBy}
-        tabIndex={-1}
-        className={clsx('flex w-full flex-col gap-4 rounded-xl border border-surface-700 bg-surface-900/95 p-5 shadow-2xl', className)}
-      >
-        {children}
-      </m.div>
     </m.div>
   )
 }
@@ -503,7 +457,11 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
     clearNotice,
     parentPath,
   } = useSFTP(tabId, sourceTabId, socket)
-  const { toggleSelected, setSelected, clearSelected, removeTransfer, setError } = useSFTPStore()
+  const toggleSelected = useSFTPStore(s => s.toggleSelected)
+  const setSelected = useSFTPStore(s => s.setSelected)
+  const clearSelected = useSFTPStore(s => s.clearSelected)
+  const removeTransfer = useSFTPStore(s => s.removeTransfer)
+  const setError = useSFTPStore(s => s.setError)
   const isActiveTab = useTerminalStore(s => s.activeTabId === tabId)
   const paneBusy = loading
     || disconnected
@@ -917,9 +875,9 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
 
   return (
     <div ref={rootRef} className="relative flex h-full min-h-0 flex-col bg-surface-950 text-slate-200">
-      <div className="flex h-10 flex-shrink-0 items-center justify-between gap-2 border-b border-surface-800 px-2 max-[600px]:h-12">
+      <div className="flex h-10 flex-shrink-0 items-center justify-between gap-2 border-b border-surface-800 px-2 max-xs:h-12">
         <div className="flex min-w-0 flex-1 items-center gap-2">
-          <Button className="max-[600px]:h-11 max-[600px]:w-11 max-[600px]:px-0" variant="ghost" size="sm" onClick={() => list(parentPath(path))} title="Go to parent folder (Backspace)">
+          <Button className="min-h-6 min-w-6 max-xs:h-11 max-xs:w-11 max-xs:px-0" variant="ghost" size="sm" onClick={() => list(parentPath(path))} title="Go to parent folder (Backspace)">
             <ArrowUp className="h-3.5 w-3.5" />
           </Button>
           {editingPath ? (
@@ -935,9 +893,9 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
             <Breadcrumbs path={path} list={list} onEdit={() => setEditingPath(true)} />
           )}
           {sortRules.length > 0 && (
-            <Button className="max-[600px]:h-11 max-[600px]:w-11 max-[600px]:px-0" variant="secondary" size="sm" title="Reset sort" aria-label="Reset sort" onClick={() => setSortRules([])}>
+            <Button className="max-xs:h-11 max-xs:w-11 max-xs:px-0" variant="secondary" size="sm" title="Reset sort" aria-label="Reset sort" onClick={() => setSortRules([])}>
               <RotateCcw className="h-3.5 w-3.5" />
-              <span className="hidden min-[720px]:inline">Reset sort</span>
+              <span className="hidden md2:inline">Reset sort</span>
             </Button>
           )}
           {username && (
@@ -946,26 +904,26 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
             </span>
           )}
           {isRoot && (
-            <span className="flex flex-shrink-0 items-center gap-1 text-[11px] font-medium text-red-300 opacity-70" title="SFTP connection authenticated as root">
+            <span className="flex flex-shrink-0 items-center gap-1 text-2xs font-medium text-red-300 opacity-70" title="SFTP connection authenticated as root">
               <span className="h-1.5 w-1.5 rounded-full bg-red-400" /> ROOT
             </span>
           )}
         </div>
         <div className="relative flex flex-shrink-0 items-center gap-1">
-          <Button className="max-[600px]:hidden" variant="ghost" size="sm" title="Refresh current folder" onClick={() => list(path)}>
+          <Button className="min-h-6 min-w-6 max-xs:hidden" variant="ghost" size="sm" title="Refresh current folder" onClick={() => list(path)}>
             <RefreshCw className="h-3.5 w-3.5" />
           </Button>
-          <Button className="max-[600px]:hidden" variant="ghost" size="sm" onClick={() => setNewFolderOpen(true)} title="Create new folder">
+          <Button className="min-h-6 max-xs:hidden" variant="ghost" size="sm" onClick={() => setNewFolderOpen(true)} title="Create new folder">
             <FolderPlus className="h-3.5 w-3.5" />
             <span className="hidden sm:inline">New folder</span>
           </Button>
-          <Button className="max-[600px]:h-11 max-[600px]:w-11 max-[600px]:px-0" variant="ghost" size="sm" title="Upload files" onClick={() => fileInputRef.current?.click()}>
+          <Button className="min-h-6 max-xs:h-11 max-xs:w-11 max-xs:px-0" variant="ghost" size="sm" title="Upload files" onClick={() => fileInputRef.current?.click()}>
             <Upload className="h-3.5 w-3.5" />
             <span className="hidden sm:inline">Upload</span>
           </Button>
           <Button
             ref={moreButtonRef}
-            className="min-[601px]:hidden max-[600px]:h-11 max-[600px]:w-11 max-[600px]:px-0"
+            className="xs:hidden max-xs:h-11 max-xs:w-11 max-xs:px-0"
             variant="ghost"
             size="sm"
             title="More actions"
@@ -1010,29 +968,29 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
           )}
           {selectedPaths.length > 0 && (
             <>
-              <span className="hidden text-[11px] text-slate-500 min-[720px]:inline">{selectedPaths.length} selected</span>
+              <span className="hidden text-2xs text-slate-400 md2:inline">{selectedPaths.length} selected</span>
               <button
                 type="button"
                 onClick={clearFileSelection}
-                className="flex h-8 w-8 items-center justify-center text-slate-500 hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 max-[600px]:h-11 max-[600px]:w-11"
+                className="flex h-8 w-8 items-center justify-center text-slate-400 hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 max-xs:h-11 max-xs:w-11"
                 title="Clear selection"
                 aria-label="Clear selection"
               >
                 <X className="h-3.5 w-3.5" />
               </button>
               {selectedEntries.length === 1 && selectedEntries[0].type !== 'directory' && (
-                <Button className="max-[600px]:h-11 max-[600px]:w-11 max-[600px]:px-0" variant="ghost" size="sm" onClick={() => void download(selectedEntries[0])} title="Download selected file">
+                <Button className="max-xs:h-11 max-xs:w-11 max-xs:px-0" variant="ghost" size="sm" onClick={() => void download(selectedEntries[0])} title="Download selected file">
                   <Download className="h-3.5 w-3.5" />
                 </Button>
               )}
-              <Button className="max-[600px]:h-11 max-[600px]:w-11 max-[600px]:px-0" variant="danger" size="sm" onClick={() => setDeletePaths(selectedPaths)} title="Delete selection (Delete)">
+              <Button className="max-xs:h-11 max-xs:w-11 max-xs:px-0" variant="danger" size="sm" onClick={() => setDeletePaths(selectedPaths)} title="Delete selection (Delete)">
                 <Trash2 className="h-3.5 w-3.5" />
               </Button>
             </>
           )}
           <Button
             ref={helpButtonRef}
-            className="max-[600px]:h-11 max-[600px]:w-11 max-[600px]:px-0"
+            className="min-h-6 min-w-6 max-xs:h-11 max-xs:w-11 max-xs:px-0"
             variant="ghost"
             size="sm"
             title="Keyboard shortcuts"
@@ -1049,7 +1007,7 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
             <div key="keyboard-shortcuts" className="contents">
             <m.div {...anchoredSurface} transition={surfaceSpring} ref={helpMenuRef} id="sftp-shortcuts" className="absolute right-0 top-8 z-40 w-64 rounded-lg border border-surface-700 bg-surface-800 p-3 shadow-xl" onPointerDown={event => event.stopPropagation()}>
               <p className="mb-2 text-xs font-medium text-slate-200">Keyboard shortcuts</p>
-              <div className="grid grid-cols-[72px_1fr] gap-x-3 gap-y-1 text-[11px] text-slate-400">
+              <div className="grid grid-cols-[72px_1fr] gap-x-3 gap-y-1 text-2xs text-slate-400">
                 {isMac && <><span className="font-mono text-slate-300">Ctrl+L</span><span>Edit path</span></>}
                 <span className="font-mono text-slate-300">Enter</span><span>Open selection</span>
                 <span className="font-mono text-slate-300">Backspace</span><span>Go to parent</span>
@@ -1085,7 +1043,7 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
           key={dropWaitState}
           {...fade}
           transition={exitTransition}
-          className="flex min-h-9 flex-shrink-0 items-center gap-2 border-b border-surface-800 border-l-2 border-l-brand-400 bg-surface-900 px-3 py-1.5 font-mono text-[11px] text-slate-300"
+          className="flex min-h-9 flex-shrink-0 items-center gap-2 border-b border-surface-800 border-l-2 border-l-brand-400 bg-surface-900 px-3 py-1.5 font-mono text-2xs text-slate-300"
         >
           {dropWaitState === 'preparing' ? (
             <LoaderCircle className="h-3.5 w-3.5 flex-shrink-0 animate-spin text-brand-400 motion-reduce:animate-none" />
@@ -1099,7 +1057,7 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
-              className="flex h-8 flex-shrink-0 items-center px-2 font-sans text-xs font-medium text-brand-300 hover:text-brand-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 max-[600px]:h-11"
+              className="flex h-8 flex-shrink-0 items-center px-2 font-sans text-xs font-medium text-brand-300 hover:text-brand-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 max-xs:h-11"
             >
               Choose files
             </button>
@@ -1107,7 +1065,7 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
           <button
             type="button"
             onClick={clearDropFeedback}
-            className="flex h-8 w-8 flex-shrink-0 items-center justify-center text-slate-500 hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 max-[600px]:h-11 max-[600px]:w-11"
+            className="flex h-8 w-8 flex-shrink-0 items-center justify-center text-slate-400 hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 max-xs:h-11 max-xs:w-11"
             aria-label="Dismiss upload status"
           >
             <X className="h-3.5 w-3.5" />
@@ -1145,27 +1103,28 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
         {loading && entries.length === 0 && (
           <div className="p-2">
             {[0, 1, 2].map(row => (
-              <div key={row} className="mb-2 grid h-8 animate-pulse grid-cols-[20px_24px_minmax(0,1fr)_96px_104px_112px_144px] items-center gap-2 opacity-50 max-[600px]:grid-cols-[20px_24px_minmax(0,1fr)]">
+              <div key={row} className="mb-2 grid h-8 animate-pulse grid-cols-[20px_24px_minmax(0,1fr)_96px_104px_112px_144px] items-center gap-2 opacity-50 max-xs:grid-cols-[20px_24px_minmax(0,1fr)]">
                 <div className="h-3.5 w-3.5 bg-surface-800" />
                 <div className="h-4 w-4 bg-surface-800" />
                 <div className="h-3 w-3/5 bg-surface-800" />
-                <div className="h-3 bg-surface-800 max-[600px]:hidden" />
-                <div className="h-3 bg-surface-800 max-[600px]:hidden" />
-                <div className="h-3 bg-surface-800 max-[600px]:hidden" />
-                <div className="h-3 bg-surface-800 max-[600px]:hidden" />
+                <div className="h-3 bg-surface-800 max-xs:hidden" />
+                <div className="h-3 bg-surface-800 max-xs:hidden" />
+                <div className="h-3 bg-surface-800 max-xs:hidden" />
+                <div className="h-3 bg-surface-800 max-xs:hidden" />
               </div>
             ))}
           </div>
         )}
 
         {!loading && entries.length === 0 && (
-          <div className="flex h-full items-center justify-center text-xs text-slate-500">This folder is empty</div>
+          <div className="flex h-full items-center justify-center text-xs text-slate-400">This folder is empty</div>
         )}
 
         <AnimatePresence initial={false} mode="wait">
         {entries.length > 0 && (
           <m.div key={path} {...fade} transition={exitTransition} className={clsx({ 'pointer-events-none opacity-60': loading })} aria-busy={loading}>
-            <div className="sticky top-0 z-10 grid h-8 grid-cols-[20px_24px_minmax(0,1fr)_96px_104px_112px_144px] items-center gap-2 border-b border-surface-800 bg-surface-950 px-2 font-mono text-[11px] font-medium text-slate-500 max-[600px]:grid-cols-[20px_24px_minmax(0,1fr)]">
+            <div className="sticky top-0 z-10 grid h-8 grid-cols-[20px_24px_minmax(0,1fr)_96px_104px_112px_144px] items-center gap-2 border-b border-surface-800 bg-surface-950 px-2 font-mono text-2xs font-medium tabular-nums text-slate-400 max-xs:grid-cols-[20px_24px_minmax(0,1fr)]">
+              <label className="flex h-6 w-6 items-center justify-center" onClick={event => event.stopPropagation()}>
               <input
                 ref={element => { if (element) element.indeterminate = someEntriesSelected }}
                 type="checkbox"
@@ -1182,19 +1141,20 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
                 aria-label="Select all files"
                 className="h-3.5 w-3.5 accent-brand-500"
               />
-              <button type="button" className="col-span-2 flex h-full min-w-0 items-center gap-1 pl-8 text-left hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 max-[600px]:pl-8" onClick={() => toggleSort('name')} title="Sort by name">
+              </label>
+              <button type="button" className="col-span-2 flex h-full min-w-0 items-center gap-1 pl-8 text-left hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 max-xs:pl-8" onClick={() => toggleSort('name')} title="Sort by name">
                 <span>name</span><SortIndicator rules={sortRules} sortKey="name" />
               </button>
-              <button type="button" className="flex h-full min-w-0 items-center gap-1 text-left hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 max-[600px]:hidden" onClick={() => toggleSort('size')} title="Sort by size">
+              <button type="button" className="flex h-full min-w-0 items-center gap-1 text-left hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 max-xs:hidden" onClick={() => toggleSort('size')} title="Sort by size">
                 <span>size</span><SortIndicator rules={sortRules} sortKey="size" />
               </button>
-              <button type="button" className="flex h-full min-w-0 items-center gap-1 text-left hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 max-[600px]:hidden" onClick={() => toggleSort('owner')} title="Sort by owner">
+              <button type="button" className="flex h-full min-w-0 items-center gap-1 text-left hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 max-xs:hidden" onClick={() => toggleSort('owner')} title="Sort by owner">
                 <span>owner</span><SortIndicator rules={sortRules} sortKey="owner" />
               </button>
-              <button type="button" className="flex h-full min-w-0 items-center gap-1 text-left hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 max-[600px]:hidden" onClick={() => toggleSort('mode')} title="Sort by permissions">
+              <button type="button" className="flex h-full min-w-0 items-center gap-1 text-left hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 max-xs:hidden" onClick={() => toggleSort('mode')} title="Sort by permissions">
                 <span>permissions</span><SortIndicator rules={sortRules} sortKey="mode" />
               </button>
-              <button type="button" className="flex h-full min-w-0 items-center gap-1 text-left hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 max-[600px]:hidden" onClick={() => toggleSort('mtime')} title="Sort by date">
+              <button type="button" className="flex h-full min-w-0 items-center gap-1 text-left hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 max-xs:hidden" onClick={() => toggleSort('mtime')} title="Sort by date">
                 <span>date</span><SortIndicator rules={sortRules} sortKey="mtime" />
               </button>
             </div>
@@ -1223,11 +1183,12 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
                       entries: contextEntries,
                     })
                   }}
-                  className={clsx('grid min-h-8 cursor-default grid-cols-[20px_24px_minmax(0,1fr)_96px_104px_112px_144px] items-center gap-2 px-2 py-1 font-mono text-xs max-[600px]:min-h-11 max-[600px]:grid-cols-[20px_24px_minmax(0,1fr)]', {
+                  className={clsx('grid min-h-8 cursor-default grid-cols-[20px_24px_minmax(0,1fr)_96px_104px_112px_144px] items-center gap-2 px-2 py-1 font-mono text-xs max-xs:min-h-11 max-xs:grid-cols-[20px_24px_minmax(0,1fr)]', {
                     'bg-brand-500/10 hover:bg-brand-500/20': selected,
                     'hover:bg-surface-800': !selected,
                   })}
                 >
+                  <label className="flex h-6 w-6 items-center justify-center" onClick={event => event.stopPropagation()}>
                   <input
                     type="checkbox"
                     checked={selected}
@@ -1242,7 +1203,9 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
                     aria-label={`Select ${entry.name}`}
                     className="h-3.5 w-3.5 accent-brand-500"
                   />
+                  </label>
                   <FileIcon entry={entry} />
+                  <div className="min-w-0">
                   {renamePath === entry.path ? (
                     <input
                       autoFocus
@@ -1266,10 +1229,14 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
                   ) : (
                     <span className="min-w-0 break-all leading-5 text-slate-200">{entry.name}</span>
                   )}
-                  <span className="text-left text-slate-500 max-[600px]:hidden">{formatSize(entry)}</span>
-                  <span className="text-left text-slate-500 max-[600px]:hidden" title={ownershipTitle(entry)}>{formatOwnership(entry)}</span>
-                  <span className="text-left text-slate-400 max-[600px]:hidden" title={permissionTitle(entry.mode)}>{formatMode(entry.mode)}</span>
-                  <span className="text-left text-slate-500 max-[600px]:hidden">{formatDate(entry.mtime)}</span>
+                  <span className="hidden text-2xs leading-4 text-slate-400 max-xs:block">
+                    {[formatSize(entry), formatOwnership(entry), formatMode(entry.mode), formatDate(entry.mtime)].filter(Boolean).join(' · ')}
+                  </span>
+                  </div>
+                  <span className="text-left tabular-nums text-slate-400 max-xs:hidden">{formatSize(entry)}</span>
+                  <span className="text-left text-slate-400 max-xs:hidden" title={ownershipTitle(entry)}>{formatOwnership(entry)}</span>
+                  <span className="text-left text-slate-400 max-xs:hidden" title={permissionTitle(entry.mode)}>{formatMode(entry.mode)}</span>
+                  <span className="text-left tabular-nums text-slate-400 max-xs:hidden">{formatDate(entry.mtime)}</span>
                 </div>
               )
             })}
@@ -1279,7 +1246,7 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
 
         <AnimatePresence initial={false}>
         {loading && entries.length > 0 && (
-          <m.div key="folder-loading" {...fade} transition={exitTransition} role="status" className="pointer-events-none absolute inset-x-0 top-0 z-20 flex h-8 items-center justify-center border-b border-surface-800 bg-surface-950/75 text-[11px] text-slate-400 backdrop-blur-sm">
+          <m.div key="folder-loading" {...fade} transition={exitTransition} role="status" className="pointer-events-none absolute inset-x-0 top-0 z-20 flex h-8 items-center justify-center border-b border-surface-800 bg-surface-950/75 text-2xs text-slate-400">
             <LoaderCircle className="mr-2 h-3.5 w-3.5 animate-spin motion-reduce:animate-none" /> Loading folder…
           </m.div>
         )}
@@ -1299,7 +1266,7 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
             key="bulk-zip"
             {...fade}
             transition={exitTransition}
-            className="absolute inset-0 z-30 flex flex-col items-center justify-center gap-3 bg-surface-950/70 backdrop-blur-[1px]"
+            className="absolute inset-0 z-30 flex flex-col items-center justify-center gap-3 bg-surface-950/70"
             role="status"
             aria-live="polite"
             onDragOver={event => { event.preventDefault(); event.stopPropagation() }}
@@ -1359,7 +1326,7 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
                 item.action()
                 setContextMenu(null)
               }}
-              className={clsx('flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-surface-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-500 max-[600px]:h-11', {
+              className={clsx('flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-surface-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-500 max-xs:h-11', {
                 'text-red-300': item.danger,
                 'text-slate-300': !item.danger,
               })}
@@ -1391,13 +1358,13 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
 
       <AnimatePresence initial={false}>
       {newFolderOpen && (
-        <SFTPDialog key="new-folder" labelledBy="new-folder-title" initialFocus={folderInputRef} onClose={closeNewFolder} className="max-w-xs">
+        <Dialog key="new-folder" labelledBy="new-folder-title" initialFocus={folderInputRef} onClose={closeNewFolder} className="max-w-xs gap-4">
             <div>
               <h2 id="new-folder-title" className="text-sm font-semibold text-slate-200">New folder</h2>
               <p className="mt-2 truncate text-xs text-slate-400" title={path}>Create inside {path}</p>
             </div>
             <label className="flex flex-col gap-1">
-              <span className="text-[11px] font-medium text-slate-400">Folder name</span>
+              <span className="text-2xs font-medium text-slate-400">Folder name</span>
               <input
                 id="new-folder-name"
                 ref={folderInputRef}
@@ -1406,19 +1373,19 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
                 onKeyDown={event => {
                   if (event.key === 'Enter') createFolder()
                 }}
-                className="rounded-md border border-surface-700 bg-surface-950 px-2 py-1.5 text-xs text-slate-200 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500/30 max-[600px]:h-11"
+                className="rounded-md border border-surface-700 bg-surface-950 px-2 py-1.5 text-xs text-slate-200 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500/30 max-xs:h-11"
                 placeholder="Folder name"
               />
             </label>
             <div className="flex gap-2">
-              <Button className="flex-1 max-[600px]:h-11" variant="secondary" onClick={() => setNewFolderOpen(false)}>Cancel</Button>
-              <Button className="flex-1 max-[600px]:h-11" variant="primary" disabled={!newFolderName.trim()} onClick={createFolder}>Create</Button>
+              <Button className="flex-1 max-xs:h-11" variant="secondary" onClick={() => setNewFolderOpen(false)}>Cancel</Button>
+              <Button className="flex-1 max-xs:h-11" variant="primary" disabled={!newFolderName.trim()} onClick={createFolder}>Create</Button>
             </div>
-        </SFTPDialog>
+        </Dialog>
       )}
 
       {chmodDialog && (
-        <SFTPDialog key="permissions" labelledBy="permissions-title" onClose={closePermissions} className="max-w-[360px]">
+        <Dialog key="permissions" labelledBy="permissions-title" onClose={closePermissions} className="max-w-[360px] gap-4">
             <div>
               <h2 id="permissions-title" className="text-sm font-semibold text-slate-200">Permissions</h2>
               <p className="mt-2 truncate font-mono text-xs text-slate-400" title={chmodDialog.entries.length === 1 ? chmodDialog.entry.path : undefined}>
@@ -1426,7 +1393,7 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
               </p>
             </div>
             <label className="flex flex-col gap-1">
-              <span className="text-[11px] font-medium text-slate-400">Octal mode</span>
+              <span className="text-2xs font-medium text-slate-400">Octal mode</span>
               <input
                 type="text"
                 inputMode="numeric"
@@ -1449,20 +1416,20 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
                 aria-invalid={!octalModeInputValid(chmodDialog.modeInput)}
                 aria-describedby="octal-mode-help"
                 aria-label="Octal mode"
-                className="h-8 rounded-md border border-surface-700 bg-surface-950 px-2 font-mono text-xs text-slate-200 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500/30 max-[600px]:h-11"
+                className="h-8 rounded-md border border-surface-700 bg-surface-950 px-2 font-mono text-xs text-slate-200 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500/30 max-xs:h-11"
               />
-              <span id="octal-mode-help" className={octalModeInputValid(chmodDialog.modeInput) ? 'text-[11px] text-slate-500' : 'text-[11px] text-red-300'}>
+              <span id="octal-mode-help" className={octalModeInputValid(chmodDialog.modeInput) ? 'text-2xs text-slate-400' : 'text-2xs text-red-300'}>
                 {octalModeInputValid(chmodDialog.modeInput) ? 'Three or four octal digits, for example 744 or 1777.' : 'Enter three or four octal digits (000–7777).'}
               </span>
             </label>
             <div className="grid grid-cols-[72px_repeat(3,1fr)] gap-2 text-xs">
               <span />
-              {['Read', 'Write', 'Execute'].map(label => <span key={label} className="text-center text-[11px] text-slate-500">{label}</span>)}
+              {['Read', 'Write', 'Execute'].map(label => <span key={label} className="text-center text-2xs text-slate-400">{label}</span>)}
               {['Owner', 'Group', 'Other'].map((scope, row) => (
                 <div key={scope} className="contents">
-                  <span className="self-center text-[11px] font-medium text-slate-400">{scope}</span>
+                  <span className="self-center text-2xs font-medium text-slate-400">{scope}</span>
                   {PERMISSION_BITS.slice(row * 3, row * 3 + 3).map(permission => (
-                    <label key={permission.bit} className="flex h-8 items-center justify-center rounded-md border border-surface-700 bg-surface-950 max-[600px]:h-11">
+                    <label key={permission.bit} className="flex h-8 items-center justify-center rounded-md border border-surface-700 bg-surface-950 max-xs:h-11">
                       <input
                         type="checkbox"
                         checked={Boolean(chmodDialog.mode & permission.bit)}
@@ -1480,10 +1447,10 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
               ))}
             </div>
             <div>
-              <p className="mb-2 text-[11px] font-medium text-slate-400">Special permissions</p>
+              <p className="mb-2 text-2xs font-medium text-slate-400">Special permissions</p>
               <div className="grid grid-cols-3 gap-2">
                 {SPECIAL_PERMISSION_BITS.map(permission => (
-                  <label key={permission.bit} className="flex h-8 items-center justify-center gap-2 rounded-md border border-surface-700 bg-surface-950 text-[11px] text-slate-400 max-[600px]:h-11">
+                  <label key={permission.bit} className="flex h-8 items-center justify-center gap-2 rounded-md border border-surface-700 bg-surface-950 text-2xs text-slate-400 max-xs:h-11">
                     <input
                       type="checkbox"
                       checked={Boolean(chmodDialog.mode & permission.bit)}
@@ -1501,15 +1468,15 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
               </div>
             </div>
             <div>
-              <p className="mb-2 text-[11px] font-medium text-slate-400">Ownership</p>
+              <p className="mb-2 text-2xs font-medium text-slate-400">Ownership</p>
               <div className="grid grid-cols-2 gap-2">
                 <label className="flex flex-col gap-1">
-                  <span className="text-[11px] text-slate-500">Owner</span>
+                  <span className="text-2xs text-slate-400">Owner</span>
                   {users.length > 0 ? (
                     <select
                       value={chmodDialog.uid}
                       onChange={event => setChmodDialog(dialog => dialog ? { ...dialog, uid: event.target.value, ownershipDirty: true } : null)}
-                      className="h-8 rounded-md border border-surface-700 bg-surface-950 px-2 text-xs text-slate-200 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500/30 max-[600px]:h-11"
+                      className="h-8 rounded-md border border-surface-700 bg-surface-950 px-2 text-xs text-slate-200 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500/30 max-xs:h-11"
                       aria-label="Owner"
                     >
                       {!users.some(user => String(user.uid) === chmodDialog.uid) && chmodDialog.uid !== '' && (
@@ -1524,18 +1491,18 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
                       step={1}
                       value={chmodDialog.uid}
                       onChange={event => setChmodDialog(dialog => dialog ? { ...dialog, uid: event.target.value, ownershipDirty: true } : null)}
-                      className="h-8 rounded-md border border-surface-700 bg-surface-950 px-2 font-mono text-xs text-slate-200 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500/30 max-[600px]:h-11"
+                      className="h-8 rounded-md border border-surface-700 bg-surface-950 px-2 font-mono text-xs text-slate-200 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500/30 max-xs:h-11"
                       aria-label="Owner UID"
                     />
                   )}
                 </label>
                 <label className="flex flex-col gap-1">
-                  <span className="text-[11px] text-slate-500">Group</span>
+                  <span className="text-2xs text-slate-400">Group</span>
                   {groups.length > 0 ? (
                     <select
                       value={chmodDialog.gid}
                       onChange={event => setChmodDialog(dialog => dialog ? { ...dialog, gid: event.target.value, ownershipDirty: true } : null)}
-                      className="h-8 rounded-md border border-surface-700 bg-surface-950 px-2 text-xs text-slate-200 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500/30 max-[600px]:h-11"
+                      className="h-8 rounded-md border border-surface-700 bg-surface-950 px-2 text-xs text-slate-200 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500/30 max-xs:h-11"
                       aria-label="Group"
                     >
                       {!groups.some(group => String(group.gid) === chmodDialog.gid) && chmodDialog.gid !== '' && (
@@ -1550,14 +1517,14 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
                       step={1}
                       value={chmodDialog.gid}
                       onChange={event => setChmodDialog(dialog => dialog ? { ...dialog, gid: event.target.value, ownershipDirty: true } : null)}
-                      className="h-8 rounded-md border border-surface-700 bg-surface-950 px-2 font-mono text-xs text-slate-200 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500/30 max-[600px]:h-11"
+                      className="h-8 rounded-md border border-surface-700 bg-surface-950 px-2 font-mono text-xs text-slate-200 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500/30 max-xs:h-11"
                       aria-label="Group GID"
                     />
                   )}
                 </label>
               </div>
               {!ownershipInputValid(chmodDialog.uid, chmodDialog.gid) && (
-                <p className="mt-2 text-[11px] text-red-300">Enter numeric UID and GID, or leave both blank.</p>
+                <p className="mt-2 text-2xs text-red-300">Enter numeric UID and GID, or leave both blank.</p>
               )}
             </div>
             <div className="flex items-center justify-between border-t border-surface-800 pt-3 font-mono text-xs">
@@ -1569,9 +1536,9 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
               </span>
             </div>
             <div className="flex gap-2">
-              <Button className="flex-1 max-[600px]:h-11" variant="secondary" onClick={() => setChmodDialog(null)}>Cancel</Button>
+              <Button className="flex-1 max-xs:h-11" variant="secondary" onClick={() => setChmodDialog(null)}>Cancel</Button>
               <Button
-                className="flex-1 max-[600px]:h-11"
+                className="flex-1 max-xs:h-11"
                 variant="primary"
                 disabled={!octalModeInputValid(chmodDialog.modeInput) || !ownershipInputValid(chmodDialog.uid, chmodDialog.gid)}
                 onClick={applyPermissions}
@@ -1579,11 +1546,11 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
                 Apply
               </Button>
             </div>
-        </SFTPDialog>
+        </Dialog>
       )}
 
       {deletePaths && (
-        <SFTPDialog key="delete" labelledBy="delete-title" initialFocus={deleteCancelRef} onClose={closeDelete} className="max-w-xs">
+        <Dialog key="delete" role="alertdialog" labelledBy="delete-title" initialFocus={deleteCancelRef} onClose={closeDelete} className="max-w-xs gap-4">
             <div>
               <h2 id="delete-title" className="text-sm font-semibold text-slate-200">Delete {deletePaths.length === 1 ? 'item' : `${deletePaths.length} items`}?</h2>
               <p className="mt-2 text-xs leading-relaxed text-slate-400">
@@ -1593,10 +1560,10 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
               </p>
             </div>
             <div className="flex gap-2">
-              <Button ref={deleteCancelRef} className="flex-1 max-[600px]:h-11" variant="secondary" onClick={() => setDeletePaths(null)}>Cancel</Button>
-              <Button className="flex-1 max-[600px]:h-11" variant="danger" onClick={confirmDelete}>Delete</Button>
+              <Button ref={deleteCancelRef} className="flex-1 max-xs:h-11" variant="secondary" onClick={() => setDeletePaths(null)}>Cancel</Button>
+              <Button className="flex-1 max-xs:h-11" variant="danger" onClick={confirmDelete}>Delete</Button>
             </div>
-        </SFTPDialog>
+        </Dialog>
       )}
       </AnimatePresence>
     </div>

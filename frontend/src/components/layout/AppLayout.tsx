@@ -1,22 +1,24 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { Suspense, lazy, useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { getSocket } from '@/hooks/useSocket'
 import { useTerminalStore } from '@/store/terminalStore'
 import { useLayoutStore, getLayoutTabIds } from '@/store/layoutStore'
 import { useBroadcastStore } from '@/store/broadcastStore'
 import { useSFTPStore } from '@/store/sftpStore'
-import TabBar from './TabBar'
+import TabBar, { type TabBarActions } from './TabBar'
 import SplitPane from './SplitPane'
 import LayoutPickerModal from './LayoutPickerModal'
 import BroadcastPickerModal from './BroadcastPickerModal'
 import SessionSidebar from './SessionSidebar'
-import TerminalPane from '@/components/terminal/TerminalPane'
-import SFTPBrowser from '@/components/sftp/SFTPBrowser'
+const TerminalPane = lazy(() => import('@/components/terminal/TerminalPane'))
+const SFTPBrowser = lazy(() => import('@/components/sftp/SFTPBrowser'))
 import SettingsDialog from '@/components/settings/SettingsDialog'
 import Logo from '@/components/ui/Logo'
 import AuthRedirectOverlay from '@/components/ui/AuthRedirectOverlay'
 import CommandPalette from '@/components/ui/CommandPalette'
 import PendingCloseDialog from './PendingCloseDialog'
 import { AUTH_REDIRECT_EVENT, redirectToLdapLogin } from '@/utils/authRedirect'
+import { tabDisplayName } from '@/lib/tabName'
+import { BREAKPOINTS, below } from '@/lib/breakpoints'
 import type { PaneNode } from '@/store/layoutStore'
 import type { SavedServer, Tab } from '@/types'
 import { AnimatePresence } from 'motion/react'
@@ -49,20 +51,14 @@ const SFTP_AUTH_RESULT_EVENTS = [
   'sftp:accounts:result',
 ] as const
 
-function getTabDisplayName(tab: Tab | undefined): string {
-  if (!tab) return 'this tab'
-  if (tab.label) return tab.label
-  if (tab.host && tab.username) return `${tab.username}@${tab.host}`
-  return 'New Connection'
-}
-
 function getCloseTitle(tab: Tab | undefined): string {
   return tab?.type === 'sftp' ? 'Close SFTP tab?' : 'Close session?'
 }
 
-function getCloseMessage(tab: Tab | undefined): string {
-  if (tab?.type === 'sftp') return `Closing ${getTabDisplayName(tab)} will close its SFTP browser.`
-  return `Closing ${getTabDisplayName(tab)} will disconnect its SSH session.`
+function getCloseMessage(tab: Tab | undefined, tabs: Tab[]): string {
+  const name = tab ? tabDisplayName(tab, tabs) : 'this tab'
+  if (tab?.type === 'sftp') return `Closing ${name} will close its SFTP browser.`
+  return `Closing ${name} will disconnect its SSH session.`
 }
 
 type AppLayoutProps = {
@@ -70,17 +66,29 @@ type AppLayoutProps = {
 }
 
 export default function AppLayout({ navigateToAdmin = () => window.location.assign('/admin') }: AppLayoutProps = {}) {
-  const { tabs, activeTabId, addTab, addSftpTab, closeTab, closeAllTabs, setActiveTab, sessionId } = useTerminalStore()
-  const { root: layoutRoot, closePane, exitSplitMode, applyLayout } = useLayoutStore()
-  const { enabled: broadcastEnabled, excludedTabIds, disable: disableBroadcast } = useBroadcastStore()
+  const tabs = useTerminalStore(s => s.tabs)
+  const activeTabId = useTerminalStore(s => s.activeTabId)
+  const sessionId = useTerminalStore(s => s.sessionId)
+  const addTab = useTerminalStore(s => s.addTab)
+  const addSftpTab = useTerminalStore(s => s.addSftpTab)
+  const closeTab = useTerminalStore(s => s.closeTab)
+  const closeAllTabs = useTerminalStore(s => s.closeAllTabs)
+  const setActiveTab = useTerminalStore(s => s.setActiveTab)
+  const layoutRoot = useLayoutStore(s => s.root)
+  const closePane = useLayoutStore(s => s.closePane)
+  const exitSplitMode = useLayoutStore(s => s.exitSplitMode)
+  const applyLayout = useLayoutStore(s => s.applyLayout)
+  const broadcastEnabled = useBroadcastStore(s => s.enabled)
+  const excludedTabIds = useBroadcastStore(s => s.excludedTabIds)
+  const disableBroadcast = useBroadcastStore(s => s.disable)
   const setSFTPDisconnected = useSFTPStore(s => s.setDisconnected)
   const socket = getSocket()
 
-  const [isCompactViewport, setIsCompactViewport] = useState(() => window.matchMedia('(max-width: 720px)').matches)
-  const [sidebarOpen, setSidebarOpen] = useState(() => !window.matchMedia('(max-width: 720px)').matches)
+  const [isCompactViewport, setIsCompactViewport] = useState(() => window.matchMedia(below(BREAKPOINTS.md2)).matches)
+  const [sidebarOpen, setSidebarOpen] = useState(() => !window.matchMedia(below(BREAKPOINTS.md2)).matches)
 
   useEffect(() => {
-    const compactViewport = window.matchMedia('(max-width: 720px)')
+    const compactViewport = window.matchMedia(below(BREAKPOINTS.md2))
     const handleCompactViewport = (event: MediaQueryListEvent) => {
       setIsCompactViewport(event.matches)
       if (event.matches) setSidebarOpen(false)
@@ -447,6 +455,25 @@ export default function AppLayout({ navigateToAdmin = () => window.location.assi
     [pendingClose, tabs]
   )
 
+  const tabBarActions = useMemo<TabBarActions>(() => ({
+    addTab: handleAddTab,
+    closeTab: handleCloseTab,
+    cloneTab: handleCloneTab,
+    openSftpTab: handleOpenSftpTab,
+    duplicateTab: handleDuplicateTab,
+    closeAllTabs: handleCloseAllTabs,
+    openSettings: () => setSettingsOpen(true),
+    openAdmin: () => {
+      skipBeforeUnloadRef.current = true
+      navigateToAdmin()
+    },
+    openSplitPicker: () => setSplitPickerOpen(true),
+    openBroadcastPicker: () => setBroadcastPickerOpen(true),
+    exitSplit: () => { exitSplitMode(); setSplitOwnedByBroadcast(false) },
+    toggleSidebar: () => setSidebarOpen(o => !o),
+    openCommandPalette: () => setCommandPaletteOpen(true),
+  }), [handleAddTab, handleCloseTab, handleCloneTab, handleOpenSftpTab, handleDuplicateTab, handleCloseAllTabs, exitSplitMode, navigateToAdmin])
+
   const handleConfirmPendingClose = useCallback(() => {
     if (!pendingClose) return
     setPendingClose(null)
@@ -470,6 +497,13 @@ export default function AppLayout({ navigateToAdmin = () => window.location.assi
       className="flex h-full bg-surface-950"
     >
       <AuthRedirectOverlay />
+      <h1 className="sr-only">Torrus — web SSH terminal</h1>
+      <a
+        href="#torrus-main"
+        className="sr-only focus:not-sr-only focus:absolute focus:left-2 focus:top-2 focus:z-overlay focus:rounded focus:bg-surface-800 focus:px-3 focus:py-2 focus:text-sm focus:text-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+      >
+        Skip to terminal
+      </a>
       <AnimatePresence initial={false}>
         {(!isCompactViewport || sidebarOpen) && (
           <SessionSidebar
@@ -489,29 +523,13 @@ export default function AppLayout({ navigateToAdmin = () => window.location.assi
         <TabBar
           compactSidebar={isCompactViewport}
           sidebarOpen={sidebarOpen}
-          onToggleSidebar={() => setSidebarOpen(o => !o)}
-          onOpenCommandPalette={() => setCommandPaletteOpen(true)}
-          onAddTab={handleAddTab}
-          onCloseTab={handleCloseTab}
-          onCloneTab={handleCloneTab}
-          onOpenSftpTab={handleOpenSftpTab}
-          onDuplicateTab={handleDuplicateTab}
-          onCloseAllTabs={handleCloseAllTabs}
-          onOpenSettings={() => setSettingsOpen(true)}
-          onOpenAdmin={() => {
-            skipBeforeUnloadRef.current = true
-            navigateToAdmin()
-          }}
-          onOpenSplitPicker={() => setSplitPickerOpen(true)}
-          onOpenBroadcastPicker={() => setBroadcastPickerOpen(true)}
-          onExitSplit={() => { exitSplitMode(); setSplitOwnedByBroadcast(false) }}
-          onSetActiveTab={handleSetActiveTab}
           inSplitMode={!!layoutRoot}
+          actions={tabBarActions}
         />
 
-        <div className="flex-1 relative overflow-hidden min-h-0">
+        <main id="torrus-main" tabIndex={-1} className="flex-1 relative overflow-hidden min-h-0 focus:outline-none">
           {tabs.length === 0 ? (
-            <m.div {...fade} className="flex h-full flex-col items-center justify-center gap-4 text-slate-500">
+            <m.div {...fade} className="flex h-full flex-col items-center justify-center gap-4 text-slate-400">
               <Logo size="lg" showText={false} className="opacity-40" />
               <p className="max-w-sm px-6 text-center text-sm leading-relaxed text-balance">Open a terminal tab or select a saved session from the sidebar</p>
             </m.div>
@@ -528,18 +546,23 @@ export default function AppLayout({ navigateToAdmin = () => window.location.assi
             tabs.map(tab => (
               <div
                 key={tab.id}
+                id={`torrus-panel-${tab.id}`}
+                role="tabpanel"
+                aria-labelledby={`torrus-tab-${tab.id}`}
                 className={`absolute inset-0 motion-safe:animate-[torrus-tab-content-in_var(--motion-duration-surface)_var(--motion-ease-move)]`}
                 style={{ display: tab.id === activeTabId ? 'flex' : 'none', flexDirection: 'column' }}
               >
-                {tab.type === 'sftp' ? (
-                  <SFTPBrowser tabId={tab.id} sourceTabId={tab.sourceTabId} socket={socket} />
-                ) : (
-                  <TerminalPane tabId={tab.id} isActive={tab.id === activeTabId} socket={socket} />
-                )}
+                <Suspense fallback={<PaneFallback />}>
+                  {tab.type === 'sftp' ? (
+                    <SFTPBrowser tabId={tab.id} sourceTabId={tab.sourceTabId} socket={socket} />
+                  ) : (
+                    <TerminalPane tabId={tab.id} isActive={tab.id === activeTabId} socket={socket} />
+                  )}
+                </Suspense>
               </div>
             ))
           )}
-        </div>
+        </main>
       </div>
 
       <AnimatePresence>
@@ -552,6 +575,7 @@ export default function AppLayout({ navigateToAdmin = () => window.location.assi
           inSplitMode={!!layoutRoot}
           onAddTab={handleAddTab}
           onSelectTab={handleSetActiveTab}
+          onOpenSftpTab={handleOpenSftpTab}
           onOpenSettings={() => setSettingsOpen(true)}
           onOpenSplitPicker={() => setSplitPickerOpen(true)}
           onOpenBroadcastPicker={() => setBroadcastPickerOpen(true)}
@@ -596,7 +620,7 @@ export default function AppLayout({ navigateToAdmin = () => window.location.assi
           title={pendingClose.kind === 'all' ? 'Close all tabs?' : getCloseTitle(pendingCloseTab)}
           message={pendingClose.kind === 'all'
             ? 'Closing all tabs will disconnect SSH sessions and close SFTP browsers.'
-            : getCloseMessage(pendingCloseTab)}
+            : getCloseMessage(pendingCloseTab, tabs)}
           cancelRef={pendingCloseCancelRef}
           onCancel={dismissPendingClose}
           onConfirm={handleConfirmPendingClose}
@@ -605,4 +629,9 @@ export default function AppLayout({ navigateToAdmin = () => window.location.assi
       </AnimatePresence>
     </m.div>
   )
+}
+
+/** Shown while a lazily loaded pane's chunk arrives. */
+function PaneFallback() {
+  return <div className="flex h-full items-center justify-center text-xs text-slate-400">Loading…</div>
 }

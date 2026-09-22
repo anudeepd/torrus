@@ -130,8 +130,9 @@ async def test_rejected_input_still_gets_audit_record(monkeypatch):
         ),
         patch.object(
             server_module.audit_store,
+            # The writer is synchronous now and runs in a worker thread.
             "record_command_event",
-            AsyncMock(),
+            MagicMock(),
         ) as record,
     ):
         result = await server_module.on_ssh_input(
@@ -141,11 +142,10 @@ async def test_rejected_input_still_gets_audit_record(monkeypatch):
 
     assert result == {
         "ok": False,
-        "status": "unknown",
-        "code": "unknown",
-        "error": "Input was not accepted.",
+        "code": "session_not_found",
+        "message": "Input was not accepted.",
     }
-    record.assert_awaited_once()
+    record.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -154,7 +154,7 @@ async def test_activity_username_filter_is_case_insensitive(monkeypatch, tmp_pat
     from torrus import audit_store
 
     audit_store.init_db()
-    await audit_store.record_command_event(
+    audit_store.record_command_event(
         ldap_username="Alice",
         session_id="sess",
         tab_id="tab",
@@ -199,14 +199,14 @@ async def test_sftp_inline_download_records_audit(mock_sio, monkeypatch):
     monkeypatch.setattr(server_module.sftp_manager, "download_file", fake_download)
     monkeypatch.setattr(server_module.sftp_manager, "session_target", fake_target)
     with patch.object(
-        server_module.audit_store, "record_sftp_event", AsyncMock()
+        server_module.audit_store, "record_sftp_event", MagicMock()
     ) as record:
         await server_module.on_sftp_download(
             "sid", {"session_id": "s", "tab_id": "t", "path": "readme.txt"}
         )
 
-    assert record.await_count == 1
-    kwargs = record.await_args.kwargs
+    assert record.call_count == 1
+    kwargs = record.call_args.kwargs
     assert kwargs["ldap_username"] == "alice"
     assert kwargs["operation"] == "download"
     assert kwargs["path"] == "/home/app/readme.txt"
@@ -241,7 +241,7 @@ async def test_sftp_rename_records_audit_with_target(mock_sio, monkeypatch):
     monkeypatch.setattr(server_module.sftp_manager, "rename", fake_rename)
     monkeypatch.setattr(server_module.sftp_manager, "session_target", fake_target)
     with patch.object(
-        server_module.audit_store, "record_sftp_event", AsyncMock()
+        server_module.audit_store, "record_sftp_event", MagicMock()
     ) as record:
         await server_module.on_sftp_rename(
             "sid",
@@ -253,8 +253,137 @@ async def test_sftp_rename_records_audit_with_target(mock_sio, monkeypatch):
             },
         )
 
-    assert record.await_count == 1
-    kwargs = record.await_args.kwargs
+    assert record.call_count == 1
+    kwargs = record.call_args.kwargs
     assert kwargs["operation"] == "rename"
     assert kwargs["path"] == "/home/app/a.txt"
     assert kwargs["detail"] == "-> /home/app/b.txt"
+
+@pytest.mark.asyncio
+async def test_sftp_lock_is_released_when_its_tab_closes():
+    """The per-tab lock map must not keep one entry per tab ever opened."""
+    from torrus.sftp_manager import SFTPManager
+
+    manager = SFTPManager()
+    manager._sessions["tab1"] = SimpleNamespace(
+        session_id="sess1", tab_id="tab1", client=MagicMock(), cwd="/home/app"
+    )
+    manager._locks["tab1"] = asyncio.Lock()
+
+    await manager.close_sftp("tab1")
+
+    assert "tab1" not in manager._locks
+
+
+@pytest.mark.asyncio
+async def test_ssh_generation_keeps_rising_across_reconnects(mock_sio, mock_paramiko_client):
+    """Generation must stay strictly monotonic, so a stale target can never match."""
+    from torrus.ssh_manager import SSHManager
+
+    manager = SSHManager(mock_sio)
+    with patch("torrus.ssh_manager.paramiko.SSHClient") as ssh_client:
+        ssh_client.return_value = mock_paramiko_client
+        await manager.connect(
+            sid="sid-1", session_id="sess1", tab_id="tab1", host="example.com",
+            port=22, username="user", password="pass", cols=80, rows=24,
+        )
+        first = manager._sessions[("sess1", "tab1")].generation
+        await manager.connect(
+            sid="sid-1", session_id="sess1", tab_id="tab1", host="example.com",
+            port=22, username="user", password="pass", cols=80, rows=24,
+        )
+        second = manager._sessions[("sess1", "tab1")].generation
+        await manager.stop_background_tasks()
+
+    assert second > first
+
+@pytest.mark.asyncio
+async def test_ssh_connect_refuses_a_non_string_password(monkeypatch):
+    """bytearray(None) raises and bytearray(5) silently becomes five NUL bytes."""
+    import torrus.server as server_module
+    from torrus.server import on_ssh_connect
+
+    sio_mock = MagicMock()
+    sio_mock.emit = AsyncMock()
+    connect = AsyncMock()
+    monkeypatch.setattr(server_module, "_ldap_enabled", False)
+    monkeypatch.setattr(server_module.ssh_manager, "connect", connect)
+    monkeypatch.setattr(server_module, "sio", sio_mock)
+
+    await on_ssh_connect(
+        "sid-1",
+        {
+            "host": "example.com",
+            "port": 22,
+            "username": "user",
+            "password": None,
+            "session_id": "sess1",
+            "tab_id": "tab1",
+        },
+    )
+
+    connect.assert_not_called()
+    assert sio_mock.emit.call_args[0][1]["code"] == "invalid_request"
+
+
+@pytest.mark.asyncio
+async def test_upload_store_eviction_aborts_after_releasing_the_lock():
+    """Eviction must not hold the store lock across a remote sink abort."""
+    from torrus.upload_engine import UploadStore
+
+    aborted_under_lock: list[bool] = []
+    store = UploadStore(max_sessions=1, max_sessions_per_user=5)
+    target = SimpleNamespace(
+        session_id="s1", user="alice", directory="/tmp", filename="a.bin", size=0, extra={}
+    )
+
+    class Sink:
+        async def abort(self) -> None:
+            aborted_under_lock.append(store._lock.locked())
+
+    first = await store.register(target, user="alice")
+    first.sink = Sink()
+
+    # Registering past max_sessions evicts the first session.
+    await store.register(target, user="alice")
+
+    assert aborted_under_lock == [False]
+
+@pytest.mark.asyncio
+async def test_server_redacts_input_after_a_prompt_the_client_did_not_flag(monkeypatch):
+    """Redaction must not depend on the audited client marking its own input."""
+    import torrus.server as server_module
+    from torrus.server import _note_output_for_redaction, _record_ssh_input_audit
+
+    key = ("sid", "sess", "tab")
+    server_module._output_tails[key] = ""
+    _note_output_for_redaction(key, b"root@db01's password:")
+    assert key in server_module._sensitive_prompt_pending
+
+    recorded = MagicMock()
+    monkeypatch.setattr(server_module.audit_store, "record_sensitive_event", recorded)
+
+    await _record_ssh_input_audit(
+        sid="sid",
+        session_id="sess",
+        tab_id="tab",
+        input_data=b"hunter2\n",
+        target=("db01", 22, "root"),
+        owner="alice",
+        sensitive=False,
+    )
+
+    recorded.assert_called_once()
+    # Answering the prompt consumes it, so the next command is a command again.
+    assert key not in server_module._sensitive_prompt_pending
+
+
+def test_ordinary_output_does_not_mark_a_prompt():
+    import torrus.server as server_module
+    from torrus.server import _note_output_for_redaction
+
+    key = ("sid", "sess", "tab2")
+    server_module._output_tails[key] = ""
+    _note_output_for_redaction(key, b"total 4\n-rw-r--r-- 1 root root 9 readme.txt\n")
+
+    assert key not in server_module._sensitive_prompt_pending

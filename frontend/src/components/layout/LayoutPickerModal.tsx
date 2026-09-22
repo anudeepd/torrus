@@ -1,13 +1,13 @@
 import { useState, useEffect } from 'react'
 import { X } from 'lucide-react'
 import clsx from 'clsx'
-import { useDialogPresence } from '@/hooks/useDialogPresence'
+import Dialog from '@/components/ui/Dialog'
 import type { PaneNode } from '@/store/layoutStore'
 import { makeSplitId } from '@/store/layoutStore'
 import type { Tab } from '@/types'
 import * as m from 'motion/react-m'
 import { AnimatePresence } from 'motion/react'
-import { fade, spatialTransition, surface, surfaceSpring } from '@/motion/tokens'
+import { spatialTransition, surfaceSpring } from '@/motion/tokens'
 
 // ─── Preset layout builders ────────────────────────────────────────────────
 
@@ -109,7 +109,7 @@ function SlotPicker({ slotIndex, tabIds, tabs, onChange }: {
 }) {
   return (
     <div className="flex items-center gap-2">
-      <span className="text-xs text-slate-500 w-12 flex-shrink-0">Slot {slotIndex + 1}</span>
+      <span className="text-xs text-slate-400 w-12 flex-shrink-0">Slot {slotIndex + 1}</span>
       <select
         className="flex-1 bg-surface-800 border border-surface-600 rounded px-2 py-1 text-xs text-slate-200 focus:outline-none focus:border-brand-500"
         value={tabIds[slotIndex] ?? ''}
@@ -149,8 +149,6 @@ export default function LayoutPickerModal({ tabs, onApply, onClose }: Props) {
     })
   }, [selected, tabs])
 
-  const { ref: dialogRef, presenceProps } = useDialogPresence(onClose)
-
   const allFilled = slotTabIds.length === selected.slots && slotTabIds.every(Boolean)
 
   const handleApply = () => {
@@ -159,15 +157,11 @@ export default function LayoutPickerModal({ tabs, onApply, onClose }: Props) {
   }
 
   return (
-    <m.div {...fade}
-      className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center"
-      onMouseDown={e => { if (e.target === e.currentTarget) onClose() }}
-    >
-      <m.div {...surface} {...presenceProps} transition={surfaceSpring} ref={dialogRef} role="dialog" aria-modal="true" aria-label="Split layout" tabIndex={-1} className="bg-surface-900 border border-surface-700 rounded-xl shadow-2xl w-[520px] flex flex-col">
+    <Dialog label="Split layout" onClose={onClose} className="w-[520px] p-0">
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-surface-800">
           <h2 className="text-sm font-semibold text-slate-200">Split layout</h2>
-          <button onClick={onClose} className="text-slate-500 hover:text-slate-300 transition-colors">
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-300 transition-colors">
             <X className="w-4 h-4" />
           </button>
         </div>
@@ -245,12 +239,11 @@ export default function LayoutPickerModal({ tabs, onApply, onClose }: Props) {
           <button
             onClick={handleApply}
             disabled={!allFilled}
-            className="flex-1 px-3 py-2 rounded-md text-sm font-medium text-white bg-brand-600 hover:bg-brand-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            className="flex-1 px-3 py-2 rounded-md text-sm font-medium text-white bg-brand-700 hover:bg-brand-600 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
           >
             Apply layout
           </button>
         </div>
-      </m.div>
-    </m.div>
+    </Dialog>
   )
 }

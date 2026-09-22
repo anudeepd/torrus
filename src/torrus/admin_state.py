@@ -34,6 +34,9 @@ class PolicyMutation:
     allowed_users: tuple[str, ...]
 
 
+BACKUP_RETENTION = 5
+
+
 class LDAPPolicyStore:
     """Atomically mutate LDAP allowlist while preserving unknown YAML fields."""
 
@@ -82,7 +85,7 @@ class LDAPPolicyStore:
         self, username: str, enabled: bool, expected_fingerprint: str | None
     ) -> PolicyMutation:
         with self._lock:
-            raw, document, current_fingerprint = self._read()
+            _raw, document, current_fingerprint = self._read()
             if expected_fingerprint and expected_fingerprint != current_fingerprint:
                 raise PolicyConflict(
                     "LDAP configuration changed; reload policy before retrying"
@@ -136,8 +139,21 @@ class LDAPPolicyStore:
                 raise PolicyUnavailable(
                     "LDAP configuration could not be replaced safely"
                 ) from exc
+            self._prune_backups()
             new_fingerprint = hashlib.sha256(rendered).hexdigest()
             return PolicyMutation(new_fingerprint, backup_id, tuple(allowed))
+
+    def _prune_backups(self) -> None:
+        """Keep the newest few backups; one is written per mutation otherwise."""
+        backups = sorted(
+            self.path.parent.glob(f"{self.path.name}.bak-*"),
+            key=lambda path: path.stat().st_mtime,
+        )
+        for stale in backups[: -BACKUP_RETENTION]:
+            try:
+                stale.unlink()
+            except OSError:
+                pass
 
 
 def new_action_id() -> str:

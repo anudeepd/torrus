@@ -1,4 +1,5 @@
 import { useEffect, useRef, type RefObject } from 'react'
+import { useDismissLayer } from '@/lib/dismissLayers'
 
 const focusableSelector = [
   'button:not([disabled])',
@@ -31,10 +32,6 @@ export function useModalFocus(
     })
 
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        onCloseRef.current()
-        return
-      }
       if (event.key !== 'Tab') return
 
       const focusable = Array.from(dialogRef.current?.querySelectorAll<HTMLElement>(focusableSelector) ?? [])
@@ -59,6 +56,8 @@ export function useModalFocus(
       returnFocusRef.current?.focus()
     }
   }, [active, initialFocus])
+
+  useDismissLayer(active, () => onCloseRef.current())
 
   return dialogRef
 }

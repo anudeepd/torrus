@@ -1,13 +1,13 @@
 import { useState } from 'react'
 import { Radio, X } from 'lucide-react'
 import clsx from 'clsx'
-import { useDialogPresence } from '@/hooks/useDialogPresence'
+import Dialog from '@/components/ui/Dialog'
 import type { PaneNode } from '@/store/layoutStore'
 import { makeSplitId } from '@/store/layoutStore'
 import type { Tab } from '@/types'
 import * as m from 'motion/react-m'
 import { AnimatePresence } from 'motion/react'
-import { exitTransition, fade, surface, surfaceSpring, surfaceTransition } from '@/motion/tokens'
+import { exitTransition, fade, surfaceTransition } from '@/motion/tokens'
 
 // ─── Auto-layout for N terminals ───────────────────────────────────────────
 
@@ -49,8 +49,6 @@ export default function BroadcastPickerModal({ connectedTabs, initialIncluded, b
       : new Set(connectedTabs.map(t => t.id))
   )
 
-  const { ref: dialogRef, presenceProps } = useDialogPresence(onClose)
-
   const toggle = (id: string) => setChecked(prev => {
     const next = new Set(prev)
     if (next.has(id)) next.delete(id)
@@ -66,18 +64,14 @@ export default function BroadcastPickerModal({ connectedTabs, initialIncluded, b
   }
 
   return (
-    <m.div {...fade}
-      className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center"
-      onMouseDown={e => { if (e.target === e.currentTarget) onClose() }}
-    >
-      <m.div {...surface} {...presenceProps} transition={surfaceSpring} ref={dialogRef} role="dialog" aria-modal="true" aria-label="Broadcast input" tabIndex={-1} className="bg-surface-900 border border-surface-700 rounded-xl shadow-2xl w-80 flex flex-col">
+    <Dialog label="Broadcast input" onClose={onClose} className="w-80 p-0">
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-surface-800">
           <div className="flex items-center gap-2">
             <Radio className="w-4 h-4 text-amber-400" />
             <h2 className="text-sm font-semibold text-slate-200">Broadcast input</h2>
           </div>
-          <button onClick={onClose} className="text-slate-500 hover:text-slate-300 transition-colors">
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-300 transition-colors">
             <X className="w-4 h-4" />
           </button>
         </div>
@@ -118,7 +112,7 @@ export default function BroadcastPickerModal({ connectedTabs, initialIncluded, b
 
           <AnimatePresence initial={false} mode="wait">
             {selectedIds.length >= 2 && (
-              <m.p key={`ready-${selectedIds.length}`} {...fade} transition={surfaceTransition} className="text-xs text-slate-500">
+              <m.p key={`ready-${selectedIds.length}`} {...fade} transition={surfaceTransition} className="text-xs text-slate-400">
                 {selectedIds.length} terminals selected — will auto-arrange in split view.
               </m.p>
             )}
@@ -153,12 +147,11 @@ export default function BroadcastPickerModal({ connectedTabs, initialIncluded, b
           </AnimatePresence>
           <button
             onClick={onClose}
-            className="w-full px-3 py-2 rounded-md text-sm text-slate-500 hover:text-slate-300 transition-colors"
+            className="w-full px-3 py-2 rounded-md text-sm text-slate-400 hover:text-slate-300 transition-colors"
           >
             Cancel
           </button>
         </div>
-      </m.div>
-    </m.div>
+    </Dialog>
   )
 }

@@ -1,0 +1,41 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  publish:
+    name: build and publish to PyPI
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Tag must equal the package version
+        run: |
+          python - <<'PY'
+          import os, tomllib
+          from pathlib import Path
+
+          version = tomllib.loads(Path("pyproject.toml").read_text())["project"]["version"]
+          tag = os.environ["GITHUB_REF_NAME"].lstrip("v")
+          if tag != version:
+              raise SystemExit(f"tag {tag!r} does not match pyproject version {version!r}")
+          PY
+      - name: Build the frontend so the wheel is not stale
+        run: |
+          npm ci
+          npm run build
+        working-directory: frontend
+      - name: The rebuilt bundle is the committed one
+        run: |
+          if ! git diff --quiet -- src/torrus/static; then
+            echo "::error::src/torrus/static is stale — run 'make build' and commit the result"
+            git --no-pager diff --stat -- src/torrus/static
+            exit 1
+          fi
+      - run: uv build
+      - uses: pypa/gh-action-pypi-publish@release/v1

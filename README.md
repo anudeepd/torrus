@@ -36,11 +36,57 @@ Opens the terminal in your browser. Connect to any SSH server from there.
 Options:
 
 ```
---host TEXT          Bind host. [default: 127.0.0.1]
---port INTEGER       Bind port. [default: 8080]
---no-browser         Don't open the browser automatically.
---ldap-config PATH   Path to ldapgate YAML config to enable LDAP authentication.
+--host TEXT              Bind host. [default: 127.0.0.1]
+--port INTEGER           Bind port. [default: 8080]
+--no-browser             Don't open the browser automatically.
+--ldap-config PATH       Path to ldapgate YAML config to enable LDAP authentication.
+--ssl-keyfile PATH       TLS private key, to serve HTTPS directly.
+--ssl-certfile PATH      TLS certificate matching --ssl-keyfile.
+--log-file PATH          Write the server log to a file as well as stderr.
 ```
+
+### Connecting to servers on your own network
+
+Torrus refuses targets that are not publicly routable by default: private,
+loopback, link-local, cloud-metadata and shared (CGNAT/Tailscale) addresses,
+matched by name as well as by literal IP. This keeps the web UI from being used
+as an SSH pivot into the network Torrus runs in — including into the host it
+runs on, which is not exempt. A refused connection reports:
+
+> Connections to private, loopback, link-local or shared (CGNAT) addresses are not allowed. Set TORRUS_ALLOW_PRIVATE_HOSTS=true to allow them.
+
+Set the variable when the machines you connect to are on your LAN:
+
+```bash
+TORRUS_ALLOW_PRIVATE_HOSTS=true torrus serve
+```
+
+### Environment variables
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `TORRUS_ADMIN_USERS` | *(empty)* | Comma-separated LDAP usernames allowed to open the Admin Console. |
+| `TORRUS_AUDIT_DB` | `~/.local/share/torrus/audit.db` | Audit database location (`XDG_DATA_HOME` is honoured). |
+| `TORRUS_LDAP_CONFIG` | *(empty)* | Same as `--ldap-config`, for deployments that set it in the service unit. |
+| `TORRUS_LOG_FILE` | *(empty)* | Same as `--log-file`. |
+| `TORRUS_DEV` | *(empty)* | Development mode: relaxed socket origins for the Vite dev server. |
+| **`TORRUS_SSH_HOST_KEY_POLICY`** | `accept-new` | **`accept-new` records an unknown host key and refuses one that changed; `strict` also refuses an unknown host.** |
+| `TORRUS_SSH_KNOWN_HOSTS` | `~/.local/state/torrus/known_hosts` | Where host keys trusted on first use are written (`XDG_STATE_HOME` is honoured). The system `~/.ssh/known_hosts` is always read as well. |
+| **`TORRUS_ALLOW_PRIVATE_HOSTS`** | `false` | **Allow connecting to private, loopback, link-local, cloud-metadata or shared (CGNAT/Tailscale) addresses, including by name. Off by default: without it, torrus cannot be used as an SSH pivot into the network it runs in.** |
+| `TORRUS_ALLOW_PRIVATE_HOSTS_WITHOUT_LDAP` | `false` | Deprecated alias for the above; kept so an existing deployment does not change behaviour silently. |
+| `TORRUS_MAX_SSH_SESSIONS` | `128` | Ceiling on live SSH sessions. Each one occupies a worker of the shared I/O pool, so the default matches it: the alternative is every terminal stalling at once. |
+| `TORRUS_BULK_ZIP_MAX_BYTES` | `2147483648` | Largest "download as zip" selection. Larger trees are refused before the archive starts streaming. |
+| `TORRUS_MAX_UPLOAD_BYTES` | `1099511627776` | Largest single upload. |
+| `TORRUS_UPLOAD_CHUNK_BYTES` | `33554432` | Upload window size. |
+| `TORRUS_UPLOAD_CONCURRENCY` | `4` | Upload windows in flight per file. |
+| `TORRUS_UPLOAD_SESSION_TTL` | `3600` | Seconds an interrupted upload stays resumable. |
+| `TORRUS_SFTP_INLINE_MAX_BYTES` | `5242880` | Largest file served inline rather than as a streaming download. |
+
+Host keys: Torrus records a host's key the first time it connects (trust on
+first use) and **refuses the connection if that key later changes**, printing
+both fingerprints. A host whose key legitimately changed needs its entry removed
+from the store above. Set `TORRUS_SSH_HOST_KEY_POLICY=strict` to also refuse
+hosts it has never seen.
 
 ## LDAP Authentication
 

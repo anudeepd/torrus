@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react'
+import { useId, useState, type FormEvent } from 'react'
 import { Terminal } from 'lucide-react'
 import Button from '@/components/ui/Button'
 import Input from '@/components/ui/Input'
@@ -23,6 +23,7 @@ export default function ConnectForm({
   const [username, setUsername] = useState(initialUsername ?? '')
   const [password, setPassword] = useState('')
   const [localError, setLocalError] = useState('')
+  const formErrorId = useId()
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault()
@@ -43,6 +44,9 @@ export default function ConnectForm({
   }
 
   const displayError = localError || error
+  const errorFieldProps = displayError
+    ? { 'aria-invalid': true as const, 'aria-describedby': formErrorId }
+    : {}
 
   return (
     <m.div {...fade} className="torrus-connect-container flex h-full items-center justify-center bg-surface-950">
@@ -71,6 +75,7 @@ export default function ConnectForm({
                 autoComplete="off"
                 spellCheck={false}
                 data-testid="host-input"
+                {...errorFieldProps}
               />
             </div>
             <div className="torrus-connect-port w-full">
@@ -82,6 +87,7 @@ export default function ConnectForm({
                 value={port}
                 onChange={e => setPort(e.target.value)}
                 data-testid="port-input"
+                {...errorFieldProps}
               />
             </div>
           </div>
@@ -94,6 +100,7 @@ export default function ConnectForm({
             autoComplete="username"
             spellCheck={false}
             data-testid="username-input"
+            {...errorFieldProps}
           />
 
           <Input
@@ -104,11 +111,12 @@ export default function ConnectForm({
             onChange={e => setPassword(e.target.value)}
             autoComplete="current-password"
             data-testid="password-input"
+            {...errorFieldProps}
           />
 
           <AnimatePresence initial={false}>
             {displayError && (
-              <m.p initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="text-xs text-red-400 text-center">{displayError}</m.p>
+              <m.p id={formErrorId} role="alert" initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="text-xs text-red-400 text-center">{displayError}</m.p>
             )}
           </AnimatePresence>
 

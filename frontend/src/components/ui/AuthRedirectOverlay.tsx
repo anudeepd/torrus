@@ -41,7 +41,7 @@ export default function AuthRedirectOverlay() {
   const hasAction = Boolean(copy.action)
 
   return (
-    <m.div {...fade} className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-sm">
+    <m.div {...fade} className="fixed inset-0 z-overlay flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-sm">
       <m.div key={mode} {...surface} transition={surfaceSpring} className="w-full max-w-sm rounded-xl border border-surface-700 bg-surface-900/95 p-5 shadow-2xl">
         <div className={hasAction ? 'mb-4 flex items-center gap-3' : 'flex items-center gap-3'}>
           <div className="h-9 w-9 rounded-full border border-brand-500/40 bg-brand-500/10 p-2">

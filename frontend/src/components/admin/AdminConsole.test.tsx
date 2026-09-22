@@ -230,7 +230,7 @@ describe('AdminConsole', () => {
 
     fireEvent.click(screen.getByRole('tab', { name: 'retention' }))
     fireEvent.click(screen.getByRole('button', { name: 'Review deletion' }))
-    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    expect(screen.getByRole('alertdialog')).toBeInTheDocument()
     expect(screen.getByText(/This cannot be undone/)).toBeInTheDocument()
 
     fireEvent.change(screen.getByLabelText('Type PURGE to confirm'), { target: { value: 'PURGE' } })

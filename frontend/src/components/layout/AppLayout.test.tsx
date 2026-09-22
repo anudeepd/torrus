@@ -25,19 +25,19 @@ async function renderAppLayout({
   }))
   vi.doMock('./TabBar', () => ({
     default: ({
-      onCloseAllTabs,
-      onCloseTab,
-      onOpenAdmin,
+      actions,
     }: {
-      onCloseAllTabs: () => void
-      onCloseTab: (tabId: string) => void
-      onOpenAdmin?: () => void
+      actions: {
+        closeAllTabs: () => void
+        closeTab: (tabId: string) => void
+        openAdmin: () => void
+      }
     }) => (
       <>
-        <button type="button" data-testid="tabbar" onClick={onCloseAllTabs}>Close All</button>
-        <button type="button" data-testid="close-tab" onClick={() => onCloseTab('terminal-tab')}>Close Tab</button>
-        <button type="button" data-testid="close-sftp-tab" onClick={() => onCloseTab('sftp-tab')}>Close SFTP Tab</button>
-        <button type="button" data-testid="open-admin" onClick={() => onOpenAdmin?.()}>Admin</button>
+        <button type="button" data-testid="tabbar" onClick={actions.closeAllTabs}>Close All</button>
+        <button type="button" data-testid="close-tab" onClick={() => actions.closeTab('terminal-tab')}>Close Tab</button>
+        <button type="button" data-testid="close-sftp-tab" onClick={() => actions.closeTab('sftp-tab')}>Close SFTP Tab</button>
+        <button type="button" data-testid="open-admin" onClick={actions.openAdmin}>Admin</button>
       </>
     ),
   }))
@@ -304,7 +304,7 @@ describe('AppLayout LDAP auth handling', () => {
 
     fireEvent.click(screen.getByTestId('tabbar'))
 
-    expect(screen.getByRole('dialog', { name: 'Close all tabs' })).toBeInTheDocument()
+    expect(screen.getByRole('alertdialog', { name: 'Close all tabs' })).toBeInTheDocument()
     expect(screen.getByText('Closing all tabs will disconnect SSH sessions and close SFTP browsers.')).toBeInTheDocument()
     expect(useTerminalStore.getState().tabs).toHaveLength(2)
 

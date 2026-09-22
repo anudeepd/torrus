@@ -1,5 +1,116 @@
 # Changelog
 
+## [0.2.51] - 2026-09-22
+
+### Security
+- Private-host guard: `TORRUS_ALLOW_PRIVATE_HOSTS` now also covers RFC 6598 shared address space (`100.64.0.0/10`), which overlay networks such as Tailscale use.
+- **SSH host keys are now verified.** Connections load the system
+  `~/.ssh/known_hosts` plus a Torrus-managed store and refuse a host whose key
+  has changed, printing both fingerprints. An unknown host is recorded on first
+  use (`TORRUS_SSH_HOST_KEY_POLICY=accept-new`, the default) or refused outright
+  with `strict`. Previously every key was accepted and nothing was remembered.
+- **Private, loopback, link-local and cloud-metadata targets are refused by
+  default**, by name as well as by literal address, in both LDAP and non-LDAP
+  deployments. Set `TORRUS_ALLOW_PRIVATE_HOSTS=true` to allow them; the older
+  `TORRUS_ALLOW_PRIVATE_HOSTS_WITHOUT_LDAP` is honoured as a deprecated alias.
+- **The server decides what counts as sensitive input.** Prompt detection now
+  reads the output stream server-side and can only be *added to* by the client
+  hint, so a modified client can no longer keep a secret out of the redaction
+  path.
+- **Bulk archives are spooled to disk and capped.** Each member is streamed in
+  bounded reads instead of the whole file being materialised, member names are
+  normalised so a hostile filename cannot escape the extraction directory, and a
+  selection larger than `TORRUS_BULK_ZIP_MAX_BYTES` (2 GiB) is refused before
+  the archive starts.
+- `sftp:delete` accepts at most 500 paths per request, matching `sftp:mkdirs`.
+- The response CSP gained `frame-ancestors 'none'`, `form-action 'self'`,
+  `base-uri 'self'` and `object-src 'none'`, and `connect-src` is `'self'`
+  instead of any host on `ws:`/`wss:`. Without ldapgate, responses now also
+  carry `X-Frame-Options`, `X-Content-Type-Options` and `Referrer-Policy`.
+
+### Added
+
+- Continuous integration: `test.yml` runs ruff and pytest on 3.10-3.12 with the
+  `ldap` extra, the frontend suite, a production build whose bundle must match
+  what is committed, a wheel smoke test and a tag-versus-version check;
+  `release.yml` gates a tag, rebuilds, diffs the bundle and publishes through
+  PyPI OIDC.
+- `make lint`, `make test`, `make check` and `make verify-assets`, plus the
+  `[tool.ruff]` configuration the declared `ruff` dependency never had. The
+  first run found 51 issues; they were fixed rather than suppressed.
+- A web app manifest and an Apple touch icon, so the terminal installs to a
+  home screen. Both are served with their real content types and added to the
+  ldapgate static allowlist.
+- Code splitting: the terminal, the SFTP browser and the admin console load on
+  demand instead of with the shell.
+- One `Dialog` primitive now backs all nine dialogs - overlay, scrim, focus
+  trap, Escape through a shared dismiss stack, transitions - replacing eight
+  hand-rolled shells.
+- Keyboard access where only the mouse worked: `F6` moves focus out of the
+  terminal to the active tab, `Alt+Left`/`Alt+Right` and two context-menu items
+  reorder tabs, the split divider resizes with the arrow keys, and the admin
+  console's compact view switcher is a real tablist.
+- Behavioural tests for the settings dialog, the command palette and the layout
+  picker, an audit-CLI suite covering the escaping contract, and one
+  token-parity file replacing three that asserted source text.
+
+### Changed
+
+- Every HTTP error uses one envelope, `{"ok": false, "code", "message"}`
+  (previously the upload routes answered `{"detail": ...}`).
+- Responses are gzipped above 1 kB: the shell was shipping about 1.2 MB
+  uncompressed.
+- The Socket.IO client starts on long polling and upgrades to WebSocket when the
+  proxy allows it, instead of pinning polling.
+- An idle SSH session no longer re-submits to the I/O pool every 100 ms, and a
+  new `TORRUS_MAX_SSH_SESSIONS` ceiling (default 128) refuses new sessions
+  rather than letting every terminal stall when the pool runs dry.
+- An interrupted download no longer holds a tab lock across chunks: each SFTP
+  request takes it, so a concurrent listing cannot interleave with a read.
+
+### Fixed
+
+- Contrast, measured on the SFTP surface: the faint tier failed 16 of 29 text
+  nodes, the connect button measured 3.82:1 at rest and 2.54:1 on hover, and
+  placeholders 2.66:1. All three now pass (0 of 33, 4.82:1 and 4.77:1, 6.96:1).
+- Twelve primary controls were under 24x24; only the off-screen skip link
+  remains below it, by design.
+- Landmarks and headings: `main`, `nav`, an `h1` and a skip link; the tab strip
+  is a real tablist with `aria-controls`, roving `tabindex` and a `tabpanel`,
+  and the context menus have menu semantics instead of button roles.
+- A refused connection now announces itself: `role="alert"` with `aria-invalid`
+  and `aria-describedby` on every field, in the connect form and on the login
+  card, which also gained a heading, a `main` landmark, `theme-color` and
+  `viewport-fit=cover`.
+- Duplicate tabs are numbered - `root@host (1)`, `(2)` - instead of carrying
+  three identical labels.
+- Bulk download held a whole archive member between drains and peaked at
+  1,268.8 MB of RSS for a 400 MB archive. Draining per block, with the spool
+  reporting itself non-seekable so `zipfile` writes data descriptors instead of
+  seeking back to patch member headers, brings the peak to 84.7 MB, flat from
+  64 MB of payload onward.
+- The known-hosts store was parsed once per process, so removing a stale entry -
+  the remedy the mismatch message itself prescribes - had no effect until a
+  restart. It is re-read on every connect.
+- The connect throttle keyed on the client address alone, which behind a
+  reverse proxy with no `trusted_proxies` entry gives every user one shared
+  bucket of ten attempts a minute. It is now ten per socket plus sixty per
+  address.
+- The split divider was drag-only: it is now a focusable `separator` with a
+  label, orientation, values and arrow-key resize.
+- The admin console's compact view switcher claimed `role="tab"` with no
+  tabpanel, no `aria-controls` and no arrow keys, and its controls had no focus
+  ring.
+- Maps that grew for the life of the process now prune: issued CSRF tokens, SSH
+  generation counters, per-tab SFTP locks and policy-store backups.
+- Locks are no longer held across a yield in either download stream, upload
+  eviction aborts its victims after releasing the store lock, and `clone`
+  closes the replaced session outside the manager lock.
+- `test_upload_engine_parity.py` could not detect the drift it guarded; it now
+  compares the vendored copies byte for byte. The sdist ships
+  `tests/conftest.py`.
+
+
 ## [0.2.50] - 2026-09-20
 
 ### Changed

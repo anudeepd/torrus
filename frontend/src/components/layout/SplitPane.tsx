@@ -1,12 +1,12 @@
-import { useRef, useCallback, useState, useEffect, Component, type ReactNode } from 'react'
+import { Suspense, lazy, useRef, useCallback, useState, useEffect, Component, type ReactNode } from 'react'
 import { X, AlertTriangle } from 'lucide-react'
 import clsx from 'clsx'
 import type { Socket } from 'socket.io-client'
 import type { PaneNode } from '@/store/layoutStore'
 import { useLayoutStore } from '@/store/layoutStore'
 import { useTerminalStore } from '@/store/terminalStore'
-import TerminalPane from '@/components/terminal/TerminalPane'
-import SFTPBrowser from '@/components/sftp/SFTPBrowser'
+const TerminalPane = lazy(() => import('@/components/terminal/TerminalPane'))
+const SFTPBrowser = lazy(() => import('@/components/sftp/SFTPBrowser'))
 
 interface SplitPaneProps {
   node: PaneNode
@@ -41,7 +41,7 @@ function LeafPaneErrorFallback({ tabId, onClose }: { tabId: string; onClose: () 
     <div className="flex flex-col w-full h-full bg-surface-900 items-center justify-center p-4">
       <AlertTriangle className="w-8 h-8 text-red-400 mb-2" />
       <p className="text-sm text-slate-300 mb-2">Pane failed to load</p>
-      <p className="text-xs text-slate-500 mb-3">Tab: {tabId}</p>
+      <p className="text-xs text-slate-400 mb-3">Tab: {tabId}</p>
       <button
         onClick={onClose}
         className="text-xs px-3 py-1 bg-surface-700 hover:bg-surface-600 text-slate-200 rounded"
@@ -59,7 +59,11 @@ function LeafPane({ tabId, socket, onClose, isOnlyPane }: {
   isOnlyPane: boolean
 }) {
   const tab = useTerminalStore(s => s.tabs.find(t => t.id === tabId))
-  const { focusedTabId, setFocused, dragTabId, setDragTab, swapTabs } = useLayoutStore()
+  const focusedTabId = useLayoutStore(s => s.focusedTabId)
+  const setFocused = useLayoutStore(s => s.setFocused)
+  const dragTabId = useLayoutStore(s => s.dragTabId)
+  const setDragTab = useLayoutStore(s => s.setDragTab)
+  const swapTabs = useLayoutStore(s => s.swapTabs)
   const isFocused = focusedTabId === tabId
   const [dragOver, setDragOver] = useState(false)
 
@@ -81,6 +85,9 @@ function LeafPane({ tabId, socket, onClose, isOnlyPane }: {
 
   return (
     <div
+      id={`torrus-panel-${tabId}`}
+      role="tabpanel"
+      aria-labelledby={`torrus-tab-${tabId}`}
       className={clsx(
         'flex flex-col w-full h-full',
         isFocused ? 'outline outline-1 outline-brand-500' : 'outline outline-1 outline-surface-700'
@@ -116,7 +123,7 @@ function LeafPane({ tabId, socket, onClose, isOnlyPane }: {
             onMouseDown={e => e.stopPropagation()}
             onClick={() => onClose(tabId)}
             title="Close pane"
-            className="flex-shrink-0 p-0.5 text-slate-500 hover:text-red-400 transition-colors rounded"
+            className="flex-shrink-0 p-0.5 text-slate-400 hover:text-red-400 transition-colors rounded"
           >
             <X className="w-3.5 h-3.5" />
           </button>
@@ -125,23 +132,37 @@ function LeafPane({ tabId, socket, onClose, isOnlyPane }: {
 
       <div className="flex-1 min-h-0 relative">
         <LeafErrorBoundary fallback={<LeafPaneErrorFallback tabId={tabId} onClose={() => onClose(tabId)} />}>
-          {tab?.type === 'sftp' ? (
-            <SFTPBrowser tabId={tabId} sourceTabId={tab.sourceTabId} socket={socket} />
-          ) : (
-            <TerminalPane
-              tabId={tabId}
-              isActive={true}
-              focused={isFocused}
-              socket={socket}
-            />
-          )}
+          <Suspense fallback={<div className="flex h-full items-center justify-center text-xs text-slate-400">Loading…</div>}>
+            {tab?.type === 'sftp' ? (
+              <SFTPBrowser tabId={tabId} sourceTabId={tab.sourceTabId} socket={socket} />
+            ) : (
+              <TerminalPane
+                tabId={tabId}
+                isActive={true}
+                focused={isFocused}
+                socket={socket}
+              />
+            )}
+          </Suspense>
         </LeafErrorBoundary>
       </div>
     </div>
   )
 }
 
-function ResizeHandle({ dir, onDrag }: { dir: 'h' | 'v'; onDrag: (delta: number) => void }) {
+const KEYBOARD_RESIZE_STEP = 0.02
+
+function ResizeHandle({
+  dir,
+  ratio,
+  onDrag,
+  onRatio,
+}: {
+  dir: 'h' | 'v'
+  ratio: number
+  onDrag: (delta: number) => void
+  onRatio: (ratio: number) => void
+}) {
   const dragging = useRef(false)
   const lastPos = useRef(0)
 
@@ -173,10 +194,29 @@ function ResizeHandle({ dir, onDrag }: { dir: 'h' | 'v'; onDrag: (delta: number)
 
   return (
     <div
+      // A separator with a keyboard path: WCAG 2.5.7 wants a non-dragging way to
+      // resize, and the arrow keys below are that. The sidebar's handle uses the
+      // same pattern.
+      role="separator"
+      aria-label={dir === 'h' ? 'Resize panes' : 'Resize stacked panes'}
+      aria-orientation={dir === 'h' ? 'vertical' : 'horizontal'}
+      aria-valuenow={Math.round(ratio * 100)}
+      aria-valuemin={10}
+      aria-valuemax={90}
+      tabIndex={0}
       className={clsx(
         'flex-shrink-0 bg-surface-800 hover:bg-brand-500 active:bg-brand-400 transition-colors',
+        'focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500',
         dir === 'h' ? 'w-1 cursor-col-resize' : 'h-1 cursor-row-resize'
       )}
+      onKeyDown={event => {
+        const grow = dir === 'h' ? 'ArrowRight' : 'ArrowDown'
+        const shrink = dir === 'h' ? 'ArrowLeft' : 'ArrowUp'
+        if (event.key !== grow && event.key !== shrink) return
+        event.preventDefault()
+        const step = event.key === grow ? KEYBOARD_RESIZE_STEP : -KEYBOARD_RESIZE_STEP
+        onRatio(Math.max(0.1, Math.min(0.9, ratio + step)))
+      }}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
@@ -209,7 +249,12 @@ export default function SplitPane({ node, socket, onClose, isOnlyPane }: SplitPa
       <div style={{ flex: node.ratio, minWidth: 0, minHeight: 0, overflow: 'hidden' }}>
         <SplitPane node={node.a} socket={socket} onClose={onClose} isOnlyPane={false} />
       </div>
-      <ResizeHandle dir={node.dir} onDrag={handleDrag} />
+      <ResizeHandle
+        dir={node.dir}
+        ratio={node.ratio}
+        onDrag={handleDrag}
+        onRatio={ratio => updateRatio(node.id, ratio)}
+      />
       <div style={{ flex: 1 - node.ratio, minWidth: 0, minHeight: 0, overflow: 'hidden' }}>
         <SplitPane node={node.b} socket={socket} onClose={onClose} isOnlyPane={false} />
       </div>

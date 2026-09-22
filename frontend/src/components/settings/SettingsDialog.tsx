@@ -1,8 +1,6 @@
+import Dialog from '@/components/ui/Dialog'
 import { Settings, RotateCcw } from 'lucide-react'
-import { useDialogPresence } from '@/hooks/useDialogPresence'
 import { useSettingsStore } from '@/store/settingsStore'
-import * as m from 'motion/react-m'
-import { fade, surface, surfaceSpring } from '@/motion/tokens'
 
 interface SettingsDialogProps {
   onClose: () => void
@@ -13,16 +11,13 @@ const SCROLLBACK_OPTIONS = [1_000, 5_000, 10_000, 25_000, 50_000, 100_000]
 const FONT_SIZE_OPTIONS = [10, 11, 12, 13, 14, 15, 16, 18, 20]
 
 export default function SettingsDialog({ onClose }: SettingsDialogProps) {
-  const { scrollbackLines, fontSize, update, reset } = useSettingsStore()
-
-  const { ref: dialogRef, presenceProps } = useDialogPresence(onClose)
+  const scrollbackLines = useSettingsStore(s => s.scrollbackLines)
+  const fontSize = useSettingsStore(s => s.fontSize)
+  const update = useSettingsStore(s => s.update)
+  const reset = useSettingsStore(s => s.reset)
 
   return (
-    <m.div {...fade}
-      className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center"
-      onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}
-    >
-      <m.div {...surface} {...presenceProps} transition={surfaceSpring} ref={dialogRef} role="dialog" aria-modal="true" aria-label="Terminal Settings" tabIndex={-1} className="bg-surface-900 border border-surface-700 rounded-xl p-5 w-80 shadow-2xl flex flex-col gap-4">
+    <Dialog label="Terminal Settings" onClose={onClose} className="w-80 gap-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Settings className="w-4 h-4 text-brand-400" />
@@ -30,7 +25,7 @@ export default function SettingsDialog({ onClose }: SettingsDialogProps) {
           </div>
           <button
             onClick={reset}
-            className="flex items-center gap-1 text-xs text-slate-500 hover:text-slate-300 transition-colors"
+            className="flex items-center gap-1 text-xs text-slate-400 hover:text-slate-300 transition-colors"
             title="Reset to defaults"
           >
             <RotateCcw className="w-3 h-3" />
@@ -41,9 +36,11 @@ export default function SettingsDialog({ onClose }: SettingsDialogProps) {
         <div className="flex flex-col gap-4">
           {/* Scrollback buffer */}
           <div className="flex flex-col gap-1">
-            <label className="text-sm text-slate-200">Scrollback lines</label>
-            <p className="text-xs text-slate-500">Number of lines kept in terminal history</p>
+            <label htmlFor="settings-scrollback" className="text-sm text-slate-200">Scrollback lines</label>
+            <p id="settings-scrollback-help" className="text-xs text-slate-400">Number of lines kept in terminal history</p>
             <select
+              id="settings-scrollback"
+              aria-describedby="settings-scrollback-help"
               value={scrollbackLines}
               onChange={e => update({ scrollbackLines: parseInt(e.target.value, 10) })}
               className="mt-1 w-full bg-surface-950 border border-surface-700 rounded-md px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-brand-500 transition-colors"
@@ -56,9 +53,11 @@ export default function SettingsDialog({ onClose }: SettingsDialogProps) {
 
           {/* Font size */}
           <div className="flex flex-col gap-1">
-            <label className="text-sm text-slate-200">Font size</label>
-            <p className="text-xs text-slate-500">Terminal font size in pixels</p>
+            <label htmlFor="settings-font-size" className="text-sm text-slate-200">Font size</label>
+            <p id="settings-font-size-help" className="text-xs text-slate-400">Terminal font size in pixels</p>
             <select
+              id="settings-font-size"
+              aria-describedby="settings-font-size-help"
               value={fontSize}
               onChange={e => update({ fontSize: parseInt(e.target.value, 10) })}
               className="mt-1 w-full bg-surface-950 border border-surface-700 rounded-md px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-brand-500 transition-colors"
@@ -77,7 +76,6 @@ export default function SettingsDialog({ onClose }: SettingsDialogProps) {
         >
           Close
         </button>
-      </m.div>
-    </m.div>
+    </Dialog>
   )
 }

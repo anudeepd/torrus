@@ -1,7 +1,5 @@
+import Dialog from '@/components/ui/Dialog'
 import type { RefObject } from 'react'
-import * as m from 'motion/react-m'
-import { exitTransition, fade, surface, surfaceSpring } from '@/motion/tokens'
-import { useDialogPresence } from '@/hooks/useDialogPresence'
 
 interface PendingCloseDialogProps {
   /** 'all' closes every tab, anything else closes a single tab or pane. */
@@ -22,27 +20,10 @@ export default function PendingCloseDialog({
   onCancel,
   onConfirm,
 }: PendingCloseDialogProps) {
-  const { ref, presenceProps } = useDialogPresence(onCancel, cancelRef)
   const label = kind === 'all' ? 'Close all tabs' : 'Close tab'
 
   return (
-    <m.div
-      {...fade}
-      transition={exitTransition}
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
-      onMouseDown={event => { if (event.target === event.currentTarget) onCancel() }}
-    >
-      <m.div
-        {...surface}
-        {...presenceProps}
-        transition={surfaceSpring}
-        ref={ref}
-        role="dialog"
-        aria-modal="true"
-        aria-label={label}
-        tabIndex={-1}
-        className="flex w-80 flex-col gap-4 rounded-xl border border-surface-700 bg-surface-900 p-5 shadow-2xl"
-      >
+    <Dialog role="alertdialog" label={label} initialFocus={cancelRef} onClose={onCancel} className="w-80 gap-4">
         <div>
           <h2 className="text-sm font-semibold text-slate-200">{title}</h2>
           <p className="mt-2 text-xs leading-relaxed text-slate-400">{message}</p>
@@ -64,7 +45,6 @@ export default function PendingCloseDialog({
             {label}
           </button>
         </div>
-      </m.div>
-    </m.div>
+    </Dialog>
   )
 }

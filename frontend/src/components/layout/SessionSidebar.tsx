@@ -1,14 +1,16 @@
 import { useState, useRef, useEffect, useCallback, type FormEvent } from 'react'
 import { Download, Upload, Trash2, LogIn, PanelLeftClose, PanelLeftOpen, Pencil } from 'lucide-react'
 import clsx from 'clsx'
+import Dialog from '@/components/ui/Dialog'
 import { useSavedServerStore } from '@/store/savedServerStore'
 import { useTerminalStore } from '@/store/terminalStore'
 import { uuid } from '@/utils/uuid'
 import type { SavedServer } from '@/types'
-import { useDialogPresence } from '@/hooks/useDialogPresence'
+import { handleMenuKeyDown } from '@/lib/menuKeys'
+import { useDismissLayer } from '@/lib/dismissLayers'
 import { AnimatePresence } from 'motion/react'
 import * as m from 'motion/react-m'
-import { anchoredSurface, exitTransition, fade, spatialTransition, surface, surfaceSpring } from '@/motion/tokens'
+import { anchoredSurface, exitTransition, spatialTransition } from '@/motion/tokens'
 
 interface SessionSidebarProps {
   isOpen: boolean
@@ -69,8 +71,6 @@ function EditModal({ server, onSave, onClose }: EditModalProps) {
   const [username, setUsername] = useState(server.username)
   const [error, setError] = useState('')
 
-  const { ref: dialogRef, presenceProps } = useDialogPresence(onClose)
-
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault()
     setError('')
@@ -92,15 +92,11 @@ function EditModal({ server, onSave, onClose }: EditModalProps) {
     onClose()
   }
 
-  const inputCls = 'w-full bg-surface-950 border border-surface-700 rounded-md px-3 py-2 text-sm font-mono text-slate-200 placeholder-slate-500 focus:outline-none focus:border-brand-500 transition-colors'
+  const inputCls = 'w-full bg-surface-950 border border-surface-700 rounded-md px-3 py-2 text-sm font-mono text-slate-200 placeholder-slate-400 focus:outline-none focus:border-brand-500 transition-colors'
   const labelCls = 'text-xs text-slate-400 font-medium'
 
   return (
-    <m.div {...fade}
-      className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center"
-      onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}
-    >
-      <m.div {...surface} {...presenceProps} transition={surfaceSpring} ref={dialogRef} role="dialog" aria-modal="true" aria-label="Edit Session" tabIndex={-1} className="bg-surface-900 border border-surface-700 rounded-xl p-6 w-80 shadow-2xl flex flex-col gap-4">
+    <Dialog label="Edit Session" onClose={onClose} className="w-80 gap-4 p-6">
         <div className="flex items-center gap-2">
           <Pencil className="w-4 h-4 text-brand-400" />
           <h2 className="text-sm font-semibold text-slate-200">Edit Session</h2>
@@ -168,21 +164,23 @@ function EditModal({ server, onSave, onClose }: EditModalProps) {
             </button>
             <button
               type="submit"
-              className="flex-1 px-3 py-2 rounded-md text-sm font-medium text-white bg-brand-600 hover:bg-brand-500 transition-colors"
+              className="flex-1 px-3 py-2 rounded-md text-sm font-medium text-white bg-brand-700 hover:bg-brand-600 transition-colors"
             >
               Save
             </button>
           </div>
         </form>
-      </m.div>
-    </m.div>
+    </Dialog>
   )
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
 
 export default function SessionSidebar({ isOpen, compact, onToggle, onLoadSession }: SessionSidebarProps) {
-  const { servers, removeServer, updateServer, importServers } = useSavedServerStore()
+  const servers = useSavedServerStore(s => s.servers)
+  const removeServer = useSavedServerStore(s => s.removeServer)
+  const updateServer = useSavedServerStore(s => s.updateServer)
+  const importServers = useSavedServerStore(s => s.importServers)
   const tabs = useTerminalStore(s => s.tabs)
 
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -202,6 +200,8 @@ export default function SessionSidebar({ isOpen, compact, onToggle, onLoadSessio
     return Math.max(MIN_SIDEBAR_WIDTH, Math.min(MAX_SIDEBAR_WIDTH, parsed))
   })
 
+  useDismissLayer(!!contextMenu, () => setContextMenu(null))
+
   // Clear selection if server is removed
   useEffect(() => {
     if (selectedId && !servers.find(s => s.id === selectedId)) {
@@ -218,12 +218,11 @@ export default function SessionSidebar({ isOpen, compact, onToggle, onLoadSessio
         setContextMenu(null)
       }
     }
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setContextMenu(null) }
     document.addEventListener('mousedown', onMouseDown)
-    document.addEventListener('keydown', onKey)
+    // Take focus so Escape and the arrow keys reach the menu instead of xterm.
+    contextMenuRef.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus()
     return () => {
       document.removeEventListener('mousedown', onMouseDown)
-      document.removeEventListener('keydown', onKey)
     }
   }, [contextMenu])
 
@@ -327,7 +326,7 @@ export default function SessionSidebar({ isOpen, compact, onToggle, onLoadSessio
           exit={{ opacity: 0 }}
           transition={exitTransition}
           onClick={onToggle}
-          className="fixed inset-0 z-30 bg-black/60 backdrop-blur-[1px]"
+          className="fixed inset-0 z-30 bg-black/60"
         />
         <m.div
           initial={{ x: -Math.min(288, window.innerWidth - 48), opacity: 0 }}
@@ -346,13 +345,14 @@ export default function SessionSidebar({ isOpen, compact, onToggle, onLoadSessio
           return (
             <m.div key="ctx" {...anchoredSurface} transition={exitTransition}
               ref={contextMenuRef}
-              className="fixed z-50 bg-surface-800 border border-surface-700 rounded-lg shadow-xl py-1 min-w-40"
+              role="menu" aria-label="Session actions"
+              onKeyDown={event => handleMenuKeyDown(event, contextMenuRef.current, () => setContextMenu(null))} className="fixed z-50 bg-surface-800 border border-surface-700 rounded-lg shadow-xl py-1 min-w-40"
               style={{ left: contextMenu.x, top: contextMenu.y }}
             >
-              <button className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-300 hover:bg-surface-700 transition-colors" onClick={() => { setContextMenu(null); onLoadSession(server) }}><LogIn className="w-3 h-3" /> Open</button>
-              <button className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-300 hover:bg-surface-700 transition-colors" onClick={() => { setContextMenu(null); setEditingServer(server) }}><Pencil className="w-3 h-3" /> Edit</button>
+              <button role="menuitem" className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-300 hover:bg-surface-700 transition-colors" onClick={() => { setContextMenu(null); onLoadSession(server) }}><LogIn className="w-3 h-3" /> Open</button>
+              <button role="menuitem" className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-300 hover:bg-surface-700 transition-colors" onClick={() => { setContextMenu(null); setEditingServer(server) }}><Pencil className="w-3 h-3" /> Edit</button>
               <div className="my-1 border-t border-surface-700" />
-              <button className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-red-400 hover:bg-surface-700 transition-colors" onClick={() => { setContextMenu(null); removeServer(server.id); setSelectedId(null) }}><Trash2 className="w-3 h-3" /> Delete</button>
+              <button role="menuitem" className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-red-400 hover:bg-surface-700 transition-colors" onClick={() => { setContextMenu(null); removeServer(server.id); setSelectedId(null) }}><Trash2 className="w-3 h-3" /> Delete</button>
             </m.div>
           )
         })()}
@@ -379,7 +379,7 @@ export default function SessionSidebar({ isOpen, compact, onToggle, onLoadSessio
           <button
             onClick={onToggle}
             title="Show sessions"
-            className="w-8 h-9 flex-shrink-0 flex items-center justify-center text-slate-500 hover:text-slate-300 hover:bg-surface-800 transition-colors border-b border-surface-800"
+            className="w-8 h-9 flex-shrink-0 flex items-center justify-center text-slate-400 hover:text-slate-300 hover:bg-surface-800 transition-colors border-b border-surface-800"
           >
             <PanelLeftOpen className="w-4 h-4" />
           </button>
@@ -402,13 +402,14 @@ export default function SessionSidebar({ isOpen, compact, onToggle, onLoadSessio
         return (
           <m.div key="ctx" {...anchoredSurface} transition={exitTransition}
             ref={contextMenuRef}
-            className="fixed z-50 bg-surface-800 border border-surface-700 rounded-lg shadow-xl py-1 min-w-40"
+            role="menu" aria-label="Session actions"
+            onKeyDown={event => handleMenuKeyDown(event, contextMenuRef.current, () => setContextMenu(null))} className="fixed z-50 bg-surface-800 border border-surface-700 rounded-lg shadow-xl py-1 min-w-40"
             style={{ left: contextMenu.x, top: contextMenu.y }}
           >
-            <button className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-300 hover:bg-surface-700 transition-colors" onClick={() => { setContextMenu(null); onLoadSession(server) }}><LogIn className="w-3 h-3" /> Open</button>
-            <button className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-300 hover:bg-surface-700 transition-colors" onClick={() => { setContextMenu(null); setEditingServer(server) }}><Pencil className="w-3 h-3" /> Edit</button>
+            <button role="menuitem" className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-300 hover:bg-surface-700 transition-colors" onClick={() => { setContextMenu(null); onLoadSession(server) }}><LogIn className="w-3 h-3" /> Open</button>
+            <button role="menuitem" className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-300 hover:bg-surface-700 transition-colors" onClick={() => { setContextMenu(null); setEditingServer(server) }}><Pencil className="w-3 h-3" /> Edit</button>
             <div className="my-1 border-t border-surface-700" />
-            <button className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-red-400 hover:bg-surface-700 transition-colors" onClick={() => { setContextMenu(null); removeServer(server.id); setSelectedId(null) }}><Trash2 className="w-3 h-3" /> Delete</button>
+            <button role="menuitem" className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-red-400 hover:bg-surface-700 transition-colors" onClick={() => { setContextMenu(null); removeServer(server.id); setSelectedId(null) }}><Trash2 className="w-3 h-3" /> Delete</button>
           </m.div>
         )
       })()}
@@ -447,12 +448,17 @@ interface SidebarInnerProps {
 
 function SidebarInner({ onToggle, servers, selectedId, setSelectedId, selected, isActive, handleOpen, handleDelete, handleExport, handleImport, setEditingServer, setImportError, importError, importSuccess, fileInputRef, onLoadSession }: SidebarInnerProps) {
   return (
-    <div className="flex-1 min-w-0 flex flex-col bg-surface-900 select-none">
+    <nav aria-label="Saved sessions" className="flex-1 min-w-0 flex flex-col bg-surface-900 select-none">
       {/* Header */}
       <div className="px-3 py-2 border-b border-surface-800 flex items-center gap-2">
-        <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider flex-1">Sessions</span>
-        <button onClick={onToggle} title="Hide sessions" className="text-slate-600 hover:text-slate-400 transition-colors p-0.5">
-          <PanelLeftClose className="w-3.5 h-3.5" />
+        <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wider flex-1">Sessions</h2>
+        <button
+          onClick={onToggle}
+          title="Hide sessions"
+          aria-label="Hide sessions"
+          className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded text-slate-400 transition-colors hover:bg-surface-800 hover:text-slate-200"
+        >
+          <PanelLeftClose className="w-3.5 h-3.5" aria-hidden="true" />
         </button>
       </div>
 
@@ -468,7 +474,7 @@ function SidebarInner({ onToggle, servers, selectedId, setSelectedId, selected, 
           </svg>
         </div>
         {servers.length === 0 ? (
-          <p className="px-3 py-4 text-xs text-slate-600 text-center leading-relaxed">No saved sessions.<br />Connect and click the bookmark icon to save one.</p>
+          <p className="px-3 py-4 text-xs text-slate-400 text-center leading-relaxed">No saved sessions.<br />Connect and click the bookmark icon to save one.</p>
         ) : (
           servers.map(server => (
             <div
@@ -484,7 +490,7 @@ function SidebarInner({ onToggle, servers, selectedId, setSelectedId, selected, 
                 <span className={clsx('w-1.5 h-1.5 rounded-full flex-shrink-0', { 'bg-green-400': isActive(server), 'bg-slate-600': !isActive(server) })} />
                 <span className="text-xs font-medium text-slate-200 truncate flex-1">{server.name}</span>
               </div>
-              <span className="text-xs text-slate-500 truncate pl-3 mt-0.5">{server.username}@{server.host}{server.port !== 22 ? `:${server.port}` : ''}</span>
+              <span className="text-xs text-slate-400 truncate pl-3 mt-0.5">{server.username}@{server.host}{server.port !== 22 ? `:${server.port}` : ''}</span>
             </div>
           ))
         )}
@@ -493,7 +499,7 @@ function SidebarInner({ onToggle, servers, selectedId, setSelectedId, selected, 
       {/* Action buttons */}
       <div className="flex flex-col gap-2 px-3 py-3 border-t border-surface-800">
         <div className="flex gap-1.5">
-          <button onClick={handleOpen} disabled={!selected} className={clsx('flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 rounded text-xs font-medium transition-colors', selected ? 'bg-brand-600 hover:bg-brand-500 text-white' : 'bg-surface-800 text-slate-600 cursor-not-allowed')}>
+          <button onClick={handleOpen} disabled={!selected} className={clsx('flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 rounded text-xs font-medium transition-colors', selected ? 'bg-brand-700 hover:bg-brand-600 text-white' : 'bg-surface-800 text-slate-600 cursor-not-allowed')}>
             <LogIn className="w-3 h-3" /> Open
           </button>
           <button onClick={() => { if (selected) setEditingServer(selected) }} disabled={!selected} className={clsx('flex items-center justify-center px-2 py-1.5 rounded text-xs transition-colors', selected ? 'bg-surface-800 hover:bg-surface-700 text-slate-400 hover:text-slate-200' : 'bg-surface-800 text-slate-700 cursor-not-allowed')} title="Edit session">
@@ -515,6 +521,6 @@ function SidebarInner({ onToggle, servers, selectedId, setSelectedId, selected, 
         {importError && <p className="text-xs text-red-400 text-center leading-tight">{importError}</p>}
         {importSuccess && <p className="text-xs text-green-400 text-center">Sessions imported.</p>}
       </div>
-    </div>
+    </nav>
   )
 }

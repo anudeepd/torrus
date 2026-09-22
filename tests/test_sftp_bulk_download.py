@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import io
 import zipfile
+from unittest.mock import AsyncMock
 
 import pytest
-
 from test_sftp_manager import FakeSFTP, FakeSSHManager
 
 
@@ -193,8 +193,9 @@ async def test_bulk_zip_accepts_symlink_spelling_of_home():
     the same canonical file as the direct spelling: confinement is gone, but
     canonicalization still prevents duplicate zip entries for one file.
     """
-    from torrus.sftp_manager import SFTPManager
     from test_sftp_manager import FakeSFTP, FakeSSHManager
+
+    from torrus.sftp_manager import SFTPManager
 
     class SymlinkHomeSFTP(FakeSFTP):
         def __init__(self):
@@ -226,8 +227,9 @@ async def test_bulk_zip_accepts_symlink_spelling_of_home():
 
 @pytest.mark.asyncio
 async def test_bulk_download_endpoint_returns_zip(monkeypatch):
-    import torrus.server as server_module
     from fastapi.testclient import TestClient
+
+    import torrus.server as server_module
     from torrus.sftp_manager import SFTPManager
 
     sftp = FakeSFTP()
@@ -261,8 +263,9 @@ async def test_bulk_download_endpoint_returns_zip(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_bulk_download_endpoint_works_outside_home(monkeypatch):
-    import torrus.server as server_module
     from fastapi.testclient import TestClient
+
+    import torrus.server as server_module
     from torrus.sftp_manager import SFTPManager
 
     sftp = FakeSFTP()
@@ -285,8 +288,9 @@ async def test_bulk_download_endpoint_works_outside_home(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_bulk_download_endpoint_records_sftp_audit(monkeypatch, tmp_path):
-    import torrus.server as server_module
     from fastapi.testclient import TestClient
+
+    import torrus.server as server_module
     from torrus import audit_store
     from torrus.sftp_manager import SFTPManager
 
@@ -299,7 +303,9 @@ async def test_bulk_download_endpoint_records_sftp_audit(monkeypatch, tmp_path):
     await manager.open_sftp("sess1", "tab1", FakeSSHManager(sftp))
     monkeypatch.setattr(server_module, "sftp_manager", manager)
     monkeypatch.setattr(server_module, "_ldap_enabled", True)
-    monkeypatch.setattr(server_module, "_http_owner", lambda _request: "alice")
+    monkeypatch.setattr(
+        server_module, "_http_owner", AsyncMock(return_value="alice")
+    )
 
     async def owned(_session_id, _tab_id, owner):
         return owner == "alice"
@@ -329,8 +335,9 @@ async def test_bulk_download_endpoint_records_sftp_audit(monkeypatch, tmp_path):
 
 @pytest.mark.asyncio
 async def test_bulk_download_endpoint_rejects_missing_path(monkeypatch):
-    import torrus.server as server_module
     from fastapi.testclient import TestClient
+
+    import torrus.server as server_module
     from torrus.sftp_manager import SFTPManager
 
     sftp = FakeSFTP()

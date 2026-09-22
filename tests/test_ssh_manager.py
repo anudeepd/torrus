@@ -1,8 +1,9 @@
 """Tests for torrus.ssh_manager SSH session management."""
 
 import asyncio
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 
 async def _cleanup_manager(manager):
@@ -21,8 +22,8 @@ class TestConnectFlow:
         manager = SSHManager(mock_sio)
         manager.start_background_tasks()
         try:
-            with patch("torrus.ssh_manager.paramiko.SSHClient") as MockClient:
-                MockClient.return_value = mock_paramiko_client
+            with patch("torrus.ssh_manager.paramiko.SSHClient") as mock_client:
+                mock_client.return_value = mock_paramiko_client
                 await manager.connect(
                     sid="sid-1",
                     session_id="sess1",
@@ -47,15 +48,16 @@ class TestConnectFlow:
 
     @pytest.mark.asyncio
     async def test_connect_auth_failure(self, mock_sio):
-        from torrus.ssh_manager import SSHManager
         from paramiko import AuthenticationException
+
+        from torrus.ssh_manager import SSHManager
 
         manager = SSHManager(mock_sio)
 
-        with patch("torrus.ssh_manager.paramiko.SSHClient") as MockClient:
+        with patch("torrus.ssh_manager.paramiko.SSHClient") as mock_client:
             client = MagicMock()
             client.connect = MagicMock(side_effect=AuthenticationException("bad pass"))
-            MockClient.return_value = client
+            mock_client.return_value = client
 
             await manager.connect(
                 sid="sid-1",
@@ -73,15 +75,15 @@ class TestConnectFlow:
 
     @pytest.mark.asyncio
     async def test_connect_timeout(self, mock_sio):
+
         from torrus.ssh_manager import SSHManager
-        import socket
 
         manager = SSHManager(mock_sio)
 
-        with patch("torrus.ssh_manager.paramiko.SSHClient") as MockClient:
+        with patch("torrus.ssh_manager.paramiko.SSHClient") as mock_client:
             client = MagicMock()
-            client.connect = MagicMock(side_effect=socket.timeout())
-            MockClient.return_value = client
+            client.connect = MagicMock(side_effect=TimeoutError())
+            mock_client.return_value = client
 
             await manager.connect(
                 sid="sid-1",
@@ -102,14 +104,14 @@ class TestConnectFlow:
 
         manager = SSHManager(mock_sio)
         with (
-            patch("torrus.ssh_manager.paramiko.SSHClient") as MockClient,
+            patch("torrus.ssh_manager.paramiko.SSHClient") as mock_client,
             patch(
                 "torrus.ssh_manager.asyncio.wait_for",
                 new=AsyncMock(side_effect=TimeoutError()),
             ) as wait_for,
         ):
             client = MagicMock()
-            MockClient.return_value = client
+            mock_client.return_value = client
             await manager.connect(
                 sid="sid-1",
                 session_id="sess1",
@@ -135,8 +137,8 @@ class TestSessionLifecycle:
         manager = SSHManager(mock_sio)
         manager.start_background_tasks()
         try:
-            with patch("torrus.ssh_manager.paramiko.SSHClient") as MockClient:
-                MockClient.return_value = mock_paramiko_client
+            with patch("torrus.ssh_manager.paramiko.SSHClient") as mock_client:
+                mock_client.return_value = mock_paramiko_client
                 await manager.connect(
                     sid="sid-1",
                     session_id="sess1",
@@ -165,8 +167,8 @@ class TestSessionLifecycle:
         manager = SSHManager(mock_sio)
         manager.start_background_tasks()
         try:
-            with patch("torrus.ssh_manager.paramiko.SSHClient") as MockClient:
-                MockClient.return_value = mock_paramiko_client
+            with patch("torrus.ssh_manager.paramiko.SSHClient") as mock_client:
+                mock_client.return_value = mock_paramiko_client
                 await manager.connect(
                     "sid-1", "sess1", "tab1", "example.com", 22, "user", "pass"
                 )
@@ -201,8 +203,8 @@ class TestSessionLifecycle:
         manager = SSHManager(mock_sio)
         manager.start_background_tasks()
         try:
-            with patch("torrus.ssh_manager.paramiko.SSHClient") as MockClient:
-                MockClient.return_value = mock_paramiko_client
+            with patch("torrus.ssh_manager.paramiko.SSHClient") as mock_client:
+                mock_client.return_value = mock_paramiko_client
                 await manager.connect(
                     sid="sid-1",
                     session_id="sess1",
@@ -235,8 +237,8 @@ class TestSessionLifecycle:
         manager = SSHManager(mock_sio, on_tab_disconnect=on_tab_disconnect)
         manager.start_background_tasks()
         try:
-            with patch("torrus.ssh_manager.paramiko.SSHClient") as MockClient:
-                MockClient.return_value = mock_paramiko_client
+            with patch("torrus.ssh_manager.paramiko.SSHClient") as mock_client:
+                mock_client.return_value = mock_paramiko_client
                 await manager.connect(
                     sid="sid-1",
                     session_id="sess1",
@@ -269,8 +271,8 @@ class TestSessionLifecycle:
         manager = SSHManager(mock_sio)
         manager.start_background_tasks()
         try:
-            with patch("torrus.ssh_manager.paramiko.SSHClient") as MockClient:
-                MockClient.return_value = mock_paramiko_client
+            with patch("torrus.ssh_manager.paramiko.SSHClient") as mock_client:
+                mock_client.return_value = mock_paramiko_client
                 await manager.connect(
                     sid="sid-1",
                     session_id="sess1",
@@ -410,8 +412,8 @@ class TestForceRedraw:
         manager = SSHManager(mock_sio)
         manager.start_background_tasks()
         try:
-            with patch("torrus.ssh_manager.paramiko.SSHClient") as MockClient:
-                MockClient.return_value = mock_paramiko_client
+            with patch("torrus.ssh_manager.paramiko.SSHClient") as mock_client:
+                mock_client.return_value = mock_paramiko_client
                 await manager.connect(
                     sid="sid-1",
                     session_id="sess1",
@@ -441,8 +443,8 @@ class TestReadLoopCleanup:
         manager = SSHManager(mock_sio)
         manager.start_background_tasks()
         try:
-            with patch("torrus.ssh_manager.paramiko.SSHClient") as MockClient:
-                MockClient.return_value = mock_paramiko_client
+            with patch("torrus.ssh_manager.paramiko.SSHClient") as mock_client:
+                mock_client.return_value = mock_paramiko_client
                 await manager.connect(
                     sid="sid-1",
                     session_id="sess1",
@@ -485,9 +487,8 @@ class TestReadLoopCleanup:
         manager._sessions[("sess1", "tab1")] = session
         sleep = AsyncMock(side_effect=[None, asyncio.CancelledError()])
 
-        with patch("torrus.ssh_manager.asyncio.sleep", sleep):
-            with pytest.raises(asyncio.CancelledError):
-                await manager._cleanup_loop()
+        with patch("torrus.ssh_manager.asyncio.sleep", sleep), pytest.raises(asyncio.CancelledError):
+            await manager._cleanup_loop()
 
         on_tab_disconnect.assert_awaited_once_with("sess1", "tab1")
         assert ("sess1", "tab1") not in manager._sessions
@@ -589,3 +590,39 @@ class TestLifecyclePriority:
             assert bytes(sent) == payload
         finally:
             await manager.stop_background_tasks()
+
+def test_strict_policy_refuses_an_unknown_host_key(monkeypatch):
+    """The default records a new key; `strict` refuses it outright."""
+    import paramiko
+
+    from torrus.ssh_manager import HostKeyPolicy
+
+    key = paramiko.RSAKey.generate(1024)
+    monkeypatch.setenv("TORRUS_SSH_HOST_KEY_POLICY", "strict")
+
+    with pytest.raises(paramiko.SSHException) as excinfo:
+        HostKeyPolicy().missing_host_key(MagicMock(), "example.com", key)
+
+    message = str(excinfo.value)
+    assert "Unknown host key" in message
+    assert key.fingerprint in message
+
+
+def test_accept_new_records_the_key_in_the_managed_store(monkeypatch, tmp_path):
+    import paramiko
+
+    from torrus.ssh_manager import HostKeyPolicy
+
+    store = tmp_path / "known_hosts"
+    monkeypatch.setenv("TORRUS_SSH_HOST_KEY_POLICY", "accept-new")
+    monkeypatch.setenv("TORRUS_SSH_KNOWN_HOSTS", str(store))
+
+    key = paramiko.RSAKey.generate(1024)
+    client = MagicMock()
+    client.get_host_keys.return_value = paramiko.HostKeys()
+
+    HostKeyPolicy().missing_host_key(client, "example.com", key)
+
+    assert client.get_host_keys().get("example.com") is not None
+    assert "example.com" in store.read_text()
+    assert store.stat().st_mode & 0o777 == 0o600

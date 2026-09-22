@@ -1,0 +1,105 @@
+name: tests
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: backend (python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: ${{ matrix.python }}
+      # The ldap extra so the ldapgate-backed test actually runs.
+      - run: uv sync --extra test --extra ldap
+      - name: Lint
+        run: uv run ruff check src/ tests/
+      - name: Tests
+        run: uv run pytest -q
+
+  frontend:
+    name: frontend and bundle freshness
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+        working-directory: frontend
+      - name: Unit tests
+        run: npm run test
+        working-directory: frontend
+      - name: Type-check and build
+        run: npm run build
+        working-directory: frontend
+      # The bundle is committed and shipped in the wheel, so building from source
+      # must reproduce exactly what is in the tree.
+      - name: The committed bundle matches frontend/src
+        run: |
+          if ! git diff --quiet -- src/torrus/static; then
+            echo "::error::src/torrus/static is stale — run 'make build' and commit the result"
+            git --no-pager diff --stat -- src/torrus/static
+            exit 1
+          fi
+
+  packaging:
+    name: wheel installs and serves
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv build
+      - name: Install the wheel into a clean environment
+        run: |
+          uv venv /tmp/smoke
+          VIRTUAL_ENV=/tmp/smoke uv pip install dist/*.whl
+      - name: The installed package imports and ships its assets
+        run: |
+          /tmp/smoke/bin/python - <<'PY'
+          from importlib.resources import files
+          from pathlib import Path
+
+          import torrus.server  # noqa: F401  (imports the whole ASGI app)
+
+          static = Path(str(files("torrus").joinpath("static")))
+          assert (static / "index.html").is_file(), "index.html missing from the wheel"
+          assert (static / "manifest.webmanifest").is_file(), "manifest missing"
+          assert (static / "assets").is_dir(), "assets missing"
+          print("wheel smoke ok:", static)
+          PY
+      - name: The CLI answers
+        run: /tmp/smoke/bin/torrus --help
+
+  tag-matches-version:
+    name: tag matches pyproject version
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check the tag against pyproject.toml
+        run: |
+          python - <<'PY'
+          import os, re, tomllib
+          from pathlib import Path
+
+          version = tomllib.loads(Path("pyproject.toml").read_text())["project"]["version"]
+          tag = os.environ["GITHUB_REF_NAME"].lstrip("v")
+          if tag != version:
+              raise SystemExit(f"tag {tag!r} does not match pyproject version {version!r}")
+          print("tag matches version:", version)
+          PY

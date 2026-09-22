@@ -151,11 +151,14 @@ def init_db() -> None:
         ):
             try:
                 db.execute(f"ALTER TABLE terminal_input_events ADD COLUMN {column}")
-            except sqlite3.OperationalError:
-                pass
+            except sqlite3.OperationalError as exc:
+                # Only "already added" is expected here; anything else (a locked
+                # or corrupt database) must not be swallowed as a migration.
+                if "duplicate column name" not in str(exc).lower():
+                    raise
 
 
-async def record_terminal_input(
+def record_terminal_input(
     *,
     ldap_username: str,
     session_id: str,
@@ -165,7 +168,10 @@ async def record_terminal_input(
     ssh_port: int | None = None,
     ssh_username: str | None = None,
 ) -> None:
-    """Store one Socket.IO input payload exactly as bytes received by the SSH layer."""
+    """Store one Socket.IO input payload exactly as bytes received by the SSH layer.
+
+    Synchronous: SQLite blocks, so callers hand this to a worker thread.
+    """
     raw = (
         input_data.encode("utf-8", errors="replace")
         if isinstance(input_data, str)
@@ -191,7 +197,7 @@ async def record_terminal_input(
         )
 
 
-async def record_command_event(
+def record_command_event(
     *,
     ldap_username: str,
     session_id: str,
@@ -226,7 +232,7 @@ async def record_command_event(
         )
 
 
-async def record_sensitive_event(
+def record_sensitive_event(
     *,
     ldap_username: str,
     session_id: str,
@@ -256,7 +262,7 @@ async def record_sensitive_event(
         )
 
 
-async def record_sftp_event(
+def record_sftp_event(
     *,
     ldap_username: str,
     session_id: str,
@@ -492,8 +498,8 @@ def get_admin_action(action_id: str) -> dict | None:
         )
 
 
-def count_terminal_input_events(older_than_days: int) -> int:
-    """Count terminal rows eligible for retention purge."""
+def count_audit_events_older_than(older_than_days: int) -> int:
+    """Count rows in both audit tables that are eligible for retention purge."""
     days = max(0, int(older_than_days))
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
     with _connect() as db:
@@ -508,7 +514,7 @@ def count_terminal_input_events(older_than_days: int) -> int:
         )
 
 
-def purge_terminal_input_events(older_than_days: int) -> int:
+def purge_audit_events_older_than(older_than_days: int) -> int:
     cutoff = (datetime.now(timezone.utc) - timedelta(days=older_than_days)).isoformat()
     with _connect() as db:
         total = 0

@@ -1,8 +1,9 @@
 """Tests for torrus.server Socket.IO event handlers."""
 
-import pytest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 
 def test_dev_socket_origins_allow_local_torrus_server():
@@ -24,7 +25,9 @@ class TestServerConfig:
 
         monkeypatch.setenv("TORRUS_LDAP_CONFIG", "/tmp/ldapgate.yaml")
         monkeypatch.setattr(server_module, "_ADMIN_USERS", {"alice"})
-        monkeypatch.setattr(server_module, "_http_owner", lambda _request: owner)
+        monkeypatch.setattr(
+            server_module, "_http_owner", AsyncMock(return_value=owner)
+        )
 
         config = await server_module.api_config(MagicMock())
 
@@ -36,7 +39,7 @@ class TestServerConfig:
         import torrus.server as server_module
 
         request = MagicMock()
-        request.query_params.get.side_effect = lambda name, default=None: (
+        request.query_params.get.side_effect = lambda name, _default=None: (
             "100" if name == "limit" else None
         )
         monkeypatch.setattr(
@@ -183,27 +186,27 @@ class TestValidIdChecks:
         from torrus.server import on_terminal_resize, ssh_manager
 
         sio_mock = MagicMock()
-        with patch("torrus.server.sio", sio_mock):
-            with patch.object(ssh_manager, "handle_resize", AsyncMock()) as mock_resize:
-                await on_terminal_resize(
-                    "sid-1",
-                    {"session_id": "../etc", "tab_id": "tab1", "cols": 80, "rows": 24},
-                )
-                mock_resize.assert_not_called()
+        with patch("torrus.server.sio", sio_mock), patch.object(
+            ssh_manager, "handle_resize", AsyncMock()
+        ) as mock_resize:
+            await on_terminal_resize(
+                "sid-1",
+                {"session_id": "../etc", "tab_id": "tab1", "cols": 80, "rows": 24},
+            )
+            mock_resize.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_ssh_disconnect_rejects_invalid_ids(self):
         from torrus.server import on_ssh_disconnect, ssh_manager
 
         sio_mock = MagicMock()
-        with patch("torrus.server.sio", sio_mock):
-            with patch.object(
-                ssh_manager, "disconnect_session", AsyncMock()
-            ) as mock_disconnect:
-                await on_ssh_disconnect(
-                    "sid-1", {"session_id": "sess1", "tab_id": "tab id!"}
-                )
-                mock_disconnect.assert_not_called()
+        with patch("torrus.server.sio", sio_mock), patch.object(
+            ssh_manager, "disconnect_session", AsyncMock()
+        ) as mock_disconnect:
+            await on_ssh_disconnect(
+                "sid-1", {"session_id": "sess1", "tab_id": "tab id!"}
+            )
+            mock_disconnect.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_ssh_disconnect_cleans_dependent_sftp_sessions_when_unknown(self):
@@ -211,16 +214,14 @@ class TestValidIdChecks:
         from torrus.server import on_ssh_disconnect, ssh_manager
 
         sio_mock = MagicMock()
-        with patch("torrus.server.sio", sio_mock):
-            with patch.object(
-                ssh_manager, "disconnect_session", AsyncMock(return_value="unknown")
-            ) as mock_disconnect:
-                with patch.object(
-                    server_module.sftp_manager, "on_ssh_tab_disconnect", AsyncMock()
-                ) as mock_sftp_cleanup:
-                    await on_ssh_disconnect(
-                        "sid-1", {"session_id": "sess1", "tab_id": "terminal-tab"}
-                    )
+        with patch("torrus.server.sio", sio_mock), patch.object(
+            ssh_manager, "disconnect_session", AsyncMock(return_value="unknown")
+        ) as mock_disconnect, patch.object(
+            server_module.sftp_manager, "on_ssh_tab_disconnect", AsyncMock()
+        ) as mock_sftp_cleanup:
+            await on_ssh_disconnect(
+                "sid-1", {"session_id": "sess1", "tab_id": "terminal-tab"}
+            )
 
         mock_disconnect.assert_awaited_once_with(
             "sess1", "terminal-tab", owner_ldap_username=None
@@ -243,12 +244,11 @@ class TestValidIdChecks:
         from torrus.server import on_session_register, ssh_manager
 
         sio_mock = MagicMock()
-        with patch("torrus.server.sio", sio_mock):
-            with patch.object(
-                ssh_manager, "restore_session", AsyncMock()
-            ) as mock_restore:
-                await on_session_register("sid-1", {"session_id": "", "tab_id": "tab1"})
-                mock_restore.assert_not_called()
+        with patch("torrus.server.sio", sio_mock), patch.object(
+            ssh_manager, "restore_session", AsyncMock()
+        ) as mock_restore:
+            await on_session_register("sid-1", {"session_id": "", "tab_id": "tab1"})
+            mock_restore.assert_not_called()
 
 
 class TestLdapAuthGating:
@@ -280,7 +280,7 @@ class TestLdapAuthGating:
                     "tab_id": "tab1",
                 },
             )
-            sio_mock.emit.assert_awaited_once()
+            sio_mock.emit.assert_called_once()
             args = sio_mock.emit.call_args[0][0]
             assert args == "ssh:error"
             assert sio_mock.emit.call_args[0][1]["code"] == "auth_required"
@@ -303,6 +303,7 @@ class TestLdapAuthGating:
         server_module._ldap_session_manager.verify_session.return_value = "alice"
         server_module.ssh_manager = MagicMock()
         server_module.ssh_manager.sid_session_count.return_value = 0
+        server_module.ssh_manager.session_count.return_value = 0
         server_module.ssh_manager.connect = AsyncMock()
         server_module.ssh_manager.unmap_sid = AsyncMock()
 
@@ -321,13 +322,12 @@ class TestLdapAuthGating:
             # Should NOT emit auth_required error
             for call in sio_mock.emit.call_args_list:
                 assert call[0][1].get("code") != "auth_required"
-            server_module.ssh_manager.connect.assert_awaited_once()
+            server_module.ssh_manager.connect.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_expired_socket_auth_detaches_without_destroying_ssh_session(self):
-        from torrus.server import on_ssh_input
-
         import torrus.server as server_module
+        from torrus.server import on_ssh_input
 
         sio_mock = MagicMock()
         sio_mock.emit = AsyncMock()
@@ -360,9 +360,8 @@ class TestLdapAuthGating:
 
     @pytest.mark.asyncio
     async def test_reauthenticated_socket_can_restore_existing_session(self):
-        from torrus.server import on_session_register
-
         import torrus.server as server_module
+        from torrus.server import on_session_register
 
         sio_mock = MagicMock()
         sio_mock.emit = AsyncMock()
@@ -392,9 +391,8 @@ class TestLdapAuthGating:
 
     @pytest.mark.asyncio
     async def test_on_connect_records_auth_sid_when_cookie_present(self):
-        from torrus.server import on_connect
-
         import torrus.server as server_module
+        from torrus.server import on_connect
 
         server_module._ldap_enabled = True
         server_module._authenticated_sids.clear()
@@ -410,9 +408,8 @@ class TestLdapAuthGating:
 
     @pytest.mark.asyncio
     async def test_on_connect_rejects_pending_disabled_user_cookie(self):
-        from torrus.server import on_connect
-
         import torrus.server as server_module
+        from torrus.server import on_connect
 
         server_module._ldap_enabled = True
         server_module._authenticated_sids.clear()
@@ -430,9 +427,8 @@ class TestLdapAuthGating:
 
     @pytest.mark.asyncio
     async def test_on_connect_uses_asgi_scope_client_ip(self):
-        from torrus.server import on_connect
-
         import torrus.server as server_module
+        from torrus.server import on_connect
 
         server_module._ldap_enabled = True
         server_module._authenticated_sids.clear()
@@ -457,11 +453,12 @@ class TestLdapAuthGating:
         )
         assert "sid-asgi" in server_module._authenticated_sids
 
-    def test_verify_ldap_socket_session_accepts_alternate_ip_binding(self):
-        from torrus.server import _verify_ldap_socket_session
-
+    @pytest.mark.asyncio
+    async def test_verify_ldap_socket_session_accepts_alternate_ip_binding(self):
         import types
+
         import torrus.server as server_module
+        from torrus.server import _verify_ldap_socket_session
 
         manager = MagicMock()
         manager.verify_session.side_effect = (
@@ -483,7 +480,7 @@ class TestLdapAuthGating:
         )
         server_module._ldap_session_manager = manager
 
-        assert _verify_ldap_socket_session(
+        assert await _verify_ldap_socket_session(
             {
                 "REMOTE_ADDR": "127.0.0.1",
                 "HTTP_COOKIE": "torrus_session=signed-cookie",
@@ -494,9 +491,8 @@ class TestLdapAuthGating:
 
     @pytest.mark.asyncio
     async def test_on_connect_uses_configured_cookie_name(self):
-        from torrus.server import on_connect
-
         import torrus.server as server_module
+        from torrus.server import on_connect
 
         server_module._ldap_enabled = True
         server_module._authenticated_sids.clear()
@@ -525,9 +521,8 @@ class TestLdapAuthGating:
 
     @pytest.mark.asyncio
     async def test_on_connect_skips_auth_without_cookie(self):
-        from torrus.server import on_connect
-
         import torrus.server as server_module
+        from torrus.server import on_connect
 
         server_module._ldap_enabled = True
         server_module._authenticated_sids.clear()
@@ -540,9 +535,8 @@ class TestLdapAuthGating:
 
     @pytest.mark.asyncio
     async def test_ssh_connect_lazily_authenticates_from_socket_environ(self):
-        from torrus.server import on_ssh_connect
-
         import torrus.server as server_module
+        from torrus.server import on_ssh_connect
 
         server_module._ldap_enabled = True
         server_module._authenticated_sids.clear()
@@ -552,6 +546,7 @@ class TestLdapAuthGating:
         original_manager = server_module.ssh_manager
         manager_mock = MagicMock()
         manager_mock.sid_session_count.return_value = 0
+        manager_mock.session_count.return_value = 0
         manager_mock.connect = AsyncMock()
         server_module.ssh_manager = manager_mock
 
@@ -582,14 +577,13 @@ class TestLdapAuthGating:
 
         for call in sio_mock.emit.call_args_list:
             assert call[0][1].get("code") != "auth_required"
-        manager_mock.connect.assert_awaited_once()
+        manager_mock.connect.assert_called_once()
         assert "sid-lazy" in server_module._authenticated_sids
 
     @pytest.mark.asyncio
     async def test_ssh_input_extracts_command_on_enter_and_records_it(self):
-        from torrus.server import on_ssh_input
-
         import torrus.server as server_module
+        from torrus.server import on_ssh_input
 
         server_module._authenticated_sids.add("auth-sid")
         server_module._authenticated_users["auth-sid"] = "alice"
@@ -609,7 +603,7 @@ class TestLdapAuthGating:
                 AsyncMock(return_value=("db.example", 22, "root")),
             ),
             patch(
-                "torrus.server.audit_store.record_command_event", AsyncMock()
+                "torrus.server.audit_store.record_command_event", MagicMock()
             ) as record,
         ):
             result = await on_ssh_input(
@@ -618,7 +612,7 @@ class TestLdapAuthGating:
             )
 
         assert result == {"ok": True}
-        record.assert_awaited_once_with(
+        record.assert_called_once_with(
             ldap_username="alice",
             session_id="sess1",
             tab_id="tab1",
@@ -630,9 +624,8 @@ class TestLdapAuthGating:
 
     @pytest.mark.asyncio
     async def test_ssh_input_records_all_commands_and_spans_large_chunks(self):
-        from torrus.server import on_ssh_input
-
         import torrus.server as server_module
+        from torrus.server import on_ssh_input
 
         server_module._authenticated_sids.add("auth-sid")
         server_module._authenticated_users["auth-sid"] = "alice"
@@ -654,7 +647,7 @@ class TestLdapAuthGating:
                 AsyncMock(return_value=("db.example", 22, "root")),
             ),
             patch(
-                "torrus.server.audit_store.record_command_event", AsyncMock()
+                "torrus.server.audit_store.record_command_event", MagicMock()
             ) as record,
         ):
             result = await on_ssh_input(
@@ -666,7 +659,7 @@ class TestLdapAuthGating:
                 },
             )
             assert result == {"ok": True}
-            assert [call.kwargs["command"] for call in record.await_args_list] == [
+            assert [call.kwargs["command"] for call in record.call_args_list] == [
                 "one",
                 "two",
                 "three",
@@ -679,20 +672,19 @@ class TestLdapAuthGating:
                 "auth-sid",
                 {"session_id": "sess1", "tab_id": "tab1", "data": large_command},
             )
-            assert record.await_count == 6
+            assert record.call_count == 6
             await on_ssh_input(
                 "auth-sid",
                 {"session_id": "sess1", "tab_id": "tab1", "data": "\r"},
             )
 
-        assert record.await_count == 7
-        assert record.await_args_list[-1].kwargs["command"] == large_command
+        assert record.call_count == 7
+        assert record.call_args_list[-1].kwargs["command"] == large_command
 
     @pytest.mark.asyncio
     async def test_sensitive_input_records_only_a_redaction_marker(self):
-        from torrus.server import on_ssh_input
-
         import torrus.server as server_module
+        from torrus.server import on_ssh_input
 
         server_module._authenticated_sids.add("auth-sid")
         server_module._authenticated_users["auth-sid"] = "alice"
@@ -712,10 +704,10 @@ class TestLdapAuthGating:
                 AsyncMock(return_value=("db.example", 22, "root")),
             ),
             patch(
-                "torrus.server.audit_store.record_sensitive_event", AsyncMock()
+                "torrus.server.audit_store.record_sensitive_event", MagicMock()
             ) as record_sensitive,
             patch(
-                "torrus.server.audit_store.record_command_event", AsyncMock()
+                "torrus.server.audit_store.record_command_event", MagicMock()
             ) as record_command,
         ):
             result = await on_ssh_input(
@@ -736,8 +728,8 @@ class TestLdapAuthGating:
                 },
             )
         assert result == {"ok": True}
-        assert record_sensitive.await_count == 2
-        record_sensitive.assert_awaited_with(
+        assert record_sensitive.call_count == 2
+        record_sensitive.assert_called_with(
             ldap_username="alice",
             session_id="sess1",
             tab_id="tab1",
@@ -745,7 +737,7 @@ class TestLdapAuthGating:
             ssh_port=22,
             ssh_username="root",
         )
-        record_command.assert_not_awaited()
+        record_command.assert_not_called()
 
 
 class TestSessionRateLimit:
@@ -761,6 +753,7 @@ class TestSessionRateLimit:
         import torrus.server as server_module
 
         server_module.ssh_manager = MagicMock()
+        server_module.ssh_manager.session_count.return_value = 0
         server_module.ssh_manager.sid_session_count.return_value = (
             server_module._MAX_SESSIONS_PER_SID
         )
@@ -777,137 +770,178 @@ class TestSessionRateLimit:
                     "tab_id": "tab1",
                 },
             )
-            sio_mock.emit.assert_awaited_once()
+            sio_mock.emit.assert_called_once()
             assert sio_mock.emit.call_args[0][1]["code"] == "session_limit"
 
 
+class TestGlobalSessionCeiling:
+    """One live session occupies one worker of the shared pool, so the total is capped."""
+
+    @pytest.mark.asyncio
+    async def test_connect_is_refused_at_the_session_ceiling(self, monkeypatch):
+        import torrus.server as server_module
+
+        sio_mock = MagicMock()
+        sio_mock.emit = AsyncMock()
+        manager = MagicMock()
+        manager.sid_session_count.return_value = 0
+        manager.session_count.return_value = server_module._MAX_SSH_SESSIONS
+        manager.connect = AsyncMock()
+        monkeypatch.setattr(server_module, "ssh_manager", manager)
+        monkeypatch.setattr(server_module, "sio", sio_mock)
+
+        await server_module.on_ssh_connect(
+            "sid-full",
+            {
+                "host": "example.com",
+                "port": 22,
+                "username": "user",
+                "password": "pass",
+                "session_id": "sess1",
+                "tab_id": "tab1",
+            },
+        )
+
+        manager.connect.assert_not_called()
+        assert sio_mock.emit.call_args[0][1]["code"] == "capacity_reached"
+
+    @pytest.mark.asyncio
+    async def test_connect_proceeds_below_the_ceiling(self, monkeypatch):
+        import torrus.server as server_module
+
+        sio_mock = MagicMock()
+        sio_mock.emit = AsyncMock()
+        manager = MagicMock()
+        manager.sid_session_count.return_value = 0
+        manager.session_count.return_value = server_module._MAX_SSH_SESSIONS - 1
+        manager.connect = AsyncMock()
+        monkeypatch.setattr(server_module, "ssh_manager", manager)
+        monkeypatch.setattr(server_module, "sio", sio_mock)
+
+        await server_module.on_ssh_connect(
+            "sid-ok",
+            {
+                "host": "example.com",
+                "port": 22,
+                "username": "user",
+                "password": "pass",
+                "session_id": "sess1",
+                "tab_id": "tab1",
+            },
+        )
+
+        manager.connect.assert_called_once()
+
+
 class TestPrivateHostPolicy:
-    """Private/local SSH targets are allowed by default, with an operator opt-out."""
+    """Private, loopback and link-local targets are refused unless opted in."""
 
-    @pytest.mark.asyncio
-    async def test_private_host_allowed_without_ldap_by_default(self):
-        from torrus.server import on_ssh_connect
-
-        import torrus.server as server_module
-
-        server_module._ldap_enabled = False
-        server_module._ALLOW_PRIVATE_HOSTS_WITHOUT_LDAP = True
+    def _run_connect(self, server_module, monkeypatch, host: str):
         sio_mock = MagicMock()
         sio_mock.emit = AsyncMock()
-        original_manager = server_module.ssh_manager
         manager_mock = MagicMock()
         manager_mock.sid_session_count.return_value = 0
+        manager_mock.session_count.return_value = 0
         manager_mock.connect = AsyncMock()
-        server_module.ssh_manager = manager_mock
-
-        try:
-            with patch("torrus.server.sio", sio_mock):
-                await on_ssh_connect(
-                    "sid-public",
-                    {
-                        "host": "127.0.0.1",
-                        "port": 22,
-                        "username": "user",
-                        "password": "pass",
-                        "session_id": "sess1",
-                        "tab_id": "tab1",
-                    },
-                )
-        finally:
-            server_module.ssh_manager = original_manager
-
-        for call in sio_mock.emit.call_args_list:
-            assert call[0][1].get("code") != "private_host_blocked"
-        manager_mock.connect.assert_awaited_once()
+        monkeypatch.setattr(server_module, "ssh_manager", manager_mock)
+        monkeypatch.setattr(server_module, "sio", sio_mock)
+        return sio_mock, manager_mock, server_module.on_ssh_connect(
+            "sid-private",
+            {
+                "host": host,
+                "port": 22,
+                "username": "user",
+                "password": "pass",
+                "session_id": "sess1",
+                "tab_id": "tab1",
+            },
+        )
 
     @pytest.mark.asyncio
-    async def test_private_host_blocked_without_ldap_when_explicitly_disabled(self):
-        from torrus.server import on_ssh_connect
-
+    async def test_private_host_blocked_by_default(self, monkeypatch):
         import torrus.server as server_module
 
-        server_module._ldap_enabled = False
-        server_module._ALLOW_PRIVATE_HOSTS_WITHOUT_LDAP = False
-        sio_mock = MagicMock()
-        sio_mock.emit = AsyncMock()
-        original_manager = server_module.ssh_manager
-        manager_mock = MagicMock()
-        manager_mock.sid_session_count.return_value = 0
-        manager_mock.connect = AsyncMock()
-        server_module.ssh_manager = manager_mock
+        monkeypatch.setattr(server_module, "_ldap_enabled", False)
+        monkeypatch.setattr(server_module, "_ALLOW_PRIVATE_HOSTS", False)
+        sio_mock, manager_mock, coro = self._run_connect(
+            server_module, monkeypatch, "127.0.0.1"
+        )
+        await coro
 
-        try:
-            with patch("torrus.server.sio", sio_mock):
-                await on_ssh_connect(
-                    "sid-public",
-                    {
-                        "host": "127.0.0.1",
-                        "port": 22,
-                        "username": "user",
-                        "password": "pass",
-                        "session_id": "sess1",
-                        "tab_id": "tab1",
-                    },
-                )
-        finally:
-            server_module.ssh_manager = original_manager
-            server_module._ALLOW_PRIVATE_HOSTS_WITHOUT_LDAP = True
-
-        sio_mock.emit.assert_awaited_once()
+        manager_mock.connect.assert_not_called()
         assert sio_mock.emit.call_args[0][1]["code"] == "private_host_blocked"
-        manager_mock.connect.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_private_host_allowed_with_ldap_authenticated_sid(self):
-        from torrus.server import on_ssh_connect
-
+    async def test_loopback_name_is_blocked_by_default(self, monkeypatch):
+        """A name that resolves to loopback is the same pivot as the literal."""
         import torrus.server as server_module
 
-        server_module._ldap_enabled = True
-        server_module._ALLOW_PRIVATE_HOSTS_WITHOUT_LDAP = True
-        server_module._authenticated_sids.add("auth-sid")
-        server_module._ldap_session_manager = MagicMock()
-        server_module._ldap_session_manager.verify_session.return_value = "alice"
-        sio_mock = MagicMock()
-        sio_mock.emit = AsyncMock()
-        sio_mock.get_environ.return_value = {
-            "REMOTE_ADDR": "1.2.3.4",
-            "HTTP_COOKIE": "ldapgate_session=abc",
-        }
-        original_manager = server_module.ssh_manager
-        manager_mock = MagicMock()
-        manager_mock.sid_session_count.return_value = 0
-        manager_mock.connect = AsyncMock()
-        server_module.ssh_manager = manager_mock
+        monkeypatch.setattr(server_module, "_ldap_enabled", False)
+        monkeypatch.setattr(server_module, "_ALLOW_PRIVATE_HOSTS", False)
+        sio_mock, manager_mock, coro = self._run_connect(
+            server_module, monkeypatch, "localhost"
+        )
+        await coro
 
-        try:
-            with patch("torrus.server.sio", sio_mock):
-                await on_ssh_connect(
-                    "auth-sid",
-                    {
-                        "host": "127.0.0.1",
-                        "port": 22,
-                        "username": "user",
-                        "password": "pass",
-                        "session_id": "sess1",
-                        "tab_id": "tab1",
-                    },
-                )
-        finally:
-            server_module.ssh_manager = original_manager
+        manager_mock.connect.assert_not_called()
+        assert sio_mock.emit.call_args[0][1]["code"] == "private_host_blocked"
+
+    @pytest.mark.asyncio
+    async def test_shared_address_space_is_blocked_by_default(self, monkeypatch):
+        """RFC 6598 carrier NAT and overlays (Tailscale) are not public either."""
+        import torrus.server as server_module
+
+        monkeypatch.setattr(server_module, "_ldap_enabled", False)
+        monkeypatch.setattr(server_module, "_ALLOW_PRIVATE_HOSTS", False)
+        sio_mock, manager_mock, coro = self._run_connect(
+            server_module, monkeypatch, "100.64.10.5"
+        )
+        await coro
+
+        manager_mock.connect.assert_not_called()
+        assert sio_mock.emit.call_args[0][1]["code"] == "private_host_blocked"
+
+    @pytest.mark.asyncio
+    async def test_public_host_is_allowed_by_default(self, monkeypatch):
+        """The guard must not cost the ordinary case: a routable target."""
+        import torrus.server as server_module
+
+        monkeypatch.setattr(server_module, "_ldap_enabled", False)
+        monkeypatch.setattr(server_module, "_ALLOW_PRIVATE_HOSTS", False)
+        sio_mock, manager_mock, coro = self._run_connect(
+            server_module, monkeypatch, "93.184.216.34"
+        )
+        await coro
 
         for call in sio_mock.emit.call_args_list:
             assert call[0][1].get("code") != "private_host_blocked"
-        manager_mock.connect.assert_awaited_once()
+        manager_mock.connect.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_private_host_allowed_when_the_operator_opts_in(self, monkeypatch):
+        import torrus.server as server_module
+
+        monkeypatch.setattr(server_module, "_ldap_enabled", False)
+        monkeypatch.setattr(server_module, "_ALLOW_PRIVATE_HOSTS", True)
+        sio_mock, manager_mock, coro = self._run_connect(
+            server_module, monkeypatch, "127.0.0.1"
+        )
+        await coro
+
+        for call in sio_mock.emit.call_args_list:
+            assert call[0][1].get("code") != "private_host_blocked"
+        manager_mock.connect.assert_called_once()
 
 
 class TestIpLogging:
     """on_connect should log the real client IP, including reverse-proxy headers."""
 
     @pytest.mark.asyncio
-    async def test_uses_x_forwarded_for_when_present(self):
+    async def test_ignores_x_forwarded_for_from_an_untrusted_peer(self):
+        """The header is client-controlled here, so it must not key the throttle."""
         from torrus import server as server_module
 
+        server_module._ldap_enabled = False
         with patch.object(server_module.logger, "info") as mock_info:
             await server_module.on_connect(
                 "sid-1",
@@ -918,6 +952,30 @@ class TestIpLogging:
             )
             mock_info.assert_called_once()
             # logger.info is called as logger.info(fmt, sid, remote)
+            remote_arg = mock_info.call_args[0][2]
+            assert remote_arg == "10.0.0.1"
+
+    async def test_honours_x_forwarded_for_from_a_trusted_proxy(self):
+        import types
+
+        import pytest
+
+        from torrus import server as server_module
+
+        # The trusted-proxy check itself lives in ldapgate.
+        pytest.importorskip("ldapgate._auth_utils")
+        server_module._ldap_enabled = False
+        server_module._ldap_config = types.SimpleNamespace(
+            proxy=types.SimpleNamespace(trusted_proxies=["10.0.0.0/8"])
+        )
+        with patch.object(server_module.logger, "info") as mock_info:
+            await server_module.on_connect(
+                "sid-2",
+                {
+                    "REMOTE_ADDR": "10.0.0.1",
+                    "HTTP_X_FORWARDED_FOR": "203.0.113.42, 10.0.0.1",
+                },
+            )
             remote_arg = mock_info.call_args[0][2]
             assert remote_arg == "203.0.113.42"
 
@@ -932,15 +990,31 @@ class TestIpLogging:
             assert remote_arg == "192.168.1.5"
 
     @pytest.mark.asyncio
-    async def test_rate_limit_survives_socket_reconnect_for_same_ip(self):
+    async def test_rate_limit_is_per_socket_so_a_proxied_address_is_not_shared(self):
+        """Behind a reverse proxy every user arrives from one address."""
         from torrus import server as server_module
 
-        await server_module.on_connect("sid-ip-1", {"REMOTE_ADDR": "192.0.2.10"})
-        for _ in range(server_module._RATE_LIMIT_MAX):
-            assert await server_module._check_rate_limit("sid-ip-1", "tab") is True
-        await server_module.on_disconnect("sid-ip-1")
-        await server_module.on_connect("sid-ip-2", {"REMOTE_ADDR": "192.0.2.10"})
-        assert await server_module._check_rate_limit("sid-ip-2", "tab") is False
+        await server_module.on_connect("sid-a", {"REMOTE_ADDR": "192.0.2.10"})
+        await server_module.on_connect("sid-b", {"REMOTE_ADDR": "192.0.2.10"})
+        for _ in range(server_module._RATE_LIMIT_MAX_PER_SID):
+            assert await server_module._check_rate_limit("sid-a", "tab") is True
+        # A second user behind the same proxy still has their own budget.
+        assert await server_module._check_rate_limit("sid-b", "tab") is True
+        # The first user's own socket is capped.
+        assert await server_module._check_rate_limit("sid-a", "tab") is False
+
+    @pytest.mark.asyncio
+    async def test_rate_limit_caps_attempts_per_source_address(self):
+        """Reconnecting sockets cannot raise a single address's ceiling."""
+        from torrus import server as server_module
+
+        attempts: list[bool] = []
+        for index in range(server_module._RATE_LIMIT_MAX_PER_IP + 1):
+            sid = f"sid-{index // 6}"
+            await server_module.on_connect(sid, {"REMOTE_ADDR": "192.0.2.11"})
+            attempts.append(await server_module._check_rate_limit(sid, "tab"))
+        assert attempts[: server_module._RATE_LIMIT_MAX_PER_IP] == [True] * server_module._RATE_LIMIT_MAX_PER_IP
+        assert attempts[-1] is False
 
 
 def test_live_ldap_allowlist_updates_loaded_authenticator_config(monkeypatch):

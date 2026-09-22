@@ -117,10 +117,18 @@ function clearPendingDispose(tabId: string) {
 }
 
 export default function TerminalPane({ tabId, isActive, focused, socket }: TerminalPaneProps) {
-  const { sessionId, tabs, setTabStatus, setTabConnection } = useTerminalStore()
-  const tab = tabs.find(t => t.id === tabId)
+  const sessionId = useTerminalStore(s => s.sessionId)
+  const setTabStatus = useTerminalStore(s => s.setTabStatus)
+  const setTabConnection = useTerminalStore(s => s.setTabConnection)
+  // Primitive key: the pane only re-renders when the set of connected terminals changes.
+  const connectedTerminalIds = useTerminalStore(s => s.tabs
+    .filter(t => t.type === 'terminal' && t.status === 'connected')
+    .map(t => t.id)
+    .join(' '))
+  const tab = useTerminalStore(s => s.tabs.find(t => t.id === tabId))
 
-  const settings = useSettingsStore()
+  const scrollbackLines = useSettingsStore(s => s.scrollbackLines)
+  const fontSize = useSettingsStore(s => s.fontSize)
   const broadcastEnabled = useBroadcastStore(s => s.enabled)
   const broadcastExcluded = useBroadcastStore(s => s.excludedTabIds)
 
@@ -168,9 +176,9 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
   const broadcastTargets = useMemo(() => {
     if (!broadcastEnabled) return new Set<string>()
     return new Set(
-      tabs.filter(t => t.type === 'terminal' && t.status === 'connected' && !broadcastExcluded.includes(t.id)).map(t => t.id)
+      connectedTerminalIds.split(' ').filter(id => id && !broadcastExcluded.includes(id))
     )
-  }, [tabs, broadcastEnabled, broadcastExcluded])
+  }, [connectedTerminalIds, broadcastEnabled, broadcastExcluded])
 
   useEffect(() => {
     broadcastTargetIdsRef.current = broadcastTargets
@@ -274,6 +282,13 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
     term.attachCustomKeyEventHandler((e) => {
       const mod = e.ctrlKey || e.metaKey
       const key = e.key.toLowerCase()
+      // F6 hands the keyboard back to the tab bar. xterm consumes Tab and
+      // Shift+Tab for terminal input, so without this the pane is a trap.
+      if (e.type === 'keydown' && e.key === 'F6') {
+        e.preventDefault()
+        document.getElementById(`torrus-tab-${tabId}`)?.focus()
+        return false
+      }
       const deletePreviousWord =
         e.type === 'keydown'
         && key === 'backspace'
@@ -335,7 +350,7 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
       if (mod && key === 'v') return false
       return true
     })
-  }, [emitInput, emitInterrupt])
+  }, [emitInput, emitInterrupt, tabId])
 
   // Create or reuse xterm.js terminal
   useEffect(() => {
@@ -592,7 +607,7 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
       if (event.key !== 'Escape') return
       // Don't hijack Esc if a dialog/menu is open and handling its own Esc.
       const target = event.target as HTMLElement | null
-      if (target && target.closest('[role="dialog"]')) return
+      if (target && target.closest('[role="dialog"], [role="alertdialog"]')) return
       event.preventDefault()
       event.stopPropagation()
       closeFind()
@@ -621,13 +636,13 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
     const term = termRef.current
     if (!term) return
 
-    term.options.scrollback = settings.scrollbackLines
-    term.options.fontSize = settings.fontSize
+    term.options.scrollback = scrollbackLines
+    term.options.fontSize = fontSize
 
     if (fitRef.current && isVisibleTerminalContainer(containerRef.current)) {
       fitAndEmitResize(term, fitRef.current)
     }
-  }, [settings.scrollbackLines, settings.fontSize, fitAndEmitResize])
+  }, [scrollbackLines, fontSize, fitAndEmitResize])
 
   // Suppress input while Socket.IO is disconnected (prevents xterm escape
   // sequences from reaching the shell during reconnect windows)
@@ -821,7 +836,7 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
             key="connecting"
             {...fade}
             transition={surfaceTransition}
-            className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-surface-950/80 backdrop-blur-sm"
+            className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-surface-950/80"
             role="status"
             aria-live="polite"
           >
@@ -867,9 +882,9 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
             }}
             placeholder="Find in terminal"
             aria-label="Find in terminal"
-            className="h-7 w-44 rounded bg-surface-950 px-2 text-xs text-slate-200 outline-none placeholder:text-slate-500 focus:ring-1 focus:ring-brand-500"
+            className="h-7 w-44 rounded bg-surface-950 px-2 text-xs text-slate-200 outline-none placeholder:text-slate-400 focus:ring-1 focus:ring-brand-500"
           />
-          {findQuery && findResult === false && <span className="px-1 text-[10px] text-amber-400">No match</span>}
+          {findQuery && findResult === false && <span className="px-1 text-3xs text-amber-400">No match</span>}
           <button type="button" onClick={() => search('previous')} title="Previous match (Shift+Enter)" aria-label="Previous match" className="rounded p-1 text-slate-400 hover:bg-surface-800 hover:text-slate-200">
             <ChevronUp className="h-3.5 w-3.5" />
           </button>

@@ -1,9 +1,25 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import TabBar from './TabBar'
+import TabBar, { type TabBarActions } from './TabBar'
 import { useBroadcastStore } from '@/store/broadcastStore'
 import { useServerConfigStore } from '@/store/serverConfigStore'
 import { useTerminalStore } from '@/store/terminalStore'
+
+const noopActions: TabBarActions = {
+  addTab: () => {},
+  closeTab: () => {},
+  cloneTab: () => {},
+  openSftpTab: () => {},
+  duplicateTab: () => {},
+  closeAllTabs: () => {},
+  openSettings: () => {},
+  openAdmin: () => {},
+  openSplitPicker: () => {},
+  openBroadcastPicker: () => {},
+  exitSplit: () => {},
+  toggleSidebar: () => {},
+  openCommandPalette: () => {},
+}
 
 describe('TabBar', () => {
 
@@ -31,17 +47,7 @@ describe('TabBar', () => {
 
     render(
       <TabBar
-        onAddTab={() => {}}
-        onCloseTab={() => {}}
-        onCloneTab={() => {}}
-        onOpenSftpTab={() => {}}
-        onDuplicateTab={() => {}}
-        onCloseAllTabs={() => {}}
-        onOpenSettings={() => {}}
-        onOpenSplitPicker={() => {}}
-        onOpenBroadcastPicker={() => {}}
-        onExitSplit={() => {}}
-        onSetActiveTab={() => {}}
+        actions={noopActions}
         inSplitMode={false}
       />,
     )
@@ -50,6 +56,37 @@ describe('TabBar', () => {
     expect(tab.parentElement).toHaveClass('select-none')
     expect(fireEvent.mouseDown(tab, { button: 2 })).toBe(false)
   })
+  it('reorders the focused tab from the keyboard, without dragging', () => {
+    useTerminalStore.setState({
+      tabs: [
+        { id: 'tab-1', type: 'terminal', host: null, port: null, username: null, label: 'One', status: 'disconnected', sessionKey: 'session-1:tab-1' },
+        { id: 'tab-2', type: 'terminal', host: null, port: null, username: null, label: 'Two', status: 'disconnected', sessionKey: 'session-1:tab-2' },
+        { id: 'tab-3', type: 'terminal', host: null, port: null, username: null, label: 'Three', status: 'disconnected', sessionKey: 'session-1:tab-3' },
+      ],
+      activeTabId: 'tab-1',
+    })
+
+    render(
+      <TabBar
+        actions={noopActions}
+        inSplitMode={false}
+      />,
+    )
+
+    const tablist = screen.getByRole('tablist')
+    const tabIds = () => useTerminalStore.getState().tabs.map(tab => tab.id)
+
+    screen.getByRole('tab', { name: /one/i }).focus()
+    fireEvent.keyDown(tablist, { key: 'ArrowRight', altKey: true })
+    expect(tabIds()).toEqual(['tab-2', 'tab-1', 'tab-3'])
+
+    // Moving left again returns it, and the ends do not wrap.
+    fireEvent.keyDown(tablist, { key: 'ArrowLeft', altKey: true })
+    expect(tabIds()).toEqual(['tab-1', 'tab-2', 'tab-3'])
+    fireEvent.keyDown(tablist, { key: 'ArrowLeft', altKey: true })
+    expect(tabIds()).toEqual(['tab-1', 'tab-2', 'tab-3'])
+  })
+
   it('scrolls a clipped active tab, including its close button, fully into view', () => {
     const frame = vi.spyOn(window, 'requestAnimationFrame').mockImplementation(callback => {
       callback(0)
@@ -65,17 +102,7 @@ describe('TabBar', () => {
 
     render(
       <TabBar
-        onAddTab={() => {}}
-        onCloseTab={() => {}}
-        onCloneTab={() => {}}
-        onOpenSftpTab={() => {}}
-        onDuplicateTab={() => {}}
-        onCloseAllTabs={() => {}}
-        onOpenSettings={() => {}}
-        onOpenSplitPicker={() => {}}
-        onOpenBroadcastPicker={() => {}}
-        onExitSplit={() => {}}
-        onSetActiveTab={id => useTerminalStore.getState().setActiveTab(id)}
+        actions={noopActions}
         inSplitMode={false}
       />,
     )
@@ -94,18 +121,7 @@ describe('TabBar', () => {
   })
   it('shows the admin console button only to admin users', () => {
     const props = {
-      onAddTab: () => {},
-      onCloseTab: () => {},
-      onCloneTab: () => {},
-      onOpenSftpTab: () => {},
-      onDuplicateTab: () => {},
-      onCloseAllTabs: () => {},
-      onOpenSettings: () => {},
-      onOpenAdmin: () => {},
-      onOpenSplitPicker: () => {},
-      onOpenBroadcastPicker: () => {},
-      onExitSplit: () => {},
-      onSetActiveTab: () => {},
+      actions: noopActions,
       inSplitMode: false,
     }
 
@@ -121,18 +137,7 @@ describe('TabBar', () => {
   it('shows the command palette button only in compact layout', () => {
     const onOpenCommandPalette = vi.fn()
     const props = {
-      onAddTab: () => {},
-      onCloseTab: () => {},
-      onCloneTab: () => {},
-      onOpenSftpTab: () => {},
-      onDuplicateTab: () => {},
-      onCloseAllTabs: () => {},
-      onOpenSettings: () => {},
-      onOpenSplitPicker: () => {},
-      onOpenBroadcastPicker: () => {},
-      onExitSplit: () => {},
-      onSetActiveTab: () => {},
-      onOpenCommandPalette,
+      actions: { ...noopActions, openCommandPalette: onOpenCommandPalette },
       inSplitMode: false,
     }
 
@@ -157,17 +162,7 @@ describe('TabBar', () => {
 
     render(
       <TabBar
-        onAddTab={() => {}}
-        onCloseTab={() => {}}
-        onCloneTab={() => {}}
-        onOpenSftpTab={() => {}}
-        onDuplicateTab={() => {}}
-        onCloseAllTabs={() => {}}
-        onOpenSettings={() => {}}
-        onOpenSplitPicker={() => {}}
-        onOpenBroadcastPicker={() => {}}
-        onExitSplit={() => {}}
-        onSetActiveTab={() => {}}
+        actions={noopActions}
         inSplitMode={false}
       />,
     )

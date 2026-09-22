@@ -4,17 +4,20 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import itertools
 import logging
-import shlex
-import secrets
-import socket
-import time
 import os
+import secrets
+import shlex
+import time
 from dataclasses import dataclass, field
-from collections.abc import Awaitable, Callable
-from typing import Optional
+from pathlib import Path
+from typing import TYPE_CHECKING
 
 import paramiko
+
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
 
 logger = logging.getLogger("torrus.ssh")
 
@@ -22,7 +25,10 @@ OUTPUT_BUFFER_MAX = 10 * 1024  # 10 KB replay buffer per session
 IDLE_TIMEOUT = 4 * 3600  # 4 hours
 KEEPALIVE_INTERVAL = 30  # seconds
 CLEANUP_INTERVAL = 300  # 5 minutes
-CHANNEL_READ_TIMEOUT = 0.1  # seconds — blocking read timeout to avoid busy-wait
+CHANNEL_READ_TIMEOUT = 30.0  # seconds: a short value re-submits to the pool every
+# 100 ms, which is the busy-wait it looks like it prevents. Idle sessions now
+# block until data, EOF, or this ceiling; the channel is closed on teardown,
+# which unblocks the reader immediately.
 CONNECTION_TIMEOUT = 20  # seconds — includes DNS and post-login probes
 INPUT_QUEUE_MAX_BYTES = 1_048_576
 INPUT_CHUNK_BYTES = 32 * 1024
@@ -30,22 +36,70 @@ CONTROL_QUEUE_MAX_ITEMS = 32
 CONTROL_WRITE_TIMEOUT = 3.0
 
 
-class _WarnThenAddPolicy(paramiko.MissingHostKeyPolicy):
-    """Warn on first encounter, then add the host key to known_hosts."""
+_HOST_KEY_POLICY_ENV = "TORRUS_SSH_HOST_KEY_POLICY"
+_KNOWN_HOSTS_ENV = "TORRUS_SSH_KNOWN_HOSTS"
+def known_hosts_path() -> Path:
+    """Where torrus records host keys it has been told to trust."""
+    configured = os.getenv(_KNOWN_HOSTS_ENV)
+    if configured:
+        return Path(configured).expanduser()
+    state_home = os.getenv("XDG_STATE_HOME")
+    base = Path(state_home) if state_home else Path.home() / ".local" / "state"
+    return base / "torrus" / "known_hosts"
 
-    def __init__(self, known_hosts: paramiko.HostKeys | None = None):
-        self._known_hosts = known_hosts
+
+def torrus_host_keys() -> paramiko.HostKeys:
+    """The torrus-managed known_hosts store.
+
+    Re-read on every connect rather than cached: the operator remedy for a host
+    whose key legitimately changed is to remove its entry from this file, and a
+    cached copy would keep the stale key until the process restarted. The file is
+    small and this runs once per SSH connection.
+    """
+    path = str(known_hosts_path())
+    keys = paramiko.HostKeys()
+    if Path(path).exists():
+        try:
+            keys.load(path)
+        except OSError:
+            logger.warning("Could not read the known_hosts store at %s", path)
+    return keys
+
+
+def _accepts_new_host_keys() -> bool:
+    """`strict` refuses an unknown host; the default records it (trust on first use)."""
+    return os.getenv(_HOST_KEY_POLICY_ENV, "accept-new").strip().lower() != "strict"
+
+
+class HostKeyPolicy(paramiko.MissingHostKeyPolicy):
+    """What to do about a host key that is not in any store.
+
+    A key that *changes* for a host already known never reaches this class:
+    paramiko raises ``BadHostKeyException`` before consulting the policy, so both
+    modes reject it.
+    """
 
     def missing_host_key(self, client, hostname, key):
-        fingerprint = key.get_fingerprint().hex(":")
-        if self._known_hosts is not None:
-            self._known_hosts.add(hostname, key.get_name(), key)
+        fingerprint = key.fingerprint
+        if not _accepts_new_host_keys():
+            raise paramiko.SSHException(
+                f"Unknown host key for {hostname} ({key.get_name()} {fingerprint}). "
+                f"Add it to {known_hosts_path()} or set "
+                f"{_HOST_KEY_POLICY_ENV}=accept-new to record it on first use."
+            )
         logger.warning(
-            "Adding new host key for %s (%s): %s",
-            hostname,
-            key.get_name(),
-            fingerprint,
+            "Recording new host key for %s (%s %s)", hostname, key.get_name(), fingerprint
         )
+        client.get_host_keys().add(hostname, key.get_name(), key)
+        store = torrus_host_keys()
+        store.add(hostname, key.get_name(), key)
+        path = known_hosts_path()
+        try:
+            path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            store.save(str(path))
+            path.chmod(0o600)
+        except OSError:
+            logger.warning("Could not persist the host key for %s", hostname, exc_info=True)
 
 
 @dataclass
@@ -70,8 +124,8 @@ class SSHSession:
     last_activity: float = field(default_factory=time.time)
     cols: int = 220
     rows: int = 50
-    read_task: Optional[asyncio.Task] = None
-    write_task: Optional[asyncio.Task] = None
+    read_task: asyncio.Task | None = None
+    write_task: asyncio.Task | None = None
     input_queue: asyncio.Queue[bytes] = field(
         default_factory=lambda: asyncio.Queue(maxsize=256)
     )
@@ -108,7 +162,9 @@ class SSHManager:
         self._on_output = on_output
         # (session_id, tab_id) -> SSHSession
         self._sessions: dict[tuple[str, str], SSHSession] = {}
-        self._generation_counters: dict[tuple[str, str], int] = {}
+        # Monotonic: a reconnected tab gets a strictly higher generation, and
+        # nothing has to be retained per key (the map used to grow forever).
+        self._generation_counter = itertools.count(1)
         # Socket.IO sid -> owner username; used during reconnect restore.
         self._sid_owners: dict[str, str | None] = {}
         # socket.io sid -> set of (session_id, tab_id) keys
@@ -204,8 +260,7 @@ class SSHManager:
                 return
             self._pending_keys.add(key)
             old_session = self._pop_session_locked(key)
-            generation = self._generation_counters.get(key, 0) + 1
-            self._generation_counters[key] = generation
+            generation = next(self._generation_counter)
         if old_session is not None:
             await self._close_session(old_session)
             await self._notify_tab_disconnect(old_session)
@@ -214,7 +269,14 @@ class SSHManager:
         connection_succeeded = False
         try:
             client = paramiko.SSHClient()
-            client.set_missing_host_key_policy(_WarnThenAddPolicy())
+            try:
+                client.load_system_host_keys()
+            except OSError:
+                logger.warning("Could not read the system known_hosts file")
+            known = torrus_host_keys()
+            if known:
+                client.get_host_keys().update(known)
+            client.set_missing_host_key_policy(HostKeyPolicy())
 
             loop = asyncio.get_running_loop()
             target = f"{username}@{host}:{port}"
@@ -232,6 +294,24 @@ class SSHManager:
                     ),
                     timeout=CONNECTION_TIMEOUT,
                 )
+            except paramiko.BadHostKeyException as exc:
+                # Raised before the policy runs: the host is known and its key changed.
+                logger.warning("Host key mismatch for %s", target)
+                await self.sio.emit(
+                    "ssh:error",
+                    {
+                        "tab_id": tab_id,
+                        "message": (
+                            f"Host key for {host} changed: expected "
+                            f"{exc.expected_key.fingerprint}, got {exc.key.fingerprint}. "
+                            "If the host was rebuilt, remove its entry from the "
+                            "torrus known_hosts store and reconnect."
+                        ),
+                        "code": "host_key_mismatch",
+                    },
+                    to=sid,
+                )
+                return
             except paramiko.AuthenticationException:
                 logger.warning("Auth failed for %s", target)
                 await self.sio.emit(
@@ -256,7 +336,7 @@ class SSHManager:
                     to=sid,
                 )
                 return
-            except (socket.timeout, TimeoutError):
+            except TimeoutError:
                 logger.warning("Connection to %s timed out", target)
                 await self.sio.emit(
                     "ssh:error",
@@ -854,12 +934,13 @@ class SSHManager:
                         to=sid,
                     )
                     return
-                await self._close_session(existing)
+                # Replace now, close after the lock: _close_session waits up to a
+                # second for the old tasks, and holding the manager lock across it
+                # stalls every other connect/input/resize in the process.
                 self._sessions.pop(new_key, None)
                 replaced_session = existing
 
-            generation = self._generation_counters.get(new_key, 0) + 1
-            self._generation_counters[new_key] = generation
+            generation = next(self._generation_counter)
             source_username = source.username
             source_host = source.host
             loop = asyncio.get_running_loop()
@@ -911,6 +992,7 @@ class SSHManager:
             self._sid_map.setdefault(sid, set()).add(new_key)
 
         if replaced_session is not None:
+            await self._close_session(replaced_session)
             await self._notify_tab_disconnect(replaced_session)
         await self.sio.enter_room(sid, room)
         session.read_task = asyncio.create_task(self._read_loop(session))
@@ -941,6 +1023,10 @@ class SSHManager:
     def sid_session_count(self, sid: str) -> int:
         """Return the number of active SSH sessions owned by a socket id."""
         return len(self._sid_map.get(sid, set()))
+
+    def session_count(self) -> int:
+        """Return the number of live SSH sessions across every socket."""
+        return len(self._sessions)
 
     async def unmap_sid(self, sid: str) -> None:
         """Called on socket disconnect — does NOT destroy the SSH session."""
@@ -1189,8 +1275,6 @@ class SSHManager:
             await asyncio.sleep(KEEPALIVE_INTERVAL)
             async with self._lock:
                 sessions = list(self._sessions.values())
-            for session in sessions:
-                pass
             loop = asyncio.get_running_loop()
             await asyncio.gather(
                 *(
@@ -1313,11 +1397,11 @@ def _sanitize_replay_buffer(buf: bytes) -> bytes:
 
     This detects unmatched exits and returns only the bytes that follow them.
     """
-    ENTERS = (b"\x1b[?1049h", b"\x1b[?47h", b"\x1b[?1047h")
-    EXITS = (b"\x1b[?1049l", b"\x1b[?47l", b"\x1b[?1047l")
+    enters = (b"\x1b[?1049h", b"\x1b[?47h", b"\x1b[?1047h")
+    exits = (b"\x1b[?1049l", b"\x1b[?47l", b"\x1b[?1047l")
 
     events: list[tuple[int, bool, int]] = []  # (position, is_enter, seq_len)
-    for seq in ENTERS:
+    for seq in enters:
         start = 0
         while True:
             idx = buf.find(seq, start)
@@ -1325,7 +1409,7 @@ def _sanitize_replay_buffer(buf: bytes) -> bytes:
                 break
             events.append((idx, True, len(seq)))
             start = idx + len(seq)
-    for seq in EXITS:
+    for seq in exits:
         start = 0
         while True:
             idx = buf.find(seq, start)
@@ -1376,9 +1460,10 @@ def _blocking_read(channel: paramiko.Channel) -> bytes:
         if not data:
             raise ConnectionError("Remote process exited")
         return data
-    except socket.timeout:
+    except TimeoutError:
+        # The poll timeout is expected control flow, not the cause of the failure.
         if channel.exit_status_ready():
-            raise ConnectionError("Remote process exited")
+            raise ConnectionError("Remote process exited") from None
         return b""
 
 

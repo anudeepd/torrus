@@ -1,6 +1,6 @@
 """Shared pytest fixtures for torrus backend tests."""
 
-import socket
+import os
 import time
 from unittest.mock import AsyncMock, MagicMock
 
@@ -31,7 +31,7 @@ def mock_paramiko_client():
 
     def quiet_recv(_size):
         time.sleep(0.01)
-        raise socket.timeout()
+        raise TimeoutError()
 
     client = MagicMock()
     client.close = lambda: None
@@ -64,6 +64,25 @@ def _clear_audit_buffers(server_module):
             close()
     server_module._input_buffers.clear()
     server_module._sensitive_input_buffers.clear()
+    server_module._output_tails.clear()
+    server_module._sensitive_prompt_pending.clear()
+
+
+@pytest.fixture(autouse=True)
+def scrub_torrus_environment():
+    """No test may leak a TORRUS_*/XDG_* variable into the next one.
+
+    Several call sites assign to ``os.environ`` directly rather than through
+    monkeypatch, so isolation needs a snapshot rather than a delete.
+    """
+    prefixes = ("TORRUS_", "XDG_")
+    saved = {k: v for k, v in os.environ.items() if k.startswith(prefixes)}
+    for name in [k for k in os.environ if k.startswith(prefixes)]:
+        del os.environ[name]
+    yield
+    for name in [k for k in os.environ if k.startswith(prefixes)]:
+        del os.environ[name]
+    os.environ.update(saved)
 
 
 @pytest.fixture(autouse=True)
@@ -80,6 +99,8 @@ def reset_server_state():
     server_module._ldap_enabled = False
     server_module._ldap_config = None
     server_module._PENDING_DISABLED_USERS.clear()
+    server_module._output_tails.clear()
+    server_module._sensitive_prompt_pending.clear()
     yield
     server_module._authenticated_sids.clear()
     server_module._authenticated_users.clear()
@@ -90,4 +111,6 @@ def reset_server_state():
     server_module._ldap_config = None
     server_module._ldap_session_manager = None
     server_module._PENDING_DISABLED_USERS.clear()
+    server_module._output_tails.clear()
+    server_module._sensitive_prompt_pending.clear()
     server_module.ssh_manager = original_ssh_manager

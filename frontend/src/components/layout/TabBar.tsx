@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo, type FormEvent } from 'react'
-import { Plus, X, Pencil, Bookmark, Copy, Folder, GitFork, Settings, LogOut, Menu, PanelLeftClose, Radio, Columns2, Command, Shield } from 'lucide-react'
+import { Plus, X, Pencil, Bookmark, Copy, Folder, GitFork, Settings, LogOut, Menu, PanelLeftClose, Radio, Columns2, Command, Shield, ChevronLeft, ChevronRight } from 'lucide-react'
 import clsx from 'clsx'
+import Dialog from '@/components/ui/Dialog'
 import { useTerminalStore } from '@/store/terminalStore'
 import { useSavedServerStore } from '@/store/savedServerStore'
 import { useServerConfigStore } from '@/store/serverConfigStore'
@@ -9,29 +10,39 @@ import Logo from '@/components/ui/Logo'
 import type { Tab } from '@/types'
 import { modKey } from '@/utils/platform'
 import { submitLdapLogout } from '@/utils/authRedirect'
-import { useDialogPresence } from '@/hooks/useDialogPresence'
+import { handleMenuKeyDown } from '@/lib/menuKeys'
+import { useDismissLayer } from '@/lib/dismissLayers'
+import { tabDisplayName } from '@/lib/tabName'
 import { AnimatePresence } from 'motion/react'
 import * as m from 'motion/react-m'
-import { anchoredSurface, exitTransition, fade, surface, surfaceSpring } from '@/motion/tokens'
+import { anchoredSurface, exitTransition, surfaceSpring } from '@/motion/tokens'
+
+/**
+ * Everything the bar can ask the shell to do. They stay owned by AppLayout
+ * because most of them emit socket events or open dialogs; grouping them keeps
+ * this interface small and adds no orchestration here.
+ */
+export interface TabBarActions {
+  addTab: () => void
+  closeTab: (id: string) => void
+  cloneTab: (id: string) => void
+  openSftpTab: (id: string) => void
+  duplicateTab: (id: string) => void
+  closeAllTabs: () => void
+  openSettings: () => void
+  openAdmin: () => void
+  openSplitPicker: () => void
+  openBroadcastPicker: () => void
+  exitSplit: () => void
+  toggleSidebar: () => void
+  openCommandPalette: () => void
+}
 
 interface TabBarProps {
-  onAddTab: () => void
-  onCloseTab: (id: string) => void
-  onCloneTab: (id: string) => void
-  onOpenSftpTab: (id: string) => void
-  onDuplicateTab: (id: string) => void
-  onCloseAllTabs: () => void
-  onOpenSettings: () => void
-  onOpenAdmin?: () => void
-  onOpenSplitPicker: () => void
-  onOpenBroadcastPicker: () => void
-  onExitSplit: () => void
-  onSetActiveTab: (id: string) => void
+  actions: TabBarActions
   inSplitMode: boolean
   compactSidebar?: boolean
   sidebarOpen?: boolean
-  onToggleSidebar?: () => void
-  onOpenCommandPalette?: () => void
 }
 
 function submitLogout() {
@@ -56,15 +67,7 @@ function StatusDot({ status }: { status: Tab['status'] }) {
   )
 }
 
-function getTabDisplayName(tab: Tab): string {
-  if (tab.label) return tab.label
-  if (tab.type === 'sftp') return 'SFTP'
-  if (tab.host && tab.username) return `${tab.username}@${tab.host}`
-  return 'New Connection'
-}
-
-function getTabTitle(tab: Tab): string {
-  const displayName = getTabDisplayName(tab)
+function getTabTitle(tab: Tab, displayName: string): string {
   if (tab.host && tab.username) {
     return `${displayName} (${tab.username}@${tab.host}${tab.port ? `:${tab.port}` : ''})`
   }
@@ -96,8 +99,6 @@ function SaveSessionDialog({ state, onSave, onClose }: {
     inputRef.current?.select()
   }, [])
 
-  const { ref: dialogRef, presenceProps } = useDialogPresence(onClose, inputRef)
-
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault()
     const ok = onSave(name.trim() || `${state.tab.username}@${state.tab.host}`)
@@ -105,23 +106,7 @@ function SaveSessionDialog({ state, onSave, onClose }: {
   }
 
   return (
-    <m.div
-      {...fade}
-      transition={exitTransition}
-      className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center"
-      onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}
-    >
-      <m.div
-        {...surface}
-        {...presenceProps}
-        transition={surfaceSpring}
-        ref={dialogRef}
-        role="dialog"
-        aria-modal="true"
-        aria-label="Save Session"
-        tabIndex={-1}
-        className="bg-surface-900 border border-surface-700 rounded-xl p-5 w-72 shadow-2xl flex flex-col gap-3"
-      >
+    <Dialog label="Save Session" initialFocus={inputRef} onClose={onClose} className="w-72 gap-3">
         <div className="flex items-center gap-2">
           <Bookmark className="w-4 h-4 text-brand-400" />
           <h2 className="text-sm font-semibold text-slate-200">Save Session</h2>
@@ -134,7 +119,7 @@ function SaveSessionDialog({ state, onSave, onClose }: {
             <label className="text-xs text-slate-400 font-medium">Name</label>
             <input
               ref={inputRef}
-              className="w-full bg-surface-950 border border-surface-700 rounded-md px-3 py-2 text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:border-brand-500 transition-colors"
+              className="w-full bg-surface-950 border border-surface-700 rounded-md px-3 py-2 text-sm text-slate-200 placeholder-slate-400 focus:outline-none focus:border-brand-500 transition-colors"
               placeholder={`${state.tab.username}@${state.tab.host}`}
               value={name}
               onChange={e => setName(e.target.value)}
@@ -152,23 +137,27 @@ function SaveSessionDialog({ state, onSave, onClose }: {
             </button>
             <button
               type="submit"
-              className="flex-1 px-3 py-2 rounded-md text-sm font-medium text-white bg-brand-600 hover:bg-brand-500 transition-colors"
+              className="flex-1 px-3 py-2 rounded-md text-sm font-medium text-white bg-brand-700 hover:bg-brand-600 transition-colors"
             >
               Save
             </button>
           </div>
         </form>
-      </m.div>
-    </m.div>
+    </Dialog>
   )
 }
 
-export default function TabBar({ onAddTab, onCloseTab, onCloneTab, onOpenSftpTab, onDuplicateTab, onCloseAllTabs, onOpenSettings, onOpenAdmin, onOpenSplitPicker, onOpenBroadcastPicker, onExitSplit, onSetActiveTab, inSplitMode, compactSidebar = false, sidebarOpen = false, onToggleSidebar, onOpenCommandPalette }: TabBarProps) {
-  const { tabs, activeTabId, renameTab, moveTab } = useTerminalStore()
+export default function TabBar({ actions, inSplitMode, compactSidebar = false, sidebarOpen = false }: TabBarProps) {
+  const tabs = useTerminalStore(s => s.tabs)
+  const activeTabId = useTerminalStore(s => s.activeTabId)
+  const renameTab = useTerminalStore(s => s.renameTab)
+  const moveTab = useTerminalStore(s => s.moveTab)
+  const onSetActiveTab = useTerminalStore(s => s.setActiveTab)
   const [draggedTabId, setDraggedTabId] = useState<string | null>(null)
   const addServer = useSavedServerStore(s => s.addServer)
-  const { ldapEnabled, isAdmin } = useServerConfigStore()
-  const { enabled: broadcastEnabled } = useBroadcastStore()
+  const ldapEnabled = useServerConfigStore(s => s.ldapEnabled)
+  const isAdmin = useServerConfigStore(s => s.isAdmin)
+  const broadcastEnabled = useBroadcastStore(s => s.enabled)
   const connectedCount = useMemo(() => tabs.filter(t => t.type === 'terminal' && t.status === 'connected').length, [tabs])
   const [editingTabId, setEditingTabId] = useState<string | null>(null)
   const [editValue, setEditValue] = useState('')
@@ -221,21 +210,21 @@ export default function TabBar({ onAddTab, onCloseTab, onCloneTab, onOpenSftpTab
         setContextMenu(null)
       }
     }
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setContextMenu(null)
-    }
-
     document.addEventListener('mousedown', handleClick)
-    document.addEventListener('keydown', handleKeyDown)
-    return () => {
-      document.removeEventListener('mousedown', handleClick)
-      document.removeEventListener('keydown', handleKeyDown)
-    }
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [contextMenu])
+
+  useDismissLayer(!!contextMenu, () => setContextMenu(null))
+
+  // Take focus so Escape and the arrow keys reach the menu instead of xterm.
+  useEffect(() => {
+    if (!contextMenu) return
+    contextMenuRef.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus()
   }, [contextMenu])
 
   const startEditing = useCallback((tab: Tab) => {
     setEditingTabId(tab.id)
-    setEditValue(getTabDisplayName(tab))
+    setEditValue(tabDisplayName(tab, tabs))
     setContextMenu(null)
   }, [])
 
@@ -265,7 +254,7 @@ export default function TabBar({ onAddTab, onCloseTab, onCloneTab, onOpenSftpTab
       {compactSidebar && (
         <button
           type="button"
-          onClick={onToggleSidebar}
+          onClick={actions.toggleSidebar}
           title={sidebarOpen ? 'Hide sessions' : 'Show sessions'}
           aria-label={sidebarOpen ? 'Hide sessions' : 'Show sessions'}
           aria-expanded={sidebarOpen}
@@ -275,28 +264,65 @@ export default function TabBar({ onAddTab, onCloseTab, onCloneTab, onOpenSftpTab
         </button>
       )}
       {/* Logo branding */}
-      <div className={clsx('h-10 flex-shrink-0 flex items-center px-3 border-r border-surface-800', compactSidebar ? 'col-start-2 row-start-1 self-center border-r-0 px-2 [&>div>span]:inline' : 'max-[800px]:w-10 max-[800px]:justify-center max-[800px]:px-2 max-[800px]:[&>div>span]:hidden')}>
+      <div className={clsx('h-10 flex-shrink-0 flex items-center px-3 border-r border-surface-800', compactSidebar ? 'col-start-2 row-start-1 self-center border-r-0 px-2 [&>div>span]:inline' : 'max-nav:w-10 max-nav:justify-center max-nav:px-2 max-nav:[&>div>span]:hidden')}>
         <Logo size="sm" showText={true} />
       </div>
 
       {compactSidebar && (
-        <button type="button" onClick={onOpenCommandPalette} title="Open command palette" aria-label="Open command palette" className="col-start-3 row-start-1 flex h-[46px] w-10 justify-self-end items-center justify-center text-slate-400 transition-colors hover:bg-surface-800 hover:text-slate-200">
+        <button type="button" onClick={actions.openCommandPalette} title="Open command palette" aria-label="Open command palette" className="col-start-3 row-start-1 flex h-[46px] w-10 justify-self-end items-center justify-center text-slate-400 transition-colors hover:bg-surface-800 hover:text-slate-200">
           <Command className="h-4 w-4" />
         </button>
       )}
 
       {/* New tab button */}
       <button
-        onClick={onAddTab}
+        onClick={actions.addTab}
         title="New tab"
-        className={clsx('h-10 flex-shrink-0 w-10 flex items-center justify-center text-slate-500 hover:text-slate-300 hover:bg-surface-800 transition-colors border-r border-surface-800', compactSidebar && 'col-start-1 row-start-2 self-center')}
+        className={clsx('h-10 flex-shrink-0 w-10 flex items-center justify-center text-slate-400 hover:text-slate-300 hover:bg-surface-800 transition-colors border-r border-surface-800', compactSidebar && 'col-start-1 row-start-2 self-center')}
       >
         <Plus className="w-4 h-4" />
       </button>
 
       {/* Tab buttons */}
       <div className={clsx('flex-1 h-full min-w-0 overflow-hidden', compactSidebar && 'col-start-2 row-start-2', compactSidebar && inSplitMode && 'col-end-4')}>
-        <div ref={tabListRef} className="torrus-tab-strip flex h-full items-center flex-nowrap overflow-x-scroll overflow-y-hidden" role="tablist" aria-label="Sessions">
+        <div
+          ref={tabListRef}
+          className="torrus-tab-strip flex h-full items-center flex-nowrap overflow-x-scroll overflow-y-hidden"
+          role="tablist"
+          aria-label="Open tabs"
+          onKeyDown={(event) => {
+            // WCAG 2.5.7: reordering is also available without dragging.
+            if (event.altKey && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
+              const focusedId = (document.activeElement as HTMLElement | null)?.dataset.tabId ?? null
+              const movingId = focusedId ?? activeTabId
+              if (!movingId) return
+              const index = tabs.findIndex(tab => tab.id === movingId)
+              const target = index + (event.key === 'ArrowRight' ? 1 : -1)
+              if (index === -1 || target < 0 || target >= tabs.length) return
+              event.preventDefault()
+              moveTab(movingId, tabs[target].id)
+              requestAnimationFrame(() => tabRefs.current[movingId]?.focus())
+              return
+            }
+            if ((event.shiftKey && event.key === 'F10') || event.key === 'ContextMenu') {
+              if (!activeTabId) return
+              const anchor = tabRefs.current[activeTabId]
+              if (!anchor) return
+              event.preventDefault()
+              const rect = anchor.getBoundingClientRect()
+              setContextMenu({ tabId: activeTabId, x: rect.left, y: rect.bottom })
+              return
+            }
+            if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+            const index = tabs.findIndex(tab => tab.id === activeTabId)
+            if (index === -1) return
+            event.preventDefault()
+            const step = event.key === 'ArrowRight' ? 1 : -1
+            const next = tabs[(index + step + tabs.length) % tabs.length]
+            onSetActiveTab(next.id)
+            tabRefs.current[next.id]?.focus()
+          }}
+        >
           <AnimatePresence initial={false}>
           {tabs.map(tab => (
             <m.div
@@ -330,10 +356,10 @@ export default function TabBar({ onAddTab, onCloseTab, onCloneTab, onOpenSftpTab
                 setContextMenu({ tabId: tab.id, x: e.clientX, y: e.clientY })
               }}
               className={clsx(
-                'relative group h-[40px] flex flex-shrink-0 select-none items-center min-w-32 max-w-48 border-r border-surface-800 whitespace-nowrap transition-colors text-xs font-mono max-[600px]:min-w-28 max-[600px]:max-w-36',
+                'relative group h-[40px] flex flex-shrink-0 select-none items-center min-w-32 max-w-48 border-r border-surface-800 whitespace-nowrap transition-colors text-xs font-mono max-xs:min-w-28 max-xs:max-w-36',
                 activeTabId === tab.id
                   ? 'bg-surface-950 text-slate-200'
-                  : 'text-slate-500 hover:text-slate-300 hover:bg-surface-800'
+                  : 'text-slate-400 hover:text-slate-300 hover:bg-surface-800'
               )}
             >
               {activeTabId === tab.id && (
@@ -357,9 +383,12 @@ export default function TabBar({ onAddTab, onCloseTab, onCloneTab, onOpenSftpTab
                   ref={(element) => { tabRefs.current[tab.id] = element }}
                   type="button"
                   role="tab"
+                  id={`torrus-tab-${tab.id}`}
+                  aria-controls={`torrus-panel-${tab.id}`}
                   aria-selected={activeTabId === tab.id}
+                  tabIndex={activeTabId === tab.id ? 0 : -1}
                   data-tab-id={tab.id}
-                  title={getTabTitle(tab)}
+                  title={getTabTitle(tab, tabDisplayName(tab, tabs))}
                   className="flex h-full min-w-0 flex-1 items-center gap-1.5 pl-3 text-left"
                   onClick={() => onSetActiveTab(tab.id)}
                   onDoubleClick={(e) => {
@@ -372,15 +401,15 @@ export default function TabBar({ onAddTab, onCloseTab, onCloneTab, onOpenSftpTab
                   {broadcastEnabled && tab.type === 'terminal' && tab.status === 'connected' && (
                     <Radio className="flex-shrink-0 w-3 h-3 text-amber-400" />
                   )}
-                  <span className="min-w-0 flex-1 truncate">{getTabDisplayName(tab)}</span>
+                  <span className="min-w-0 flex-1 truncate">{tabDisplayName(tab, tabs)}</span>
                 </button>
               )}
 
               <button
                 type="button"
-                onClick={(e) => { e.stopPropagation(); onCloseTab(tab.id) }}
-                className="mr-2 flex h-6 w-6 flex-shrink-0 items-center justify-center rounded opacity-0 transition-opacity hover:text-red-400 focus:opacity-100 group-hover:opacity-100 max-[600px]:opacity-100"
-                title={`Close ${getTabDisplayName(tab)}`}
+                onClick={(e) => { e.stopPropagation(); actions.closeTab(tab.id) }}
+                className="mr-2 flex h-6 w-6 flex-shrink-0 items-center justify-center rounded opacity-0 transition-opacity hover:text-red-400 focus:opacity-100 group-hover:opacity-100 max-xs:opacity-100"
+                title={`Close ${tabDisplayName(tab, tabs)}`}
               >
                 <X className="w-3 h-3" />
               </button>
@@ -394,61 +423,61 @@ export default function TabBar({ onAddTab, onCloseTab, onCloneTab, onOpenSftpTab
       <div className={clsx('h-10 flex-shrink-0 flex items-center', compactSidebar && 'col-start-3 row-start-2 justify-self-end')}>
       {inSplitMode && !compactSidebar && (
         <button
-          onClick={onExitSplit}
+          onClick={actions.exitSplit}
           title="Exit split mode"
-          className="h-10 flex-shrink-0 flex items-center justify-center gap-1.5 px-3 text-xs text-brand-400 bg-brand-500/10 hover:bg-brand-500/20 transition-colors border-l border-surface-800 max-[900px]:w-10 max-[900px]:px-0"
+          className="h-10 flex-shrink-0 flex items-center justify-center gap-1.5 px-3 text-xs text-brand-400 bg-brand-500/10 hover:bg-brand-500/20 transition-colors border-l border-surface-800 max-wide:w-10 max-wide:px-0"
         >
           <X className="w-3.5 h-3.5" />
-          <span className="max-[900px]:hidden">Exit split</span>
+          <span className="max-wide:hidden">Exit split</span>
         </button>
       )}
       {tabs.length >= 2 && (!compactSidebar || !inSplitMode) && (
         <button
-          onClick={onOpenSplitPicker}
+          onClick={actions.openSplitPicker}
           title="Split layout"
-          className="h-10 flex-shrink-0 flex items-center justify-center gap-1.5 px-3 text-xs text-slate-500 hover:text-slate-300 hover:bg-surface-800 transition-colors border-l border-surface-800 max-[900px]:w-10 max-[900px]:px-0"
+          className="h-10 flex-shrink-0 flex items-center justify-center gap-1.5 px-3 text-xs text-slate-400 hover:text-slate-300 hover:bg-surface-800 transition-colors border-l border-surface-800 max-wide:w-10 max-wide:px-0"
         >
           <Columns2 className="w-3.5 h-3.5" />
-          <span className="max-[900px]:hidden">Split</span>
+          <span className="max-wide:hidden">Split</span>
         </button>
       )}
       {connectedCount >= 2 && !compactSidebar && (
         <button
-          onClick={onOpenBroadcastPicker}
+          onClick={actions.openBroadcastPicker}
           title={broadcastEnabled ? 'Broadcast active — click to manage' : 'Broadcast input to multiple terminals'}
           className={clsx(
-            'h-10 flex-shrink-0 flex items-center justify-center gap-1.5 px-3 text-xs border-l border-surface-800 transition-colors max-[900px]:w-10 max-[900px]:px-0',
+            'h-10 flex-shrink-0 flex items-center justify-center gap-1.5 px-3 text-xs border-l border-surface-800 transition-colors max-wide:w-10 max-wide:px-0',
             broadcastEnabled
               ? 'text-amber-400 bg-amber-400/10 hover:bg-amber-400/20'
-              : 'text-slate-500 hover:text-slate-300 hover:bg-surface-800'
+              : 'text-slate-400 hover:text-slate-300 hover:bg-surface-800'
           )}
         >
           <Radio className="w-3.5 h-3.5" />
-          <span className="max-[900px]:hidden">Broadcast</span>
+          <span className="max-wide:hidden">Broadcast</span>
         </button>
       )}
       {tabs.length > 0 && !compactSidebar && (
         <button
-          onClick={onCloseAllTabs}
+          onClick={actions.closeAllTabs}
           title="Close all tabs"
-          className="h-10 flex-shrink-0 flex items-center justify-center gap-1 px-3 text-xs text-slate-500 hover:text-red-400 hover:bg-surface-800 transition-colors border-l border-surface-800 max-[900px]:w-10 max-[900px]:px-0"
+          className="h-10 flex-shrink-0 flex items-center justify-center gap-1 px-3 text-xs text-slate-400 hover:text-red-400 hover:bg-surface-800 transition-colors border-l border-surface-800 max-wide:w-10 max-wide:px-0"
         >
           <PanelLeftClose className="w-3.5 h-3.5" />
-          <span className="max-[900px]:hidden">Close All</span>
+          <span className="max-wide:hidden">Close All</span>
         </button>
       )}
       {!compactSidebar && <button
-        onClick={onOpenSettings}
+        onClick={actions.openSettings}
         title={`Settings (${modKey}+,)`}
-        className="h-10 flex-shrink-0 w-10 flex items-center justify-center text-slate-500 hover:text-slate-300 hover:bg-surface-800 transition-colors border-l border-surface-800"
+        className="h-10 flex-shrink-0 w-10 flex items-center justify-center text-slate-400 hover:text-slate-300 hover:bg-surface-800 transition-colors border-l border-surface-800"
       >
         <Settings className="w-3.5 h-3.5" />
       </button>}
       {ldapEnabled && isAdmin && (
         <button
-          onClick={() => onOpenAdmin?.()}
+          onClick={actions.openAdmin}
           title="Admin console"
-          className="h-10 flex-shrink-0 w-10 flex items-center justify-center text-slate-500 hover:text-brand-300 hover:bg-surface-800 transition-colors border-l border-surface-800"
+          className="h-10 flex-shrink-0 w-10 flex items-center justify-center text-slate-400 hover:text-brand-300 hover:bg-surface-800 transition-colors border-l border-surface-800"
         >
           <Shield className="w-3.5 h-3.5" />
         </button>
@@ -469,33 +498,58 @@ export default function TabBar({ onAddTab, onCloseTab, onCloneTab, onOpenSftpTab
       {contextMenu && (() => {
         const tab = tabs.find(t => t.id === contextMenu.tabId)
         if (!tab) return null
+        const tabIndex = tabs.findIndex(candidate => candidate.id === tab.id)
         return (
           <m.div
             {...anchoredSurface}
             transition={{ ...exitTransition }}
             ref={contextMenuRef}
+            role="menu"
+            aria-label="Tab actions"
+            onKeyDown={event => handleMenuKeyDown(event, contextMenuRef.current, () => {
+              setContextMenu(null)
+              tabRefs.current[contextMenu.tabId]?.focus()
+            })}
             className="fixed z-50 bg-surface-800 border border-surface-700 rounded-lg shadow-xl py-1 min-w-36"
             style={{ left: contextMenu.x, top: contextMenu.y }}
           >
             <button
-              className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-300 hover:bg-surface-700 transition-colors"
+              role="menuitem" className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-300 hover:bg-surface-700 transition-colors"
               onClick={() => startEditing(tab)}
             >
               <Pencil className="w-3 h-3" />
               Rename
             </button>
+            {tabIndex > 0 && (
+              <button
+                role="menuitem" className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-300 hover:bg-surface-700 transition-colors"
+                onClick={() => { setContextMenu(null); moveTab(tab.id, tabs[tabIndex - 1].id) }}
+              >
+                <ChevronLeft className="w-3 h-3" />
+                Move left
+              </button>
+            )}
+            {tabIndex >= 0 && tabIndex < tabs.length - 1 && (
+              <button
+                role="menuitem" className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-300 hover:bg-surface-700 transition-colors"
+                onClick={() => { setContextMenu(null); moveTab(tab.id, tabs[tabIndex + 1].id) }}
+              >
+                <ChevronRight className="w-3 h-3" />
+                Move right
+              </button>
+            )}
             {tab.type === 'terminal' && tab.status === 'connected' && (
               <>
               <button
-                className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-300 hover:bg-surface-700 transition-colors"
-                onClick={() => { setContextMenu(null); onOpenSftpTab(tab.id) }}
+                role="menuitem" className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-300 hover:bg-surface-700 transition-colors"
+                onClick={() => { setContextMenu(null); actions.openSftpTab(tab.id) }}
               >
                 <Folder className="w-3 h-3" />
                 Open SFTP
               </button>
               <button
-                className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-300 hover:bg-surface-700 transition-colors"
-                onClick={() => { setContextMenu(null); onCloneTab(tab.id) }}
+                role="menuitem" className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-300 hover:bg-surface-700 transition-colors"
+                onClick={() => { setContextMenu(null); actions.cloneTab(tab.id) }}
               >
                 <GitFork className="w-3 h-3" />
                 Clone (same connection)
@@ -504,8 +558,8 @@ export default function TabBar({ onAddTab, onCloseTab, onCloneTab, onOpenSftpTab
             )}
             {tab.host && tab.username && (
               <button
-                className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-300 hover:bg-surface-700 transition-colors"
-                onClick={() => { setContextMenu(null); onDuplicateTab(tab.id) }}
+                role="menuitem" className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-300 hover:bg-surface-700 transition-colors"
+                onClick={() => { setContextMenu(null); actions.duplicateTab(tab.id) }}
               >
                 <Copy className="w-3 h-3" />
                 Duplicate (new connection)
@@ -513,7 +567,7 @@ export default function TabBar({ onAddTab, onCloseTab, onCloneTab, onOpenSftpTab
             )}
             {tab.host && tab.username && (
               <button
-                className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-300 hover:bg-surface-700 transition-colors"
+                role="menuitem" className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-300 hover:bg-surface-700 transition-colors"
                 onClick={() => {
                   setContextMenu(null)
                   setSaveDialog({
@@ -528,8 +582,8 @@ export default function TabBar({ onAddTab, onCloseTab, onCloneTab, onOpenSftpTab
             )}
             <div className="my-1 border-t border-surface-700" />
             <button
-              className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-red-400 hover:bg-surface-700 transition-colors"
-              onClick={() => { setContextMenu(null); onCloseTab(tab.id) }}
+              role="menuitem" className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-red-400 hover:bg-surface-700 transition-colors"
+              onClick={() => { setContextMenu(null); actions.closeTab(tab.id) }}
             >
               <X className="w-3 h-3" />
               Close

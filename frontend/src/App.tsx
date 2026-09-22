@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react'
+import { Suspense, lazy, useEffect, useState } from 'react'
 import { AnimatePresence } from 'motion/react'
 import * as m from 'motion/react-m'
-import AdminConsole from './components/admin/AdminConsole'
+const AdminConsole = lazy(() => import('./components/admin/AdminConsole'))
 import AppLayout from './components/layout/AppLayout'
 import { spatialTransition } from './motion/tokens'
 import { useServerConfigStore } from './store/serverConfigStore'
@@ -51,7 +51,9 @@ export default function App() {
           transition={spatialTransition}
           className="h-full"
         >
-          <AdminConsole onClose={closeAdmin} />
+          <Suspense fallback={<PaneFallback />}>
+            <AdminConsole onClose={closeAdmin} />
+          </Suspense>
         </m.div>
       ) : (
         <m.div
@@ -67,4 +69,9 @@ export default function App() {
       )}
     </AnimatePresence>
   )
+}
+
+/** Shown while a lazily loaded surface's chunk arrives. */
+function PaneFallback() {
+  return <div className="flex h-full items-center justify-center bg-surface-950 text-xs text-slate-400">Loading…</div>
 }

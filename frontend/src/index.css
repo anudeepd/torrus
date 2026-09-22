@@ -49,10 +49,16 @@
 }
 
 @layer utilities {
+  /* The admin console's controls predate the shell's ring treatment; one scoped
+     rule gives them the same visible focus without touching every call site. */
+  .admin-shell :is(button, a, input, select, [tabindex]):focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px #10b981;
+  }
+  /* Press feedback is compositor-only. Colour changes on hover stay instant on
+     these controls so the rule owns exactly one property. */
   .motion-press {
-    transition: transform var(--motion-duration-micro) var(--motion-ease-move),
-      color var(--motion-duration-micro) var(--motion-ease-move),
-      background-color var(--motion-duration-micro) var(--motion-ease-move);
+    transition: transform var(--motion-duration-micro) var(--motion-ease-move);
   }
   .motion-press:active:not(:disabled) { transform: scale(0.96); }
 }
@@ -99,6 +105,15 @@
 
   body {
     -webkit-font-smoothing: antialiased;
+  }
+
+  /* Full-bleed shell: keep the tab bar and sidebar clear of notches and the
+     home indicator. Needs viewport-fit=cover on the viewport meta. */
+  html {
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom)
+      env(safe-area-inset-left);
+    /* Drop the double-tap-zoom delay; pinch-zoom still works. */
+    touch-action: manipulation;
   }
 
   ::-webkit-scrollbar {
