@@ -5,7 +5,7 @@ import AdminConfirmModal, { type AdminConfirmationRequest } from './AdminConfirm
 import { uuid } from '@/utils/uuid'
 import * as m from 'motion/react-m'
 import { AnimatePresence } from 'motion/react'
-import { surfaceTransition } from '@/motion/tokens'
+import { exitTransition, fade, spatialTransition, surfaceTransition } from '@/motion/tokens'
 
 type AdminSession = {
   session_instance_id: string
@@ -264,7 +264,7 @@ export default function AdminConsole({ onClose }: { onClose?: () => void }) {
           <Shield className="mx-auto mb-3 h-6 w-6 text-brand-400" />
           <h1 id="admin-auth-title" className="text-base font-semibold">Admin access required</h1>
           <p className="mt-2 text-sm text-slate-400">{error.message}</p>
-          <a className="mt-5 inline-flex rounded-md bg-brand-500 px-3 py-2 text-xs font-medium text-white hover:bg-brand-400" href={`/_auth/login?next=${encodeURIComponent('/admin')}`}>Authenticate</a>
+          <a className="transition-colors mt-5 inline-flex rounded-md bg-brand-500 px-3 py-2 text-xs font-medium text-white hover:bg-brand-400" href={`/_auth/login?next=${encodeURIComponent('/admin')}`}>Authenticate</a>
         </section>
       </div>
     )
@@ -332,8 +332,10 @@ export default function AdminConsole({ onClose }: { onClose?: () => void }) {
                 >{key}</button>
               ))}
             </div>
-            {notice && <div className="mb-3 flex items-center gap-2 rounded-md border border-green-900/50 bg-green-950/30 px-3 py-2 text-xs text-green-300" role="status"><Check className="h-3.5 w-3.5" /> {notice}</div>}
-            {error && <div className="mb-3 flex items-center gap-2 rounded-md border border-red-900/60 bg-red-950/30 px-3 py-2 text-xs text-red-300" role="alert"><X className="h-3.5 w-3.5" /> {error.message}</div>}
+            <AnimatePresence initial={false}>
+              {notice && <m.div key="admin-notice" {...fade} transition={exitTransition} className="mb-3 flex items-center gap-2 rounded-md border border-green-900/50 bg-green-950/30 px-3 py-2 text-xs text-green-300" role="status"><Check className="h-3.5 w-3.5" /> {notice}</m.div>}
+              {error && <m.div key="admin-error" {...fade} transition={exitTransition} className="mb-3 flex items-center gap-2 rounded-md border border-red-900/60 bg-red-950/30 px-3 py-2 text-xs text-red-300" role="alert"><X className="h-3.5 w-3.5" /> {error.message}</m.div>}
+            </AnimatePresence>
             <AnimatePresence mode="wait" initial={false}>
               <m.div
                 key={view}
@@ -383,7 +385,7 @@ function AdminTableViewport({ label, children }: { label: string; children: Reac
           {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}
         </button>
       </div>
-      <div className={`${expanded ? 'max-h-[calc(100dvh-11rem)]' : 'max-h-[70vh]'} overflow-y-auto overflow-x-hidden rounded-b-lg`}>
+      <div className={`${expanded ? 'max-h-[calc(100dvh-11rem)]' : 'max-h-[70vh]'} overflow-y-auto overflow-x-hidden rounded-b-lg transition-[max-height]`}>
         {children}
       </div>
     </div>
@@ -455,8 +457,9 @@ function SessionsTable({ sessions, total, selected, onSelect, onAction, onReques
           </tbody>
         </table>
       </AdminTableViewport>
+      <AnimatePresence initial={false}>
       {selected && (
-        <aside className="mt-3 rounded-lg border border-brand-900/50 bg-brand-950/10 p-4" aria-label="Session details">
+        <m.aside {...fade} transition={exitTransition} className="mt-3 block rounded-lg border border-brand-900/50 bg-brand-950/10 p-4" aria-label="Session details">
           <div className="flex items-start justify-between">
             <div><h3 className="text-sm font-semibold">Session details</h3><p className="mt-1 text-xs text-slate-400">Stable target identity for action confirmation.</p></div>
             <button type="button" onClick={() => onSelect(null)} className="text-slate-400 transition-colors hover:text-slate-200" aria-label="Close session details">×</button>
@@ -467,8 +470,9 @@ function SessionsTable({ sessions, total, selected, onSelect, onAction, onReques
             <div><dt className="text-slate-400">SSH account</dt><dd>{selected.username}</dd></div>
             <div><dt className="text-slate-400">Session instance</dt><dd className="font-mono text-3xs">{selected.session_instance_id}</dd></div>
           </dl>
-        </aside>
+        </m.aside>
       )}
+      </AnimatePresence>
     </section>
   )
 }
@@ -500,7 +504,7 @@ function AddUserForm({ fingerprint, onAction }: { fingerprint: string; onAction:
       <div className="min-w-0 flex-1">
         <label htmlFor="admin-add-user" className="text-xs font-medium text-slate-300">Add LDAP user</label>
         <p className="mt-1 text-2xs text-slate-400">User must already exist in LDAP. Access applies immediately.</p>
-        <input id="admin-add-user" value={username} onChange={event => setUsername(event.target.value)} autoComplete="off" spellCheck={false} placeholder="username" className="mt-2 w-full rounded border border-surface-700 bg-surface-950 px-2.5 py-2 text-sm text-slate-200 outline-none placeholder:text-slate-700 focus:border-brand-500" />
+        <input id="admin-add-user" value={username} onChange={event => setUsername(event.target.value)} autoComplete="off" spellCheck={false} placeholder="username" className="transition-colors mt-2 w-full rounded border border-surface-700 bg-surface-950 px-2.5 py-2 text-sm text-slate-200 outline-none placeholder:text-slate-700 focus:border-brand-500" />
       </div>
       <button type="submit" disabled={!username.trim() || submitting} className="rounded border border-brand-700/60 px-3 py-2 text-xs text-brand-300 transition-colors hover:bg-brand-950/40 disabled:opacity-50">{submitting ? 'Adding…' : 'Add user'}</button>
     </form>
@@ -567,7 +571,18 @@ function ActivityInput({ value, kind }: { value: string; kind: string }) {
           </>
         )}
       </summary>
-      {expanded && <pre className="mt-2 max-h-80 overflow-y-auto overflow-x-hidden whitespace-pre-wrap break-words text-slate-200 [overflow-wrap:anywhere]">{value}</pre>}
+      <AnimatePresence initial={false}>
+        {expanded && (
+          <m.pre
+            key="full-input"
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            transition={spatialTransition}
+            className="mt-2 max-h-80 overflow-y-auto overflow-x-hidden whitespace-pre-wrap break-words text-slate-200 [overflow-wrap:anywhere]"
+          >{value}</m.pre>
+        )}
+      </AnimatePresence>
     </details>
   )
 }
@@ -599,15 +614,15 @@ function ActivityFiltersForm({ filters, onApply }: { filters: ActivityFilters; o
     <form onSubmit={submit} className="mb-4 flex flex-col gap-2 rounded-lg border border-surface-800 bg-surface-900 p-3 sm:flex-row sm:flex-wrap sm:items-end">
       <div>
         <label htmlFor="activity-user" className="block text-2xs font-medium text-slate-400">User</label>
-        <input id="activity-user" type="search" value={username} onChange={event => setUsername(event.target.value)} onKeyDown={submitActivityFiltersOnEnter} autoComplete="off" spellCheck={false} enterKeyHint="search" placeholder="All users" className="mt-1 w-full rounded border border-surface-700 bg-surface-950 px-2.5 py-1.5 text-xs text-slate-200 outline-none placeholder:text-slate-700 focus:border-brand-500 sm:w-40" />
+        <input id="activity-user" type="search" value={username} onChange={event => setUsername(event.target.value)} onKeyDown={submitActivityFiltersOnEnter} autoComplete="off" spellCheck={false} enterKeyHint="search" placeholder="All users" className="transition-colors mt-1 w-full rounded border border-surface-700 bg-surface-950 px-2.5 py-1.5 text-xs text-slate-200 outline-none placeholder:text-slate-700 focus:border-brand-500 sm:w-40" />
       </div>
       <div>
         <label htmlFor="activity-input" className="block text-2xs font-medium text-slate-400">Search</label>
-        <input id="activity-input" type="search" value={input} onChange={event => setInput(event.target.value)} onKeyDown={submitActivityFiltersOnEnter} autoComplete="off" spellCheck={false} enterKeyHint="search" placeholder="Search all columns" className="mt-1 w-full rounded border border-surface-700 bg-surface-950 px-2.5 py-1.5 text-xs text-slate-200 outline-none placeholder:text-slate-700 focus:border-brand-500 sm:w-52" />
+        <input id="activity-input" type="search" value={input} onChange={event => setInput(event.target.value)} onKeyDown={submitActivityFiltersOnEnter} autoComplete="off" spellCheck={false} enterKeyHint="search" placeholder="Search all columns" className="transition-colors mt-1 w-full rounded border border-surface-700 bg-surface-950 px-2.5 py-1.5 text-xs text-slate-200 outline-none placeholder:text-slate-700 focus:border-brand-500 sm:w-52" />
       </div>
       <div>
         <label htmlFor="activity-kind" className="block text-2xs font-medium text-slate-400">Type</label>
-        <select id="activity-kind" value={kind} onChange={event => setKind(event.target.value)} className="mt-1 rounded border border-surface-700 bg-surface-950 px-2.5 py-1.5 text-xs text-slate-200 outline-none focus:border-brand-500">
+        <select id="activity-kind" value={kind} onChange={event => setKind(event.target.value)} className="transition-colors mt-1 rounded border border-surface-700 bg-surface-950 px-2.5 py-1.5 text-xs text-slate-200 outline-none focus:border-brand-500">
           <option value="">All activity</option>
           <option value="command">Commands</option>
           <option value="sensitive">Sensitive (redacted)</option>
@@ -624,15 +639,15 @@ function ActivityFiltersForm({ filters, onApply }: { filters: ActivityFilters; o
       </div>
       <div>
         <label htmlFor="activity-host" className="block text-2xs font-medium text-slate-400">Host</label>
-        <input id="activity-host" type="search" value={host} onChange={event => setHost(event.target.value)} onKeyDown={submitActivityFiltersOnEnter} autoComplete="off" spellCheck={false} enterKeyHint="search" placeholder="Any host" className="mt-1 w-full rounded border border-surface-700 bg-surface-950 px-2.5 py-1.5 text-xs text-slate-200 outline-none placeholder:text-slate-700 focus:border-brand-500 sm:w-44" />
+        <input id="activity-host" type="search" value={host} onChange={event => setHost(event.target.value)} onKeyDown={submitActivityFiltersOnEnter} autoComplete="off" spellCheck={false} enterKeyHint="search" placeholder="Any host" className="transition-colors mt-1 w-full rounded border border-surface-700 bg-surface-950 px-2.5 py-1.5 text-xs text-slate-200 outline-none placeholder:text-slate-700 focus:border-brand-500 sm:w-44" />
       </div>
       <div>
         <label htmlFor="activity-since" className="block text-2xs font-medium text-slate-400">Since</label>
-        <input id="activity-since" type="date" value={since} onChange={event => setSince(event.target.value)} onKeyDown={submitActivityFiltersOnEnter} className="mt-1 rounded border border-surface-700 bg-surface-950 px-2.5 py-1.5 text-xs text-slate-200 outline-none focus:border-brand-500" />
+        <input id="activity-since" type="date" value={since} onChange={event => setSince(event.target.value)} onKeyDown={submitActivityFiltersOnEnter} className="transition-colors mt-1 rounded border border-surface-700 bg-surface-950 px-2.5 py-1.5 text-xs text-slate-200 outline-none focus:border-brand-500" />
       </div>
       <div>
         <label htmlFor="activity-until" className="block text-2xs font-medium text-slate-400">Until</label>
-        <input id="activity-until" type="date" value={until} onChange={event => setUntil(event.target.value)} onKeyDown={submitActivityFiltersOnEnter} className="mt-1 rounded border border-surface-700 bg-surface-950 px-2.5 py-1.5 text-xs text-slate-200 outline-none focus:border-brand-500" />
+        <input id="activity-until" type="date" value={until} onChange={event => setUntil(event.target.value)} onKeyDown={submitActivityFiltersOnEnter} className="transition-colors mt-1 rounded border border-surface-700 bg-surface-950 px-2.5 py-1.5 text-xs text-slate-200 outline-none focus:border-brand-500" />
       </div>
       <div className="flex gap-2">
         <button type="submit" className="rounded border border-brand-700/60 px-3 py-1.5 text-xs text-brand-300 transition-colors hover:bg-brand-950/40">Apply filters</button>
@@ -781,7 +796,7 @@ function RetentionPanel({ retention, onAction, onRequestAction }: { retention: R
       <h2 id="retention-title" className="text-base font-semibold">Manual audit cleanup</h2>
       <p className="mt-1 text-xs leading-relaxed text-slate-400">Remove completed terminal input older than selected age. Administrator action records stay.</p>
       <label className="mt-5 block text-xs text-slate-400" htmlFor="retention-days">Delete input older than</label>
-      <input id="retention-days" type="number" min={7} max={3650} value={days} onChange={event => setDays(Number(event.target.value))} className="mt-1 w-32 rounded border border-surface-700 bg-surface-900 px-2 py-1.5 text-sm text-slate-200 outline-none focus:border-brand-500" />
+      <input id="retention-days" type="number" min={7} max={3650} value={days} onChange={event => setDays(Number(event.target.value))} className="transition-colors mt-1 w-32 rounded border border-surface-700 bg-surface-900 px-2 py-1.5 text-sm text-slate-200 outline-none focus:border-brand-500" />
       <div className="mt-4 rounded border border-surface-800 bg-surface-900 p-3 text-xs text-slate-400">
         <dl className="grid gap-2 sm:grid-cols-3">
           <div><dt className="text-slate-400">Eligible rows</dt><dd className="text-slate-200">{retention?.eligible_count ?? '—'}</dd></div>

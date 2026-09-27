@@ -58,7 +58,7 @@ export default function CommandPalette({ tabs, activeTabId, canSplit, canBroadca
   }
 
   return (
-    <Dialog label="Command Palette" onClose={onClose} initialFocus={inputRef} align="top" scrimClassName="bg-black/65 backdrop-blur-[2px]" className="max-w-xl p-0">
+    <Dialog label="Command Palette" onClose={onClose} initialFocus={inputRef} align="top" scrimClassName="bg-black/65 backdrop-blur-[2px]" className="max-w-xl !p-0">
         <div className="border-b border-surface-700 px-4 py-3">
           <h2 className="text-sm font-semibold text-slate-200">Command Palette</h2>
         </div>

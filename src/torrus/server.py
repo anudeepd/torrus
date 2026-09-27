@@ -39,7 +39,6 @@ from torrus.sftp_manager import SFTPError, SFTPManager, SFTPSink
 from torrus.ssh_manager import SSHManager
 from torrus.upload_engine import (
     AuthContext,
-    UploadSinkError,
     UploadStore,
     UploadTarget,
     create_upload_router,
@@ -244,7 +243,10 @@ async def add_app_security_headers(request: Request, call_next):
         # ldapgate sets these on the paths it proxies; without it nothing did.
         response.headers.setdefault("X-Frame-Options", "DENY")
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
-        response.headers.setdefault("Referrer-Policy", "no-referrer")
+        # ldapgate's logout CSRF check rejects a POST with no Referer, and the
+        # SPA submits logout as a same-origin form POST, so the policy must keep
+        # sending a same-origin referrer (cross-site ones are still suppressed).
+        response.headers.setdefault("Referrer-Policy", "same-origin")
     if request.url.path.startswith("/assets/"):
         response.headers.setdefault("Cache-Control", HASHED_ASSET_CACHE_CONTROL)
     if request.url.path.startswith("/api/admin/"):
@@ -555,15 +557,19 @@ _admin_stream_lock = asyncio.Lock()
 # Combined ASGI app — uvicorn runs this
 app = socketio.ASGIApp(sio, other_asgi_app=fastapi_app)
 
-_IO_WORKERS = max(32, min(128, (os.cpu_count() or 4) * 8))
+# Every live session parks one worker in its blocking channel read and can have
+# one more in a send, so the pool has to cover two per session at the ceiling,
+# plus headroom for connects, resizes and keepalives: below that, a keystroke
+# waits behind another tab's idle read until that read returns. Threads are
+# only started on demand, so an idle server does not pay for the ceiling.
+_IO_WORKERS = max(2 * _MAX_SSH_SESSIONS + 32, min(128, (os.cpu_count() or 4) * 8))
 
 
 def _forget_output_tail(session_id: str, tab_id: str) -> None:
     """Drop the prompt-detection state for a tab once its buffers are gone."""
-    for key in list(_output_tails):
-        if key[1:] == (session_id, tab_id):
-            del _output_tails[key]
-            _sensitive_prompt_pending.discard(key)
+    key = (session_id, tab_id)
+    _output_tails.pop(key, None)
+    _sensitive_prompt_pending.discard(key)
 
 
 async def _cleanup_ssh_input_buffer(session_id: str, tab_id: str) -> None:
@@ -587,13 +593,14 @@ _SENSITIVE_PROMPT_RE = re.compile(
     re.IGNORECASE,
 )
 _PROMPT_TAIL_CHARS = 256
-_output_tails: dict[tuple[str, str, str], str] = {}
-_sensitive_prompt_pending: set[tuple[str, str, str]] = set()
+# Keyed by (session_id, tab_id), not by socket: the prompt belongs to the SSH
+# session, which outlives a socket reconnect, and the output callback carries no
+# socket id to key it by.
+_output_tails: dict[tuple[str, str], str] = {}
+_sensitive_prompt_pending: set[tuple[str, str]] = set()
 
 
-def _note_output_for_redaction(
-    key: tuple[str, str, str], output_data: bytes
-) -> None:
+def _note_output_for_redaction(key: tuple[str, str], output_data: bytes) -> None:
     """Track the tail of a session's output so a prompt can be recognised."""
     tail = _output_tails.get(key, "") + output_data.decode("utf-8", errors="replace")
     tail = tail[-_PROMPT_TAIL_CHARS:]
@@ -611,9 +618,7 @@ async def _record_ssh_output_audit(
         for key, buffer in _input_buffers.items():
             if key[1:] == (session_id, tab_id):
                 buffer.observe_output(output_data)
-        for key in list(_output_tails):
-            if key[1:] == (session_id, tab_id):
-                _note_output_for_redaction(key, output_data)
+        _note_output_for_redaction((session_id, tab_id), output_data)
 
 
 sftp_manager = SFTPManager(max_workers=max(16, min(64, (os.cpu_count() or 4) * 4)))
@@ -2252,8 +2257,8 @@ async def _record_ssh_input_audit(
     async with _input_buffer_lock:
         key = (sid, session_id, tab_id)
         # Answering the prompt consumes it; the client hint can only ever add.
-        if key in _sensitive_prompt_pending or sensitive:
-            _sensitive_prompt_pending.discard(key)
+        if (session_id, tab_id) in _sensitive_prompt_pending or sensitive:
+            _sensitive_prompt_pending.discard((session_id, tab_id))
             sensitive = True
         if sensitive:
             previous = _input_buffers.pop(key, None)
@@ -2492,7 +2497,7 @@ async def on_ssh_clone(sid, data):
         await sio.emit(
             "ssh:error",
             {
-                "new_tab_id": new_tab_id,
+                "tab_id": new_tab_id,
                 "message": "The server is at its session limit. Close a session and try again.",
                 "code": "capacity_reached",
             },
@@ -2784,8 +2789,11 @@ async def on_sftp_delete(sid, data):
         await _emit_sftp_error(
             sid,
             tab_id,
-            "too_many_paths",
-            f"At most {_MAX_SFTP_BATCH_PATHS} paths can be deleted at once.",
+            SFTPError(
+                "too_many_paths",
+                f"At most {_MAX_SFTP_BATCH_PATHS} paths can be deleted at once.",
+            ),
+            "delete",
         )
         return
     results = []
@@ -3131,6 +3139,13 @@ async def _upload_open_target(request: Request, body) -> UploadTarget:
 
 
 async def _upload_open_sink(target: UploadTarget) -> SFTPSink:
+    """Open the sink for a session, or refuse it with the HTTP envelope.
+
+    The engine catches ``HTTPException`` around every ``open_sink`` call and
+    ``UploadSinkError`` only around a streamed write, so an SFTP failure here
+    must surface as the former: as the latter it escapes the engine as a bare
+    500 and leaves the session registered and marked closing.
+    """
     try:
         return await sftp_manager.open_upload_sink(
             target.extra["tab_id"],
@@ -3141,10 +3156,9 @@ async def _upload_open_sink(target: UploadTarget) -> SFTPSink:
             expected_session_id=target.extra["session_id"],
         )
     except SFTPError as exc:
-        raise UploadSinkError(
-            exc.message,
-            code=exc.code,
-            status=_sftp_status_for(exc) if exc.code != "CONNECTION_CLOSED" else 502,
+        raise HTTPException(
+            status_code=_sftp_status_for(exc) if exc.code != "CONNECTION_CLOSED" else 502,
+            detail=exc.message,
         ) from exc
 
 

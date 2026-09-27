@@ -111,7 +111,7 @@ function SlotPicker({ slotIndex, tabIds, tabs, onChange }: {
     <div className="flex items-center gap-2">
       <span className="text-xs text-slate-400 w-12 flex-shrink-0">Slot {slotIndex + 1}</span>
       <select
-        className="flex-1 bg-surface-800 border border-surface-600 rounded px-2 py-1 text-xs text-slate-200 focus:outline-none focus:border-brand-500"
+        className="flex-1 bg-surface-800 border border-surface-600 rounded px-2 py-1 text-xs text-slate-200 transition-colors focus:outline-none focus:border-brand-500"
         value={tabIds[slotIndex] ?? ''}
         onChange={e => onChange(slotIndex, e.target.value)}
       >
@@ -157,7 +157,7 @@ export default function LayoutPickerModal({ tabs, onApply, onClose }: Props) {
   }
 
   return (
-    <Dialog label="Split layout" onClose={onClose} className="w-[520px] p-0">
+    <Dialog label="Split layout" onClose={onClose} className="w-[520px] !p-0">
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-surface-800">
           <h2 className="text-sm font-semibold text-slate-200">Split layout</h2>

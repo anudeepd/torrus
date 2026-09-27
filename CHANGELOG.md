@@ -1,5 +1,158 @@
 # Changelog
 
+## [0.2.52] - 2026-09-27
+
+### Fixed
+
+- **The server-side redaction backstop never ran.** `_record_ssh_output_audit`
+  only fed the prompt detector keys that were already in `_output_tails`, and
+  the only writer of that map was the detector itself, so it stayed empty and
+  `_sensitive_prompt_pending` was never populated from output. Input answering a
+  password/sudo/mysql prompt from a client that does not send `sensitive: true`
+  was buffered as an ordinary command and stored in the clear. Prompt state is
+  now keyed by `(session_id, tab_id)` — the SSH session, which outlives a socket
+  reconnect and is all the output callback knows — and the detector is fed
+  directly. `_sensitive_prompt_pending` and `_forget_output_tail` follow.
+- **A blank page when a code-split chunk fails to load.** The lazy
+  `AdminConsole`, `TerminalPane` and `SFTPBrowser` chunks were rendered inside
+  `Suspense` with no error boundary, so a rejected dynamic import (stale shell,
+  refused fetch) unmounted the whole React root. `PaneErrorBoundary` (extracted
+  from the split pane's) now wraps all three, with a reload affordance.
+- **The command palette and the two pickers rendered with a 20 px inset.**
+  `Dialog`'s default `p-5` beat the consumers' `p-0` on stylesheet order,
+  because classes are concatenated rather than merged. The three full-bleed
+  panels now override it explicitly (`!p-0`, documented on `Dialog`), and the
+  session dialog's `p-6` is marked the same way.
+- **Clicking a tab did not leave a broadcast-owned split.** `TabBar` was wired
+  to the raw `setActiveTab` store action, so only the command palette ran
+  `AppLayout.handleSetActiveTab`, which tears the split down. Activation now
+  goes through the shell again, as its own `TabBarActions.setActiveTab`.
+- **The tab rename field lost its arrow keys.** The tab strip's keydown handler
+  claimed ArrowLeft/ArrowRight without checking the event target, so an arrow
+  press inside the inline rename field moved the caret nowhere, activated the
+  neighbouring tab, and blurred the field — discarding the edit.
+- **Escape in a tab's context menu left focus on `<body>`.** The dismiss layer
+  consumes Escape on window capture and stops propagation, so the menu's own
+  handler (which restored focus) never ran; the restore moved into the dismiss
+  callback. The rename field also prefilled from a `tabs` list frozen at first
+  render, dropping the `(N)` disambiguator.
+- **An upload stalled forever if a window was abandoned.** The streaming sink
+  blocked a window that arrived ahead of its turn, but the engine stops reading
+  a request body while its write blocks and only re-plans an abandoned window
+  after every request in flight has settled — so a client that halves a window
+  after two retryable failures (a DLP stall, a proxy 502, a dropped response)
+  could never fill the gap it left. Out-of-order windows are now held in a
+  bounded buffer and streamed as the head reaches them, and `finalize` refuses
+  to publish bytes still held behind a hole rather than renaming a short file.
+- **A failed publish destroyed the file it was replacing.** The posix-rename
+  fallback removed the destination before it knew the rename would succeed, so a
+  connection drop or a read-only directory between the two requests lost the
+  user's file. The destination is now moved aside (to a hidden, per-session
+  name) and restored if the staging file cannot take its place, and a directory
+  at the destination is refused rather than displaced.
+- **A closed SSH send window killed the tab.** `Channel.settimeout` bounds sends
+  as well as reads, so with the shorter read poll a remote that stopped reading
+  for a second — a slow disk behind `cat`, a program that had not read its input
+  yet — raised `socket.timeout` out of the write path, which the session handler
+  treated as a dead connection and tore the tab down. The send loop now waits
+  for the window to reopen, the way a terminal does.
+- **`sftp:delete` refused more than 500 paths by raising.** The cap branch passed
+  a code and message where `_emit_sftp_error` expects an `SFTPError` and an
+  operation, so the handler raised `AttributeError` and the client received
+  neither a result nor an error.
+- **A clone refused at the session ceiling hung on "Connecting…".** The refusal
+  was emitted under `new_tab_id`, which no client handler routes on, instead of
+  `tab_id`.
+- **`Referrer-Policy: no-referrer` broke LDAP logout.** ldapgate's logout
+  handler rejects a POST whose `Referer` is absent, and the SPA submits logout as
+  a same-origin form POST that inherits the document policy. The header is now
+  `same-origin` (cross-site referrers are still suppressed), which is also
+  stricter than ldapgate's own `strict-origin-when-cross-origin` where it
+  applies.
+- **One unparseable `known_hosts` line refused every connection, silently.**
+  Both `HostKeys` loads caught only `OSError`, but paramiko raises
+  `InvalidHostKey` for an OpenSSH marker (`@cert-authority`, `@revoked`) or a
+  malformed key field and `UnicodeDecodeError` for a non-UTF-8 line — neither is
+  an `OSError`, so the exception escaped `SSHManager.connect` before any error
+  handler and the tab waited on "Connecting…" forever. An unreadable store is
+  now a warning and the connect continues.
+- **A zero-byte upload whose sink could not be opened returned a bare 500.** The
+  new publish path calls `open_sink`, which torrus maps to `UploadSinkError`
+  while the engine only catches `HTTPException` there, so the error escaped the
+  route and left the session registered and marked `closing`. The adapter now
+  raises `HTTPException`, which is also what keeps the first window's open
+  failure inside the error envelope.
+- **A tab's lock could be forgotten while a request still held it.** `close_sftp`
+  popped the tab's lock after releasing it, so a coroutine already queued on that
+  lock and a later one that created a fresh lock could drive the same paramiko
+  SFTP client at once. The lock entry now carries its user count and is dropped
+  only when the last user is done.
+- **A press rule silently cancelled every button's hover fade.** `.motion-press`
+  declares its transition with the `transition` shorthand, which outranks the
+  `transition-colors` utility on the same element, so narrowing it to `transform`
+  in 0.2.51 left `Button` with no colour transition at all — hover changes snapped
+  while every sibling control still faded. The rule carries `transform`, `color`
+  and `background-color` again and owns them outright, and
+  `frontend/test/motion-imports.test.ts` (restored: it was deleted in 0.2.51) now
+  fails if the rule stops covering the properties the buttons change.
+
+- **A keystroke could queue behind another tab's idle read for 30 s.** The
+  channel read timeout was raised from 0.1 s to 30 s while the SSH pool stayed
+  sized by CPU count, so on a small host more sessions could be parked in a read
+  than the pool has workers. The hold is 1 s and the pool now covers the session
+  ceiling the README documents.
+- **Re-registering a layout duplicated terminal scrollback.** Applying a layout
+  or a broadcast re-emitted `session:register` for every tab it contains, and the
+  server replayed that session's whole output buffer into an `xterm` that already
+  held it; the shell now registers only the tabs that are not attached yet.
+- **Closing the active pane could strand the shell outside its split.** The shell
+  fell back to a single view of a tab that was no longer in the focused layout;
+  the focused layout's tab is re-activated instead.
+- **Logging out raised the browser's "leave site?" prompt.** `AppLayout` cleared
+  its beforeunload guard on redirect events but not on logout, so the native
+  prompt — and cancelling it — left the user under the non-dismissable "Signing
+  out" overlay. It now listens for `AUTH_LOGOUT_EVENT` too.
+- **A window (`PUT`) or `complete` that arrived after a session began closing
+  wrote into a sink whose file was already being published.** Both paths now
+  answer 409 `Upload session is closing` once the session is marked closing.
+
+### Motion
+
+- **Motion the audit pass had left out.** Surfaces that appeared or disappeared
+  with no transition now use the app's tokens (`fade`/`surface` +
+  `exitTransition`/`surfaceTransition`, `@keyframes torrus-tab-content-in`):
+  the admin console's notice and error banners, the session sidebar's import
+  banners, the field-error lines in `Input`, the session editor and the save
+  dialog, the find bar's "No match" badge, the admin session-details panel and
+  the expanded activity input, the file-list skeleton and empty state, the SFTP
+  selection toolbar, and saved-session and file rows (exit-only for the file
+  listing, so a large directory pays for no enter animation), plus the admin
+  console's table viewport, whose height now eases with `transition-[max-height]`
+  when a row is expanded.
+- **A layout swap could leave the panes blank.** Wrapping the main area's three
+  branches in one `AnimatePresence` kept the outgoing branch mounted while the
+  incoming one already ran: terminal panes adopt their cached xterm node on
+  mount, so the outgoing pane's cleanup detached the node the live pane had just
+  taken over, and every terminal in the app rendered empty (measured: 9 attached
+  terminals before entering split, 0 after, and only 7 recovered on exit). The
+  swap is sequenced (`mode="wait"`, so the outgoing branch is gone before the
+  incoming one mounts) and the cache detach now checks ownership before it
+  removes anything.
+- **The compact sessions drawer animated in but not out.** It returned `null`
+  whenever it was closed, including while a parent `AnimatePresence` was playing
+  its exit, so the declared slide-out never ran; it stays rendered during the
+  exit now (`useIsPresent()`) and closes with the same slide and scrim fade it
+  opens with.
+- **Controls that snapped while their siblings faded.** `SFTPBrowser` had no
+  `transition-colors` anywhere (breadcrumbs, path buttons, column headers, rows,
+  menus) and the same omission covered the admin console's inputs and link, the
+  split-layout select, the focused-pane outline, the transfer queue's row
+  buttons, the terminal find bar's three buttons and the three error-fallback
+  buttons; the active-tab underline's `exit`
+  never ran, and the tab strip's empty state and single/split shells swapped
+  instantly.
+
+
 ## [0.2.51] - 2026-09-22
 
 ### Security

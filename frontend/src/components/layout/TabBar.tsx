@@ -15,7 +15,7 @@ import { useDismissLayer } from '@/lib/dismissLayers'
 import { tabDisplayName } from '@/lib/tabName'
 import { AnimatePresence } from 'motion/react'
 import * as m from 'motion/react-m'
-import { anchoredSurface, exitTransition, surfaceSpring } from '@/motion/tokens'
+import { anchoredSurface, exitTransition, fade, surfaceSpring, surfaceTransition } from '@/motion/tokens'
 
 /**
  * Everything the bar can ask the shell to do. They stay owned by AppLayout
@@ -36,6 +36,7 @@ export interface TabBarActions {
   exitSplit: () => void
   toggleSidebar: () => void
   openCommandPalette: () => void
+  setActiveTab: (id: string) => void
 }
 
 interface TabBarProps {
@@ -126,7 +127,9 @@ function SaveSessionDialog({ state, onSave, onClose }: {
               spellCheck={false}
             />
           </div>
-          {error && <p className="text-xs text-red-400 text-center">{error}</p>}
+          <AnimatePresence initial={false}>
+            {error && <m.p {...fade} transition={exitTransition} className="text-xs text-red-400 text-center">{error}</m.p>}
+          </AnimatePresence>
           <div className="flex gap-2">
             <button
               type="button"
@@ -152,7 +155,9 @@ export default function TabBar({ actions, inSplitMode, compactSidebar = false, s
   const activeTabId = useTerminalStore(s => s.activeTabId)
   const renameTab = useTerminalStore(s => s.renameTab)
   const moveTab = useTerminalStore(s => s.moveTab)
-  const onSetActiveTab = useTerminalStore(s => s.setActiveTab)
+  // Activated through the shell's handler, not the raw store setter: leaving a
+  // broadcast-owned split is that handler's job.
+  const onSetActiveTab = actions.setActiveTab
   const [draggedTabId, setDraggedTabId] = useState<string | null>(null)
   const addServer = useSavedServerStore(s => s.addServer)
   const ldapEnabled = useServerConfigStore(s => s.ldapEnabled)
@@ -214,7 +219,13 @@ export default function TabBar({ actions, inSplitMode, compactSidebar = false, s
     return () => document.removeEventListener('mousedown', handleClick)
   }, [contextMenu])
 
-  useDismissLayer(!!contextMenu, () => setContextMenu(null))
+  // Escape never reaches the menu's own keydown handler: the dismiss layer runs
+  // on window capture and stops propagation, so focus is restored here.
+  useDismissLayer(!!contextMenu, () => {
+    const tabId = contextMenu?.tabId
+    setContextMenu(null)
+    if (tabId) tabRefs.current[tabId]?.focus()
+  })
 
   // Take focus so Escape and the arrow keys reach the menu instead of xterm.
   useEffect(() => {
@@ -226,7 +237,7 @@ export default function TabBar({ actions, inSplitMode, compactSidebar = false, s
     setEditingTabId(tab.id)
     setEditValue(tabDisplayName(tab, tabs))
     setContextMenu(null)
-  }, [])
+  }, [tabs])
 
   const confirmEdit = useCallback(() => {
     if (editingTabId) {
@@ -291,6 +302,9 @@ export default function TabBar({ actions, inSplitMode, compactSidebar = false, s
           role="tablist"
           aria-label="Open tabs"
           onKeyDown={(event) => {
+            // The rename field lives inside this tablist; its own arrow keys
+            // move the caret, so the strip must not claim them while it's open.
+            if (editingTabId && event.target === editInputRef.current) return
             // WCAG 2.5.7: reordering is also available without dragging.
             if (event.altKey && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
               const focusedId = (document.activeElement as HTMLElement | null)?.dataset.tabId ?? null
@@ -362,9 +376,11 @@ export default function TabBar({ actions, inSplitMode, compactSidebar = false, s
                   : 'text-slate-400 hover:text-slate-300 hover:bg-surface-800'
               )}
             >
-              {activeTabId === tab.id && (
-                <m.span initial={{ opacity: 0, scaleX: 0.65 }} animate={{ opacity: 1, scaleX: 1 }} exit={{ opacity: 0 }} className="pointer-events-none absolute inset-x-0 top-0 h-0.5 origin-center bg-brand-500" />
-              )}
+              <AnimatePresence initial={false}>
+                {activeTabId === tab.id && (
+                  <m.span initial={{ opacity: 0, scaleX: 0.65 }} animate={{ opacity: 1, scaleX: 1 }} exit={{ opacity: 0 }} transition={surfaceTransition} className="pointer-events-none absolute inset-x-0 top-0 h-0.5 origin-center bg-brand-500" />
+                )}
+              </AnimatePresence>
               {editingTabId === tab.id ? (
                 <input
                   ref={editInputRef}

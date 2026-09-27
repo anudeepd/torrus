@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 
 
 def test_dev_socket_origins_allow_local_torrus_server():
@@ -831,6 +832,43 @@ class TestGlobalSessionCeiling:
         )
 
         manager.connect.assert_called_once()
+
+
+class TestSshPoolSizing:
+    def test_the_pool_covers_the_session_ceiling(self):
+        """Every live session parks a worker in its read and may need one to send."""
+        import torrus.server as server_module
+
+        assert server_module._IO_WORKERS > 2 * server_module._MAX_SSH_SESSIONS
+
+
+class TestUploadSinkEnvelope:
+    @pytest.mark.asyncio
+    async def test_a_refused_open_uses_the_http_envelope(self, monkeypatch):
+        """The engine catches HTTPException around open_sink, not UploadSinkError."""
+        import torrus.server as server_module
+        from torrus.sftp_manager import SFTPError
+        from torrus.upload_engine import UploadTarget
+
+        manager = MagicMock()
+        manager.open_upload_sink = AsyncMock(
+            side_effect=SFTPError("CONNECTION_CLOSED", "SSH connection lost.")
+        )
+        monkeypatch.setattr(server_module, "sftp_manager", manager)
+
+        target = UploadTarget(
+            session_id="sess1",
+            user="alice",
+            directory="/home/app",
+            filename="a.bin",
+            size=0,
+            extra={"session_id": "sess1", "tab_id": "tab1"},
+        )
+
+        with pytest.raises(HTTPException) as excinfo:
+            await server_module._upload_open_sink(target)
+
+        assert excinfo.value.status_code == 502
 
 
 class TestPrivateHostPolicy:

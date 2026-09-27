@@ -268,7 +268,11 @@ async def test_sftp_lock_is_released_when_its_tab_closes():
     manager._sessions["tab1"] = SimpleNamespace(
         session_id="sess1", tab_id="tab1", client=MagicMock(), cwd="/home/app"
     )
-    manager._locks["tab1"] = asyncio.Lock()
+
+    # Held for exactly as long as a request is in flight, no longer.
+    async with manager._tab_lock("tab1"):
+        assert "tab1" in manager._locks
+    assert "tab1" not in manager._locks
 
     await manager.close_sftp("tab1")
 
@@ -353,15 +357,17 @@ async def test_upload_store_eviction_aborts_after_releasing_the_lock():
 async def test_server_redacts_input_after_a_prompt_the_client_did_not_flag(monkeypatch):
     """Redaction must not depend on the audited client marking its own input."""
     import torrus.server as server_module
-    from torrus.server import _note_output_for_redaction, _record_ssh_input_audit
-
-    key = ("sid", "sess", "tab")
-    server_module._output_tails[key] = ""
-    _note_output_for_redaction(key, b"root@db01's password:")
-    assert key in server_module._sensitive_prompt_pending
+    from torrus.server import _record_ssh_input_audit, _record_ssh_output_audit
 
     recorded = MagicMock()
     monkeypatch.setattr(server_module.audit_store, "record_sensitive_event", recorded)
+    recorded_command = MagicMock()
+    monkeypatch.setattr(
+        server_module.audit_store, "record_command_event", recorded_command
+    )
+
+    await _record_ssh_output_audit("sess", "tab", b"root@db01's password:")
+    assert ("sess", "tab") in server_module._sensitive_prompt_pending
 
     await _record_ssh_input_audit(
         sid="sid",
@@ -374,16 +380,59 @@ async def test_server_redacts_input_after_a_prompt_the_client_did_not_flag(monke
     )
 
     recorded.assert_called_once()
+    recorded_command.assert_not_called()
     # Answering the prompt consumes it, so the next command is a command again.
-    assert key not in server_module._sensitive_prompt_pending
+    assert ("sess", "tab") not in server_module._sensitive_prompt_pending
 
 
-def test_ordinary_output_does_not_mark_a_prompt():
+@pytest.mark.asyncio
+async def test_ordinary_output_does_not_mark_a_prompt(monkeypatch):
     import torrus.server as server_module
-    from torrus.server import _note_output_for_redaction
+    from torrus.server import _record_ssh_output_audit
 
-    key = ("sid", "sess", "tab2")
-    server_module._output_tails[key] = ""
-    _note_output_for_redaction(key, b"total 4\n-rw-r--r-- 1 root root 9 readme.txt\n")
+    recorded = MagicMock()
+    monkeypatch.setattr(server_module.audit_store, "record_sensitive_event", recorded)
 
-    assert key not in server_module._sensitive_prompt_pending
+    await _record_ssh_output_audit(
+        "sess2", "tab2", b"total 4\n-rw-r--r-- 1 root root 9 readme.txt\n"
+    )
+
+    assert ("sess2", "tab2") not in server_module._sensitive_prompt_pending
+
+    from torrus.server import _record_ssh_input_audit
+
+    await _record_ssh_input_audit(
+        sid="sid",
+        session_id="sess2",
+        tab_id="tab2",
+        input_data=b"ls -la\r",
+        target=("db01", 22, "root"),
+        owner="alice",
+        sensitive=False,
+    )
+    recorded.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_a_prompt_split_across_reads_is_still_recognised(monkeypatch):
+    """A terminal prompt arrives in fragments; the tail must survive the splits."""
+    import torrus.server as server_module
+    from torrus.server import _record_ssh_input_audit, _record_ssh_output_audit
+
+    recorded = MagicMock()
+    monkeypatch.setattr(server_module.audit_store, "record_sensitive_event", recorded)
+
+    await _record_ssh_output_audit("sess3", "tab3", b"Password")
+    await _record_ssh_output_audit("sess3", "tab3", b":")
+    assert ("sess3", "tab3") in server_module._sensitive_prompt_pending
+
+    await _record_ssh_input_audit(
+        sid="sid",
+        session_id="sess3",
+        tab_id="tab3",
+        input_data=b"secret\n",
+        target=("db01", 22, "root"),
+        owner="alice",
+        sensitive=False,
+    )
+    recorded.assert_called_once()

@@ -354,7 +354,8 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
 
   // Create or reuse xterm.js terminal
   useEffect(() => {
-    if (!containerRef.current || termRef.current) return
+    const container = containerRef.current
+    if (!container || termRef.current) return
 
     const { scrollbackLines, fontSize } = useSettingsStore.getState()
 
@@ -370,13 +371,13 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
       } catch {
         console.warn("Failed to preload JetBrains Mono font; terminal may use fallback")
       }
-      if (cancelled || !containerRef.current || termRef.current) return
+      if (cancelled || termRef.current) return
 
       clearPendingDispose(tabId)
       const cached = terminalCache.get(tabId)
       if (cached) {
         // Reuse existing terminal (e.g. remounting after exiting split mode)
-        containerRef.current.appendChild(cached.container)
+        container.appendChild(cached.container)
         termRef.current = cached.term
         fitRef.current = cached.fitAddon
         installCustomKeyHandler(cached.term)
@@ -405,11 +406,11 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
 
         ro = new ResizeObserver(() => {
           const currentTab = useTerminalStore.getState().tabs.find(t => t.id === tabId)
-          if (currentTab?.status === 'connected' && isVisibleTerminalContainer(containerRef.current)) {
+          if (currentTab?.status === 'connected' && isVisibleTerminalContainer(container)) {
             scheduleFitAndEmitResize(cached.term, cached.fitAddon)
           }
         })
-        ro.observe(containerRef.current)
+        ro.observe(container)
 
         fitAndEmitResize(cached.term, cached.fitAddon)
 
@@ -420,7 +421,7 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
       } else {
         const termContainer = document.createElement('div')
         termContainer.className = 'absolute inset-0'
-        containerRef.current.appendChild(termContainer)
+        container.appendChild(termContainer)
 
         const term = new Terminal({
           minimumContrastRatio: 4.5,
@@ -518,11 +519,11 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
 
         ro = new ResizeObserver(() => {
           const currentTab = useTerminalStore.getState().tabs.find(t => t.id === tabId)
-          if (currentTab?.status === 'connected' && isVisibleTerminalContainer(containerRef.current)) {
+          if (currentTab?.status === 'connected' && isVisibleTerminalContainer(container)) {
             scheduleFitAndEmitResize(term, fitAddon)
           }
         })
-        ro.observe(containerRef.current)
+        ro.observe(container)
       }
     }
 
@@ -543,8 +544,11 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
       onDataDisposable?.dispose()
 
       const cached = terminalCache.get(tabId)
-      if (cached && cached.container.parentNode) {
-        cached.container.parentNode.removeChild(cached.container)
+      // Only detach the shared node while this pane still owns it: after a
+      // remount the successor has already adopted it, and removing it there
+      // would leave the live pane with no terminal in the DOM.
+      if (cached && container && cached.container.parentNode === container) {
+        container.removeChild(cached.container)
       }
 
       // If the tab was actually closed, dispose the cached terminal
@@ -884,14 +888,16 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
             aria-label="Find in terminal"
             className="h-7 w-44 rounded bg-surface-950 px-2 text-xs text-slate-200 outline-none placeholder:text-slate-400 focus:ring-1 focus:ring-brand-500"
           />
-          {findQuery && findResult === false && <span className="px-1 text-3xs text-amber-400">No match</span>}
-          <button type="button" onClick={() => search('previous')} title="Previous match (Shift+Enter)" aria-label="Previous match" className="rounded p-1 text-slate-400 hover:bg-surface-800 hover:text-slate-200">
+          <AnimatePresence initial={false}>
+            {findQuery && findResult === false && <m.span key="no-match" {...fade} transition={exitTransition} className="px-1 text-3xs text-amber-400">No match</m.span>}
+          </AnimatePresence>
+          <button type="button" onClick={() => search('previous')} title="Previous match (Shift+Enter)" aria-label="Previous match" className="rounded p-1 text-slate-400 transition-colors hover:bg-surface-800 hover:text-slate-200">
             <ChevronUp className="h-3.5 w-3.5" />
           </button>
-          <button type="button" onClick={() => search('next')} title="Next match (Enter)" aria-label="Next match" className="rounded p-1 text-slate-400 hover:bg-surface-800 hover:text-slate-200">
+          <button type="button" onClick={() => search('next')} title="Next match (Enter)" aria-label="Next match" className="rounded p-1 text-slate-400 transition-colors hover:bg-surface-800 hover:text-slate-200">
             <ChevronDown className="h-3.5 w-3.5" />
           </button>
-          <button type="button" onClick={closeFind} title="Close find (Esc)" aria-label="Close find" className="rounded p-1 text-slate-400 hover:bg-surface-800 hover:text-slate-200">
+          <button type="button" onClick={closeFind} title="Close find (Esc)" aria-label="Close find" className="rounded p-1 text-slate-400 transition-colors hover:bg-surface-800 hover:text-slate-200">
             <X className="h-3.5 w-3.5" />
           </button>
         </m.div>

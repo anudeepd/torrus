@@ -3,6 +3,7 @@ import { AnimatePresence } from 'motion/react'
 import * as m from 'motion/react-m'
 const AdminConsole = lazy(() => import('./components/admin/AdminConsole'))
 import AppLayout from './components/layout/AppLayout'
+import { PaneErrorBoundary, PaneErrorFallback } from './components/ui/PaneErrorBoundary'
 import { spatialTransition } from './motion/tokens'
 import { useServerConfigStore } from './store/serverConfigStore'
 import { redirectToLdapLogin } from './utils/authRedirect'
@@ -51,9 +52,11 @@ export default function App() {
           transition={spatialTransition}
           className="h-full"
         >
-          <Suspense fallback={<PaneFallback />}>
-            <AdminConsole onClose={closeAdmin} />
-          </Suspense>
+          <PaneErrorBoundary fallback={<PaneErrorFallback message="The admin console failed to load" />}>
+            <Suspense fallback={<PaneFallback />}>
+              <AdminConsole onClose={closeAdmin} />
+            </Suspense>
+          </PaneErrorBoundary>
         </m.div>
       ) : (
         <m.div

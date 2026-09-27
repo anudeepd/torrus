@@ -25,10 +25,12 @@ OUTPUT_BUFFER_MAX = 10 * 1024  # 10 KB replay buffer per session
 IDLE_TIMEOUT = 4 * 3600  # 4 hours
 KEEPALIVE_INTERVAL = 30  # seconds
 CLEANUP_INTERVAL = 300  # 5 minutes
-CHANNEL_READ_TIMEOUT = 30.0  # seconds: a short value re-submits to the pool every
-# 100 ms, which is the busy-wait it looks like it prevents. Idle sessions now
-# block until data, EOF, or this ceiling; the channel is closed on teardown,
-# which unblocks the reader immediately.
+CHANNEL_READ_TIMEOUT = 1.0  # seconds: a short value re-submits to the pool every
+# 100 ms, which is the busy-wait it looks like it prevents. Idle sessions block
+# until data, EOF, or this ceiling; the channel is closed on teardown, which
+# unblocks the reader immediately. The hold stays short because one worker is
+# parked per idle session, so the pool must be able to cover every session that
+# may be waiting on a read while another session's write needs a worker.
 CONNECTION_TIMEOUT = 20  # seconds — includes DNS and post-login probes
 INPUT_QUEUE_MAX_BYTES = 1_048_576
 INPUT_CHUNK_BYTES = 32 * 1024
@@ -38,6 +40,16 @@ CONTROL_WRITE_TIMEOUT = 3.0
 
 _HOST_KEY_POLICY_ENV = "TORRUS_SSH_HOST_KEY_POLICY"
 _KNOWN_HOSTS_ENV = "TORRUS_SSH_KNOWN_HOSTS"
+# paramiko raises these while loading: InvalidHostKey for an OpenSSH marker
+# (@cert-authority, @revoked) or a malformed key field, UnicodeDecodeError for a
+# non-UTF-8 line. None of them is an OSError, and none may abort a connect just
+# because the store holds a line this version cannot parse.
+_KNOWN_HOSTS_LOAD_ERRORS = (
+    OSError,
+    UnicodeDecodeError,
+    paramiko.hostkeys.InvalidHostKey,
+)
+
 def known_hosts_path() -> Path:
     """Where torrus records host keys it has been told to trust."""
     configured = os.getenv(_KNOWN_HOSTS_ENV)
@@ -61,8 +73,12 @@ def torrus_host_keys() -> paramiko.HostKeys:
     if Path(path).exists():
         try:
             keys.load(path)
-        except OSError:
-            logger.warning("Could not read the known_hosts store at %s", path)
+        except _KNOWN_HOSTS_LOAD_ERRORS:
+            logger.warning(
+                "Could not read the known_hosts store at %s; continuing without it",
+                path,
+                exc_info=True,
+            )
     return keys
 
 
@@ -269,13 +285,21 @@ class SSHManager:
         connection_succeeded = False
         try:
             client = paramiko.SSHClient()
-            try:
-                client.load_system_host_keys()
-            except OSError:
-                logger.warning("Could not read the system known_hosts file")
-            known = torrus_host_keys()
-            if known:
-                client.get_host_keys().update(known)
+
+            def _load_host_keys() -> None:
+                """Read both stores off the event loop; a large file is real I/O."""
+                try:
+                    client.load_system_host_keys()
+                except _KNOWN_HOSTS_LOAD_ERRORS:
+                    logger.warning(
+                        "Could not read the system known_hosts file; continuing without it",
+                        exc_info=True,
+                    )
+                known = torrus_host_keys()
+                if known:
+                    client.get_host_keys().update(known)
+
+            await asyncio.to_thread(_load_host_keys)
             client.set_missing_host_key_policy(HostKeyPolicy())
 
             loop = asyncio.get_running_loop()
@@ -1473,7 +1497,14 @@ def _blocking_send_all(channel: paramiko.Channel, data: bytes) -> None:
     while view:
         if channel.closed:
             raise ConnectionError("Channel closed")
-        sent = channel.send(view)
+        try:
+            sent = channel.send(view)
+        except TimeoutError:
+            # settimeout bounds both directions, so a send window that stays
+            # closed for the poll interval is control flow, not a dead session:
+            # the remote is not reading yet (a slow disk, a program that has not
+            # read its input). Waiting again is what a terminal would do.
+            continue
         if sent <= 0:
             raise ConnectionError("Failed to send data to remote host")
         view = view[sent:]

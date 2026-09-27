@@ -1,4 +1,7 @@
 import { type InputHTMLAttributes, forwardRef, useId, useState } from 'react'
+import { AnimatePresence } from 'motion/react'
+import * as m from 'motion/react-m'
+import { exitTransition, fade } from '@/motion/tokens'
 import { Eye, EyeOff } from 'lucide-react'
 import clsx from 'clsx'
 
@@ -55,7 +58,9 @@ const Input = forwardRef<HTMLInputElement, InputProps>(
             </button>
           )}
         </div>
-        {error && <p id={errorId} role="alert" className="text-xs text-red-400">{error}</p>}
+        <AnimatePresence initial={false}>
+          {error && <m.p id={errorId} role="alert" {...fade} transition={exitTransition} className="text-xs text-red-400">{error}</m.p>}
+        </AnimatePresence>
       </div>
     )
   }

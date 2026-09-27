@@ -34,6 +34,12 @@ interface DialogProps {
  * The one modal shell: overlay, scrim, panel, focus trap, Escape, and the
  * enter/exit transitions. Every dialog in the app renders through this, so
  * focus, layering and reduced motion are fixed in one place.
+ *
+ * `className` carries width, padding and internal layout. The panel's `p-5` is
+ * the default for a dialog that does not set its own padding; because classes
+ * are concatenated rather than merged, a consumer that wants a different
+ * padding must mark it important (`!p-0`, `!p-6`) — otherwise `p-5` wins on
+ * stylesheet order regardless of where it appears in `className`.
  */
 export default function Dialog({
   onClose,

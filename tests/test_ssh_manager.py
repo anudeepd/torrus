@@ -626,3 +626,89 @@ def test_accept_new_records_the_key_in_the_managed_store(monkeypatch, tmp_path):
     assert client.get_host_keys().get("example.com") is not None
     assert "example.com" in store.read_text()
     assert store.stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.asyncio
+async def test_a_marker_line_in_the_system_known_hosts_does_not_abort_a_connect(
+    monkeypatch, tmp_path
+):
+    """paramiko raises InvalidHostKey (not OSError) for @cert-authority lines."""
+    import paramiko
+
+    from torrus.ssh_manager import SSHManager
+
+    ssh_dir = tmp_path / ".ssh"
+    ssh_dir.mkdir()
+    (ssh_dir / "known_hosts").write_text(
+        "@cert-authority *.example.com ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQ==\n"
+    )
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("TORRUS_SSH_KNOWN_HOSTS", str(tmp_path / "torrus-known_hosts"))
+
+    class Unreachable(paramiko.SSHClient):
+        def connect(self, *_args, **_kwargs):
+            raise paramiko.SSHException("stubbed transport failure")
+
+    monkeypatch.setattr("torrus.ssh_manager.paramiko.SSHClient", Unreachable)
+    sio = MagicMock()
+    sio.emit = AsyncMock()
+    manager = SSHManager(sio)
+
+    try:
+        await manager.connect(
+            sid="sid1",
+            session_id="sess1",
+            tab_id="tab1",
+            host="example.com",
+            port=22,
+            username="user",
+            password="pass",
+            cols=80,
+            rows=24,
+        )
+    finally:
+        await manager.stop_background_tasks()
+
+    # The unreadable line was skipped and the connect failed on its own terms.
+    assert sio.emit.await_args.args[0] == "ssh:error"
+    assert sio.emit.await_args.args[1]["code"] == "ssh_error"
+
+
+def test_the_managed_store_tolerates_lines_paramiko_cannot_parse(monkeypatch, tmp_path):
+    from torrus.ssh_manager import torrus_host_keys
+
+    store = tmp_path / "known_hosts"
+    monkeypatch.setenv("TORRUS_SSH_KNOWN_HOSTS", str(store))
+
+    store.write_text("@cert-authority *.example.com ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQ==\n")
+    assert len(torrus_host_keys()) == 0
+
+    store.write_bytes(b"\xff\xfe not utf-8\n")
+    assert len(torrus_host_keys()) == 0
+
+
+def test_a_closed_send_window_is_retried_instead_of_killing_the_session():
+    """settimeout bounds writes too, so a full remote window is not a failure."""
+    from torrus.ssh_manager import _blocking_send_all
+
+    class Window:
+        def __init__(self) -> None:
+            self.closed = False
+            self.sent = bytearray()
+            self.timeouts = 1
+
+        def send(self, data) -> int:
+            if self.timeouts:
+                self.timeouts -= 1
+                raise TimeoutError()
+            self.sent.extend(bytes(data))
+            return len(data)
+
+    window = Window()
+    _blocking_send_all(window, b"payload")
+    assert bytes(window.sent) == b"payload"
+
+    closed = Window()
+    closed.closed = True
+    with pytest.raises(ConnectionError):
+        _blocking_send_all(closed, b"payload")

@@ -16,12 +16,18 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    // `make dev` serves the backend on torrus's default port; every path the SPA
+    // reaches over HTTP or the socket has to be forwarded to it.
     proxy: {
       '/socket.io': {
-        target: 'http://127.0.0.1:8022',
+        target: 'http://127.0.0.1:8080',
         changeOrigin: true,
         ws: true,
       },
+      '/api': { target: 'http://127.0.0.1:8080', changeOrigin: true },
+      '/sftp': { target: 'http://127.0.0.1:8080', changeOrigin: true },
+      '/_upload': { target: 'http://127.0.0.1:8080', changeOrigin: true },
+      '/_auth': { target: 'http://127.0.0.1:8080', changeOrigin: true },
     },
   },
   build: {

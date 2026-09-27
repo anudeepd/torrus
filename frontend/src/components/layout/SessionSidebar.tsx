@@ -8,9 +8,9 @@ import { uuid } from '@/utils/uuid'
 import type { SavedServer } from '@/types'
 import { handleMenuKeyDown } from '@/lib/menuKeys'
 import { useDismissLayer } from '@/lib/dismissLayers'
-import { AnimatePresence } from 'motion/react'
+import { AnimatePresence, useIsPresent } from 'motion/react'
 import * as m from 'motion/react-m'
-import { anchoredSurface, exitTransition, spatialTransition } from '@/motion/tokens'
+import { anchoredSurface, exitTransition, fade, spatialTransition } from '@/motion/tokens'
 
 interface SessionSidebarProps {
   isOpen: boolean
@@ -96,7 +96,7 @@ function EditModal({ server, onSave, onClose }: EditModalProps) {
   const labelCls = 'text-xs text-slate-400 font-medium'
 
   return (
-    <Dialog label="Edit Session" onClose={onClose} className="w-80 gap-4 p-6">
+    <Dialog label="Edit Session" onClose={onClose} className="w-80 gap-4 !p-6">
         <div className="flex items-center gap-2">
           <Pencil className="w-4 h-4 text-brand-400" />
           <h2 className="text-sm font-semibold text-slate-200">Edit Session</h2>
@@ -152,7 +152,9 @@ function EditModal({ server, onSave, onClose }: EditModalProps) {
             />
           </div>
 
-          {error && <p className="text-xs text-red-400 text-center">{error}</p>}
+          <AnimatePresence initial={false}>
+            {error && <m.p {...fade} transition={exitTransition} className="text-xs text-red-400 text-center">{error}</m.p>}
+          </AnimatePresence>
 
           <div className="flex gap-2 pt-1">
             <button
@@ -177,6 +179,7 @@ function EditModal({ server, onSave, onClose }: EditModalProps) {
 // ── Main component ────────────────────────────────────────────────────────────
 
 export default function SessionSidebar({ isOpen, compact, onToggle, onLoadSession }: SessionSidebarProps) {
+  const isPresent = useIsPresent()
   const servers = useSavedServerStore(s => s.servers)
   const removeServer = useSavedServerStore(s => s.removeServer)
   const updateServer = useSavedServerStore(s => s.updateServer)
@@ -312,7 +315,9 @@ export default function SessionSidebar({ isOpen, compact, onToggle, onLoadSessio
   const selected = servers.find(s => s.id === selectedId)
 
   // ── Compact collapsed ────────────────────────────────────────────────────────
-  if (!isOpen && compact) return null
+  // Still render while a parent AnimatePresence plays the exit (`isPresent` is
+  // false exactly then), so closing the drawer animates instead of snapping.
+  if (!isOpen && compact && isPresent) return null
 
   // ── Compact full (overlay) ──────────────────────────────────────────────────
   if (compact) {
@@ -473,12 +478,15 @@ function SidebarInner({ onToggle, servers, selectedId, setSelectedId, selected, 
             <rect x="70" y="58" width="8" height="12" rx="1.5" fill="#10b981" />
           </svg>
         </div>
+        <AnimatePresence initial={false}>
         {servers.length === 0 ? (
-          <p className="px-3 py-4 text-xs text-slate-400 text-center leading-relaxed">No saved sessions.<br />Connect and click the bookmark icon to save one.</p>
+          <m.p key="no-servers" {...fade} transition={exitTransition} className="px-3 py-4 text-xs text-slate-400 text-center leading-relaxed">No saved sessions.<br />Connect and click the bookmark icon to save one.</m.p>
         ) : (
           servers.map(server => (
-            <div
+            <m.div
               key={server.id}
+              {...fade}
+              transition={exitTransition}
               onClick={() => setSelectedId(server.id)}
               onDoubleClick={() => { setSelectedId(server.id); onLoadSession(server) }}
               className={clsx(
@@ -491,9 +499,10 @@ function SidebarInner({ onToggle, servers, selectedId, setSelectedId, selected, 
                 <span className="text-xs font-medium text-slate-200 truncate flex-1">{server.name}</span>
               </div>
               <span className="text-xs text-slate-400 truncate pl-3 mt-0.5">{server.username}@{server.host}{server.port !== 22 ? `:${server.port}` : ''}</span>
-            </div>
+            </m.div>
           ))
         )}
+        </AnimatePresence>
       </div>
 
       {/* Action buttons */}
@@ -518,8 +527,10 @@ function SidebarInner({ onToggle, servers, selectedId, setSelectedId, selected, 
           </button>
           <input ref={fileInputRef} type="file" accept=".json" className="hidden" onChange={handleImport} />
         </div>
-        {importError && <p className="text-xs text-red-400 text-center leading-tight">{importError}</p>}
-        {importSuccess && <p className="text-xs text-green-400 text-center">Sessions imported.</p>}
+        <AnimatePresence initial={false}>
+          {importError && <m.p key="import-error" {...fade} transition={exitTransition} className="text-xs text-red-400 text-center leading-tight">{importError}</m.p>}
+          {importSuccess && <m.p key="import-success" {...fade} transition={exitTransition} className="text-xs text-green-400 text-center">Sessions imported.</m.p>}
+        </AnimatePresence>
       </div>
     </nav>
   )

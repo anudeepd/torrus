@@ -1,20 +1,12 @@
-import { readFileSync, readdirSync } from 'node:fs'
-import { join } from 'node:path'
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import tailwindConfig from '../tailwind.config.js'
 import { BREAKPOINTS } from '../src/lib/breakpoints'
 import { motionDuration, motionEase } from '../src/motion/tokens'
+import { sourceFiles } from './sourceFiles'
 
 const css = readFileSync('src/index.css', 'utf8')
 const theme = tailwindConfig.theme.extend
-
-function sourceFiles(directory: string): string[] {
-  return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
-    const path = join(directory, entry.name)
-    if (entry.isDirectory()) return sourceFiles(path)
-    return /\.(ts|tsx)$/.test(entry.name) && !entry.name.includes('.test.') ? [path] : []
-  })
-}
 
 describe('design tokens', () => {
   it('defines every surface and brand shade the source references', () => {

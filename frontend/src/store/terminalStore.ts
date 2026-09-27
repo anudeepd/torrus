@@ -1,6 +1,8 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import type { Tab, TabStatus } from '@/types'
+import { useLayoutStore, getLayoutTabIds } from '@/store/layoutStore'
+import { useBroadcastStore } from '@/store/broadcastStore'
 
 let _tabCounter = 0
 const _pageNonce = Date.now().toString(36) + Math.random().toString(36).slice(2, 6)
@@ -105,7 +107,22 @@ export const useTerminalStore = create<TerminalState>()(
 
       closeAllTabs: () => set({ tabs: [], activeTabId: null }),
 
-      setActiveTab: (id) => set({ activeTabId: id }),
+      setActiveTab: (id) => {
+        // Activating a tab outside a broadcast-owned split leaves that split
+        // visually abandoned while broadcast keeps driving its hidden panes;
+        // tear it down here so every caller (not just the ones that remember
+        // to route through a wrapper) gets this for free.
+        const { root } = useLayoutStore.getState()
+        if (root && !getLayoutTabIds(root).includes(id)) {
+          const { splitOwned, disable } = useBroadcastStore.getState()
+          if (splitOwned) {
+            useLayoutStore.getState().exitSplitMode()
+            disable()
+            useBroadcastStore.getState().setSplitOwned(false)
+          }
+        }
+        set({ activeTabId: id })
+      },
 
       moveTab: (fromId, toId) => set(s => {
         const fromIdx = s.tabs.findIndex(t => t.id === fromId)

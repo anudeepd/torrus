@@ -481,6 +481,31 @@ async def test_sftp_delete_returns_partial_results(reset_server_state):
 
 
 @pytest.mark.asyncio
+async def test_sftp_delete_refuses_more_paths_than_the_batch_limit(reset_server_state):
+    import torrus.server as server_module
+    from torrus.server import on_sftp_delete
+
+    sio_mock = MagicMock()
+    sio_mock.emit = AsyncMock()
+    server_module.sftp_manager = MagicMock()
+    server_module.sftp_manager.delete = AsyncMock()
+
+    paths = [f"file-{index}.txt" for index in range(server_module._MAX_SFTP_BATCH_PATHS + 1)]
+    with patch("torrus.server.sio", sio_mock):
+        await on_sftp_delete(
+            "sid-1",
+            {"session_id": "sess1", "tab_id": "tab1", "paths": paths},
+        )
+
+    server_module.sftp_manager.delete.assert_not_awaited()
+    sio_mock.emit.assert_awaited_once()
+    event, payload = sio_mock.emit.await_args.args[:2]
+    assert event == "sftp:error"
+    assert payload["code"] == "too_many_paths"
+    assert payload["operation"] == "delete"
+
+
+@pytest.mark.asyncio
 async def test_sftp_http_download_returns_error_before_stream(reset_server_state):
     import torrus.server as server_module
     from torrus.server import sftp_stream_download

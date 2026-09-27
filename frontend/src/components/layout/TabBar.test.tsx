@@ -19,6 +19,7 @@ const noopActions: TabBarActions = {
   exitSplit: () => {},
   toggleSidebar: () => {},
   openCommandPalette: () => {},
+  setActiveTab: () => {},
 }
 
 describe('TabBar', () => {
@@ -102,7 +103,7 @@ describe('TabBar', () => {
 
     render(
       <TabBar
-        actions={noopActions}
+        actions={{ ...noopActions, setActiveTab: id => useTerminalStore.getState().setActiveTab(id) }}
         inSplitMode={false}
       />,
     )
@@ -118,6 +119,69 @@ describe('TabBar', () => {
 
     expect(tabList.scrollLeft).toBe(80)
     frame.mockRestore()
+  })
+  it('leaves the arrow keys to the rename field inside the tab strip', () => {
+    const setActiveTab = vi.fn()
+    useTerminalStore.setState({
+      tabs: [
+        { id: 'tab-1', type: 'terminal', host: null, port: null, username: null, label: 'First', status: 'disconnected', sessionKey: 'session-1:tab-1' },
+        { id: 'tab-2', type: 'terminal', host: null, port: null, username: null, label: 'Second', status: 'disconnected', sessionKey: 'session-1:tab-2' },
+      ],
+      activeTabId: 'tab-1',
+    })
+
+    render(<TabBar actions={{ ...noopActions, setActiveTab }} inSplitMode={false} />)
+
+    // Double-click opens the inline rename field; the strip must not steal the
+    // arrow keys that move its caret, and must not cancel the edit.
+    fireEvent.doubleClick(screen.getByRole('tab', { name: /first/i }))
+    const field = screen.getByDisplayValue('First')
+    fireEvent.keyDown(field, { key: 'ArrowRight' })
+
+    expect(setActiveTab).not.toHaveBeenCalled()
+    expect(screen.getByDisplayValue('First')).toBe(field)
+  })
+
+  it('returns focus to the tab when its context menu is dismissed with Escape', () => {
+    useTerminalStore.setState({
+      tabs: [
+        { id: 'tab-1', type: 'terminal', host: null, port: null, username: null, label: 'Only', status: 'disconnected', sessionKey: 'session-1:tab-1' },
+      ],
+      activeTabId: 'tab-1',
+    })
+
+    render(<TabBar actions={noopActions} inSplitMode={false} />)
+
+    fireEvent.contextMenu(screen.getByRole('tab', { name: /only/i }))
+    expect(screen.getByRole('menu')).toBeTruthy()
+
+    // The dismiss layer consumes Escape on window capture, so the restore has
+    // to live in its callback rather than the menu's own keydown handler.
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    })
+
+    expect(screen.queryByRole('menu')).toBeNull()
+    expect(document.activeElement).toBe(screen.getByRole('tab', { name: /only/i }))
+  })
+  it('activates a tab through the shell handler, not the store directly', () => {
+    // The shell's handler leaves a broadcast-owned split; calling the store
+    // setter here skipped that teardown.
+    const setActiveTab = vi.fn()
+    useTerminalStore.setState({
+      tabs: [
+        { id: 'tab-1', type: 'terminal', host: null, port: null, username: null, label: 'A', status: 'disconnected', sessionKey: 'session-1:tab-1' },
+        { id: 'tab-2', type: 'terminal', host: null, port: null, username: null, label: 'B', status: 'disconnected', sessionKey: 'session-1:tab-2' },
+      ],
+      activeTabId: 'tab-1',
+    })
+
+    render(<TabBar actions={{ ...noopActions, setActiveTab }} inSplitMode={false} />)
+
+    fireEvent.click(screen.getByRole('tab', { name: /^b$/i }))
+
+    expect(setActiveTab).toHaveBeenCalledWith('tab-2')
+    expect(useTerminalStore.getState().activeTabId).toBe('tab-1')
   })
   it('shows the admin console button only to admin users', () => {
     const props = {

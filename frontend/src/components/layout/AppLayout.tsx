@@ -16,14 +16,15 @@ import Logo from '@/components/ui/Logo'
 import AuthRedirectOverlay from '@/components/ui/AuthRedirectOverlay'
 import CommandPalette from '@/components/ui/CommandPalette'
 import PendingCloseDialog from './PendingCloseDialog'
-import { AUTH_REDIRECT_EVENT, redirectToLdapLogin } from '@/utils/authRedirect'
+import { AUTH_LOGOUT_EVENT, AUTH_REDIRECT_EVENT, redirectToLdapLogin } from '@/utils/authRedirect'
 import { tabDisplayName } from '@/lib/tabName'
+import { PaneErrorBoundary, PaneErrorFallback } from '@/components/ui/PaneErrorBoundary'
 import { BREAKPOINTS, below } from '@/lib/breakpoints'
 import type { PaneNode } from '@/store/layoutStore'
 import type { SavedServer, Tab } from '@/types'
 import { AnimatePresence } from 'motion/react'
 import * as m from 'motion/react-m'
-import { fade, surfaceTransition } from '@/motion/tokens'
+import { exitTransition, fade, surfaceTransition } from '@/motion/tokens'
 
 const SESSION_RESTORE_RETRY_MS = 3_000
 
@@ -109,8 +110,11 @@ export default function AppLayout({ navigateToAdmin = () => window.location.assi
   const [splitPickerOpen, setSplitPickerOpen] = useState(false)
   const [broadcastPickerOpen, setBroadcastPickerOpen] = useState(false)
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
-  // true when split was initiated by broadcast — exiting broadcast exits split too
-  const [splitOwnedByBroadcast, setSplitOwnedByBroadcast] = useState(false)
+  // true when split was initiated by broadcast — exiting broadcast exits split
+  // too. Lives in broadcastStore (not local state) so terminalStore's
+  // setActiveTab can read/clear it for every caller, not just this component.
+  const splitOwnedByBroadcast = useBroadcastStore(s => s.splitOwned)
+  const setSplitOwnedByBroadcast = useBroadcastStore(s => s.setSplitOwned)
   const [pendingClose, setPendingClose] = useState<PendingClose>(null)
   const pendingCloseCancelRef = useRef<HTMLButtonElement>(null)
   const dismissPendingClose = useCallback(() => setPendingClose(null), [])
@@ -147,11 +151,17 @@ export default function AppLayout({ navigateToAdmin = () => window.location.assi
   }, [])
 
   useEffect(() => {
-    const onAuthRedirect = () => {
+    const onAuthNavigation = () => {
       skipBeforeUnloadRef.current = true
     }
-    window.addEventListener(AUTH_REDIRECT_EVENT, onAuthRedirect)
-    return () => window.removeEventListener(AUTH_REDIRECT_EVENT, onAuthRedirect)
+    // Logging out navigates on purpose too: a native "leave?" prompt there would
+    // strand the user under the non-dismissable "Signing out" overlay on Cancel.
+    window.addEventListener(AUTH_REDIRECT_EVENT, onAuthNavigation)
+    window.addEventListener(AUTH_LOGOUT_EVENT, onAuthNavigation)
+    return () => {
+      window.removeEventListener(AUTH_REDIRECT_EVENT, onAuthNavigation)
+      window.removeEventListener(AUTH_LOGOUT_EVENT, onAuthNavigation)
+    }
   }, [])
 
   // Socket.IO bypasses FastAPI middleware, so expired LDAP sessions are reported
@@ -261,6 +271,14 @@ export default function AppLayout({ navigateToAdmin = () => window.location.assi
     socket.emit('session:register', { session_id: sessionId, tab_id: tabId })
   }, [addTab, socket, sessionId])
 
+  // Closing the active tab's pane must keep a layout tab active, otherwise the
+  // shell falls back to the single view of a tab that is no longer in the split.
+  const keepLayoutTabActive = useCallback((closingTabId: string) => {
+    if (useTerminalStore.getState().activeTabId !== closingTabId) return
+    const { focusedTabId } = useLayoutStore.getState()
+    if (focusedTabId) setActiveTab(focusedTabId)
+  }, [setActiveTab])
+
   const closePaneNow = useCallback((tabId: string) => {
     closeRemoteTab(tabId)
     const { root } = useLayoutStore.getState()
@@ -271,8 +289,9 @@ export default function AppLayout({ navigateToAdmin = () => window.location.assi
       if (remaining[0]) setActiveTab(remaining[0])
     } else {
       closePane(tabId)
+      keepLayoutTabActive(tabId)
     }
-  }, [closeRemoteTab, closePane, exitSplitMode, setActiveTab])
+  }, [closeRemoteTab, closePane, exitSplitMode, setActiveTab, keepLayoutTabActive])
 
   const closeTabNow = useCallback((id: string) => {
     const { root } = useLayoutStore.getState()
@@ -284,12 +303,13 @@ export default function AppLayout({ navigateToAdmin = () => window.location.assi
         if (remaining[0]) setActiveTab(remaining[0])
       } else {
         closePane(id)
+        keepLayoutTabActive(id)
       }
     } else {
       closeRemoteTab(id)
     }
     closeTab(id)
-  }, [closeRemoteTab, closeTab, closePane, exitSplitMode, setActiveTab])
+  }, [closeRemoteTab, closeTab, closePane, exitSplitMode, setActiveTab, keepLayoutTabActive])
 
   const closeAllTabsNow = useCallback(() => {
     const currentTabs = useTerminalStore.getState().tabs
@@ -343,17 +363,10 @@ export default function AppLayout({ navigateToAdmin = () => window.location.assi
     setActiveTab(tabId)
   }, [addSftpTab, socket, sessionId, setActiveTab])
 
-  const handleSetActiveTab = useCallback((tabId: string) => {
-    if (layoutRoot) {
-      const inLayout = getLayoutTabIds(layoutRoot).includes(tabId)
-      if (!inLayout && splitOwnedByBroadcast) {
-        exitSplitMode()
-        disableBroadcast()
-        setSplitOwnedByBroadcast(false)
-      }
-    }
-    setActiveTab(tabId)
-  }, [layoutRoot, exitSplitMode, splitOwnedByBroadcast, disableBroadcast, setActiveTab])
+  // terminalStore's setActiveTab already exits a broadcast-owned split when
+  // the target tab isn't in the current layout (every caller gets this, not
+  // just this component), so this is a plain alias kept for call-site clarity.
+  const handleSetActiveTab = setActiveTab
 
   const handleCloseAllTabs = useCallback(() => {
     const currentTabs = useTerminalStore.getState().tabs
@@ -387,15 +400,15 @@ export default function AppLayout({ navigateToAdmin = () => window.location.assi
 
   // Apply a layout from the Split picker (manual split, broadcast does not own it)
   const handleApplyLayout = useCallback((root: PaneNode) => {
+    // Every tab here is already registered on this socket (at creation and on
+    // reconnect). Registering again replays its output buffer into an xterm
+    // that already holds it, duplicating the scrollback.
     const tabIds = getLayoutTabIds(root)
-    for (const tabId of tabIds) {
-      socket.emit('session:register', { session_id: sessionId, tab_id: tabId })
-    }
     applyLayout(root)
     if (!activeTabId || !tabIds.includes(activeTabId)) setActiveTab(tabIds[0])
     setSplitOwnedByBroadcast(false)
     setSplitPickerOpen(false)
-  }, [applyLayout, socket, sessionId, setActiveTab, activeTabId])
+  }, [applyLayout, setActiveTab, activeTabId])
 
   // Broadcast: apply selected terminals + auto-layout
   const handleApplyBroadcast = useCallback((includedTabIds: string[], layout: PaneNode | null) => {
@@ -408,9 +421,6 @@ export default function AppLayout({ navigateToAdmin = () => window.location.assi
 
     if (layout) {
       const tabIds = getLayoutTabIds(layout)
-      for (const tabId of tabIds) {
-        socket.emit('session:register', { session_id: sessionId, tab_id: tabId })
-      }
       // Only take ownership of split if no split was already active
       const hadSplit = useLayoutStore.getState().root !== null
       applyLayout(layout)
@@ -418,7 +428,7 @@ export default function AppLayout({ navigateToAdmin = () => window.location.assi
       if (!hadSplit) setSplitOwnedByBroadcast(true)
     }
     setBroadcastPickerOpen(false)
-  }, [applyLayout, socket, sessionId, setActiveTab, activeTabId])
+  }, [applyLayout, setActiveTab, activeTabId])
 
   const handleDisableBroadcast = useCallback(() => {
     disableBroadcast()
@@ -472,7 +482,8 @@ export default function AppLayout({ navigateToAdmin = () => window.location.assi
     exitSplit: () => { exitSplitMode(); setSplitOwnedByBroadcast(false) },
     toggleSidebar: () => setSidebarOpen(o => !o),
     openCommandPalette: () => setCommandPaletteOpen(true),
-  }), [handleAddTab, handleCloseTab, handleCloneTab, handleOpenSftpTab, handleDuplicateTab, handleCloseAllTabs, exitSplitMode, navigateToAdmin])
+    setActiveTab: handleSetActiveTab,
+  }), [handleAddTab, handleCloseTab, handleCloneTab, handleOpenSftpTab, handleDuplicateTab, handleCloseAllTabs, exitSplitMode, navigateToAdmin, handleSetActiveTab])
 
   const handleConfirmPendingClose = useCallback(() => {
     if (!pendingClose) return
@@ -528,22 +539,30 @@ export default function AppLayout({ navigateToAdmin = () => window.location.assi
         />
 
         <main id="torrus-main" tabIndex={-1} className="flex-1 relative overflow-hidden min-h-0 focus:outline-none">
+          {/* The empty state and the single/split shells cross-fade; `initial={false}`
+              keeps the first paint still, and the key stays constant for plain tab
+              switches so their own keyframe animation is not remounted. `mode="wait"`
+              matters: a terminal pane adopts its cached xterm node on mount and its
+              cleanup detaches that node, so the outgoing branch has to be gone before
+              the incoming one mounts. */}
+          <AnimatePresence initial={false} mode="wait">
           {tabs.length === 0 ? (
-            <m.div {...fade} className="flex h-full flex-col items-center justify-center gap-4 text-slate-400">
+            <m.div key="empty-state" {...fade} transition={exitTransition} className="flex h-full flex-col items-center justify-center gap-4 text-slate-400">
               <Logo size="lg" showText={false} className="opacity-40" />
               <p className="max-w-sm px-6 text-center text-sm leading-relaxed text-balance">Open a terminal tab or select a saved session from the sidebar</p>
             </m.div>
           ) : layoutRoot && activeTabInLayout ? (
-            <div className="absolute inset-0">
+            <m.div key="split-layout" {...fade} transition={exitTransition} className="absolute inset-0">
               <SplitPane
                 node={layoutRoot}
                 socket={socket}
                 onClose={handleClosePane}
                 isOnlyPane={layoutRoot.type === 'leaf'}
               />
-            </div>
+            </m.div>
           ) : (
-            tabs.map(tab => (
+            <m.div key="single-layout" {...fade} transition={exitTransition}>
+            {tabs.map(tab => (
               <div
                 key={tab.id}
                 id={`torrus-panel-${tab.id}`}
@@ -552,16 +571,20 @@ export default function AppLayout({ navigateToAdmin = () => window.location.assi
                 className={`absolute inset-0 motion-safe:animate-[torrus-tab-content-in_var(--motion-duration-surface)_var(--motion-ease-move)]`}
                 style={{ display: tab.id === activeTabId ? 'flex' : 'none', flexDirection: 'column' }}
               >
-                <Suspense fallback={<PaneFallback />}>
-                  {tab.type === 'sftp' ? (
-                    <SFTPBrowser tabId={tab.id} sourceTabId={tab.sourceTabId} socket={socket} />
-                  ) : (
-                    <TerminalPane tabId={tab.id} isActive={tab.id === activeTabId} socket={socket} />
-                  )}
-                </Suspense>
+                <PaneErrorBoundary fallback={<PaneErrorFallback message="This pane failed to load" />}>
+                  <Suspense fallback={<PaneFallback />}>
+                    {tab.type === 'sftp' ? (
+                      <SFTPBrowser tabId={tab.id} sourceTabId={tab.sourceTabId} socket={socket} />
+                    ) : (
+                      <TerminalPane tabId={tab.id} isActive={tab.id === activeTabId} socket={socket} />
+                    )}
+                  </Suspense>
+                </PaneErrorBoundary>
               </div>
-            ))
+            ))}
+            </m.div>
           )}
+          </AnimatePresence>
         </main>
       </div>
 

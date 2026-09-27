@@ -7,6 +7,7 @@ import errno
 import posixpath
 import shlex
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -589,6 +590,94 @@ async def test_upload_sink_streams_windows_in_offset_order():
 
 
 @pytest.mark.asyncio
+async def test_upload_sink_holds_a_window_ahead_of_a_gap_without_blocking():
+    """A window the client abandoned must not stall the windows behind it.
+
+    The engine stops reading a request body while its write is blocked and only
+    re-plans an abandoned window after every request in flight has settled, so a
+    sink that waits for the gap deadlocks the upload.
+    """
+
+    sftp = FakeSFTP()
+    manager = SFTPManager()
+    try:
+        await manager.open_sftp("sess1", "tab1", FakeSSHManager(sftp))
+        sink = await manager.open_upload_sink(
+            "tab1", "upload1", "/home/app", "gap.bin", FakeSSHManager(sftp)
+        )
+        # [6, 10) arrives while [0, 6) is still unsent.
+        await asyncio.wait_for(sink.write_at(6, b"ghij"), timeout=1)
+        await sink.write_at(0, b"abcdef")
+        await sink.finalize()
+    finally:
+        await manager.shutdown()
+
+    assert sftp.fs["/home/app/gap.bin"] == b"abcdefghij"
+
+
+@pytest.mark.asyncio
+async def test_upload_sink_keeps_the_longest_copy_of_a_held_window():
+    """A retried window can come back shorter; the held bytes must not shrink."""
+
+    sftp = FakeSFTP()
+    manager = SFTPManager()
+    try:
+        await manager.open_sftp("sess1", "tab1", FakeSSHManager(sftp))
+        sink = await manager.open_upload_sink(
+            "tab1", "upload1", "/home/app", "retry.bin", FakeSSHManager(sftp)
+        )
+        await asyncio.wait_for(sink.write_at(6, b"ghij"), timeout=1)
+        await asyncio.wait_for(sink.write_at(6, b"gh"), timeout=1)
+        await sink.write_at(0, b"abcdef")
+        await sink.finalize()
+    finally:
+        await manager.shutdown()
+
+    assert sftp.fs["/home/app/retry.bin"] == b"abcdefghij"
+
+
+@pytest.mark.asyncio
+async def test_upload_sink_merges_overlapping_held_windows():
+    """Two held windows can overlap; draining must not drop the longer one."""
+
+    sftp = FakeSFTP()
+    manager = SFTPManager()
+    try:
+        await manager.open_sftp("sess1", "tab1", FakeSSHManager(sftp))
+        sink = await manager.open_upload_sink(
+            "tab1", "upload1", "/home/app", "overlap.bin", FakeSSHManager(sftp)
+        )
+        await asyncio.wait_for(sink.write_at(6, b"ghijklmnop"), timeout=1)
+        await asyncio.wait_for(sink.write_at(10, b"klmnopqrst"), timeout=1)
+        await sink.write_at(0, b"abcdefghij")
+        await sink.finalize()
+    finally:
+        await manager.shutdown()
+
+    assert sftp.fs["/home/app/overlap.bin"] == b"abcdefghijklmnopqrst"
+
+
+@pytest.mark.asyncio
+async def test_upload_sink_refuses_to_publish_bytes_held_behind_a_hole():
+    from torrus.upload_engine import UploadSinkError
+
+    sftp = FakeSFTP()
+    manager = SFTPManager()
+    try:
+        await manager.open_sftp("sess1", "tab1", FakeSSHManager(sftp))
+        sink = await manager.open_upload_sink(
+            "tab1", "upload1", "/home/app", "hole.bin", FakeSSHManager(sftp)
+        )
+        await asyncio.wait_for(sink.write_at(6, b"ghij"), timeout=1)
+        with pytest.raises(UploadSinkError):
+            await sink.finalize()
+    finally:
+        await manager.shutdown()
+
+    assert "hole.bin" not in sftp.fs
+
+
+@pytest.mark.asyncio
 async def test_upload_sink_drops_a_window_it_already_streamed():
     """A response lost on the way back makes the client re-send a window."""
     sftp = FakeSFTP()
@@ -708,6 +797,62 @@ async def test_upload_sink_publishes_without_the_posix_rename_extension():
         await manager.shutdown()
 
     assert sftp.fs["/home/app/readme.txt"] == b"replacement"
+
+
+@pytest.mark.asyncio
+async def test_a_failed_publish_keeps_the_file_it_was_replacing():
+    """The fallback must not remove the destination before the rename works."""
+    from torrus.upload_engine import UploadSinkError, staging_name
+
+    class FailingRename(FakeSFTP):
+        def posix_rename(self, old_path: str, new_path: str) -> None:
+            raise OSError(errno.EOPNOTSUPP, "Operation unsupported")
+
+        def rename(self, old_path: str, new_path: str) -> None:
+            if old_path.endswith(staging_name("readme.txt", "upload1")):
+                raise OSError(errno.EACCES, "Permission denied")
+            super().rename(old_path, new_path)
+
+    sftp = FailingRename()
+    manager = SFTPManager()
+    try:
+        await manager.open_sftp("sess1", "tab1", FakeSSHManager(sftp))
+        sink = await manager.open_upload_sink(
+            "tab1", "upload1", "/home/app", "readme.txt", FakeSSHManager(sftp)
+        )
+        await sink.write_at(0, b"replacement")
+        with pytest.raises(UploadSinkError):
+            await sink.finalize()
+    finally:
+        await manager.shutdown()
+
+    assert sftp.fs["/home/app/readme.txt"] == b"hello"
+
+
+@pytest.mark.asyncio
+async def test_publish_refuses_a_directory_destination():
+    """A directory in the way is refused, not moved aside and replaced."""
+    from torrus.upload_engine import UploadSinkError
+
+    class NoPosixRename(FakeSFTP):
+        def posix_rename(self, old_path: str, new_path: str) -> None:
+            raise OSError(errno.EOPNOTSUPP, "Operation unsupported")
+
+    sftp = NoPosixRename()
+    sftp.dirs.add("/home/app/docs")
+    manager = SFTPManager()
+    try:
+        await manager.open_sftp("sess1", "tab1", FakeSSHManager(sftp))
+        sink = await manager.open_upload_sink(
+            "tab1", "upload1", "/home/app", "docs", FakeSSHManager(sftp)
+        )
+        await sink.write_at(0, b"contents")
+        with pytest.raises(UploadSinkError):
+            await sink.finalize()
+    finally:
+        await manager.shutdown()
+
+    assert "/home/app/docs" in sftp.dirs
 
 
 @pytest.mark.asyncio
@@ -913,6 +1058,54 @@ async def test_stream_download_yields_chunks():
 
 
 @pytest.mark.asyncio
+async def test_a_refused_stream_raises_sftp_error_and_forgets_the_lock():
+    """A failed lookup must reach the generator's exits, not UnboundLocalError."""
+    from torrus.sftp_manager import SFTPError
+
+    sftp = FakeSFTP()
+    manager = SFTPManager()
+    try:
+        await manager.open_sftp("sess1", "tab1", FakeSSHManager(sftp))
+        with pytest.raises(SFTPError):
+            await manager.stream_download("ghost", "readme.txt").__anext__()
+        with pytest.raises(SFTPError):
+            await manager.stream_bulk_zip("ghost", [("/a", "a", 1)]).__anext__()
+        with pytest.raises(SFTPError):
+            await manager.stream_download(
+                "tab1", "readme.txt", expected_session_id="other"
+            ).__anext__()
+        with pytest.raises(SFTPError):
+            await manager.stream_bulk_zip(
+                "tab1",
+                [("/home/app/readme.txt", "readme.txt", 5)],
+                expected_session_id="other",
+            ).__anext__()
+    finally:
+        await manager.shutdown()
+
+    assert manager._locks == {}
+
+
+@pytest.mark.asyncio
+async def test_closing_a_tab_keeps_a_lock_another_request_is_queued_on():
+    from torrus.sftp_manager import SFTPManager
+
+    manager = SFTPManager()
+    manager._sessions["tab1"] = SimpleNamespace(
+        session_id="sess1", tab_id="tab1", client=MagicMock(), cwd="/home/app"
+    )
+
+    # A request that entered the lock map while close_sftp held it must keep the
+    # entry in place: dropping it would let a second lock for the tab exist.
+    waiter = manager._tab_lock("tab1")
+    await manager.close_sftp("tab1")
+    assert "tab1" in manager._locks
+
+    waiter.release()
+    assert "tab1" not in manager._locks
+
+
+@pytest.mark.asyncio
 async def test_ssh_disconnect_cleans_matching_sftp_sessions():
 
     sftp = FakeSFTP()
@@ -920,7 +1113,6 @@ async def test_ssh_disconnect_cleans_matching_sftp_sessions():
     manager._sessions["tab1"] = SimpleNamespace(
         session_id="sess1", tab_id="tab1", client=sftp, cwd="/home/app"
     )
-    manager._locks["tab1"] = asyncio.Lock()
 
     await manager.on_ssh_disconnect("sess1")
 

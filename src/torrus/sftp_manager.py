@@ -6,6 +6,7 @@ import asyncio
 import base64
 import concurrent.futures
 import errno
+import logging
 import os
 import posixpath
 import shlex
@@ -24,6 +25,8 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable, Iterator
 
 T = TypeVar("T")
+
+logger = logging.getLogger("torrus.sftp")
 
 # The staging file is filled by a remote `cat` reading this channel instead of
 # by SFTP write requests. SFTP caps a write at 32 KiB and answers each one,
@@ -79,6 +82,55 @@ def _channel_stderr(channel: Any) -> str:
     return b"".join(chunks).decode("utf-8", "replace").strip()[:300]
 
 
+@dataclass
+class _TabLock:
+    """One tab's lock plus the number of scopes using it.
+
+    The entry has to outlive its last user. Dropping it while another coroutine
+    is waiting on it lets the tab end up with two locks, and the two holders
+    then drive one paramiko SFTP client at the same time — that client matches
+    responses to requests on a single stream, so they corrupt each other.
+    ``users`` is incremented synchronously when a scope is created, before any
+    await, so a count of zero means no coroutine holds or needs the entry.
+    """
+
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    users: int = 0
+
+
+class _TabLockScope:
+    """Async context manager returning a tab's lock, forgetting it when idle."""
+
+    def __init__(self, locks: dict[str, _TabLock], tab_id: str) -> None:
+        self._locks = locks
+        self._tab_id = tab_id
+        entry = locks.get(tab_id)
+        if entry is None:
+            entry = _TabLock()
+            locks[tab_id] = entry
+        self._entry = entry
+        self._entry.users += 1
+        self.lock = self._entry.lock
+
+    def release(self) -> None:
+        """Give up this scope's claim on the entry (for callers holding a lock)."""
+        self._entry.users -= 1
+        if not self._entry.users and not self.lock.locked():
+            self._locks.pop(self._tab_id, None)
+
+    async def __aenter__(self) -> asyncio.Lock:
+        try:
+            await self.lock.acquire()
+        except BaseException:
+            self.release()
+            raise
+        return self.lock
+
+    async def __aexit__(self, *_exc) -> None:
+        self.lock.release()
+        self.release()
+
+
 class SFTPSink:
     """Streams upload bytes into a remote staging file over one SSH channel.
 
@@ -89,10 +141,18 @@ class SFTPSink:
 
     The engine hands windows over in any order and may re-send a window it
     already sent. The channel is one ordered stream, so a window that arrives
-    early waits for its turn; the request handler stops reading that body while
-    it waits, which leaves the backlog in the socket rather than on this
-    server's heap. A caller returns only once its own bytes reached the remote,
-    so the byte ranges the engine commits stay true.
+    before the bytes below it is held in a bounded buffer and streamed as soon
+    as the gap is filled.
+
+    Waiting for the gap instead would stall the upload: the engine stops reading
+    a request body while its write is blocked, and the client only re-plans a
+    window it gave up on after every request in flight has settled, so a gap the
+    client abandoned (it halves a window after two retryable failures) could
+    never be filled. Past ``_SINK_PENDING_MAX_BYTES`` of out-of-order data the
+    write falls back to waiting, which is backpressure rather than unbounded
+    heap. Buffered bytes are flushed by :meth:`finalize` before the publish, so
+    the byte ranges the engine commits are always in the file that is renamed
+    onto the destination.
     """
 
     def __init__(
@@ -111,9 +171,20 @@ class SFTPSink:
         self._client = client
         self._staging = posixpath.join(directory, staging_name(filename, session_id))
         self._destination = posixpath.join(directory, filename)
+        # Where a destination that has to be moved aside during publish goes. The
+        # engine's staging convention keeps it out of listings, and the session id
+        # keeps it from colliding with anything the user owns.
+        self._replaced = posixpath.join(
+            directory,
+            staging_name(f"{filename}.replaced", session_id),
+        )
         self._run = run_blocking
         self._channel: Any = None
         self._streamed = 0
+        # Windows past the stream head, keyed by their offset, and how many
+        # bytes they hold together.
+        self._pending: dict[int, bytes] = {}
+        self._pending_bytes = 0
         self._failure: UploadSinkError | None = None
         self._lock = asyncio.Lock()
         self._cond = asyncio.Condition(self._lock)
@@ -159,6 +230,85 @@ class SFTPSink:
             raise _sink_error(exc, self._destination) from exc
         self._channel = channel
 
+    def _hold(self, offset: int, data: bytes) -> None:
+        """Buffer a window that arrives ahead of its turn, merging duplicates.
+
+        A client re-sends a window after a lost response, so an offset may
+        already be held: the longer copy is the one worth keeping, and a copy
+        already covered by another held window adds nothing.
+        """
+        held = self._pending.get(offset)
+        if held is not None:
+            if len(held) >= len(data):
+                return
+            self._pending_bytes += len(data) - len(held)
+            self._pending[offset] = bytes(data)
+            return
+        end = offset
+        for start, buffered in self._pending.items():
+            if start <= offset < start + len(buffered):
+                end = max(end, start + len(buffered))
+        if end >= offset + len(data):
+            return
+        if end > offset:
+            # A held window already covers this window's head; keep only the
+            # bytes past it so the overlap isn't counted in both windows.
+            data = data[end - offset :]
+            offset = end
+            held = self._pending.get(offset)
+            if held is not None:
+                if len(held) >= len(data):
+                    return
+                self._pending_bytes += len(data) - len(held)
+                self._pending[offset] = bytes(data)
+                return
+        self._pending[offset] = bytes(data)
+        self._pending_bytes += len(data)
+
+    async def _send_locked(self, data: bytes) -> None:
+        """Append ``data`` at the stream head. Caller holds the condition."""
+        try:
+            if self._channel is None:
+                await self._open_channel()
+            await self._run(self._channel.sendall, data)
+        except UploadSinkError as exc:
+            self._failure = exc
+            self._cond.notify_all()
+            raise
+        except Exception as exc:
+            self._failure = await self._stream_failure(exc)
+            self._cond.notify_all()
+            raise self._failure from exc
+        self._streamed += len(data)
+        self._cond.notify_all()
+
+    async def _drain_locked(self) -> None:
+        """Stream every held window the head has reached, dropping what it passed."""
+        while True:
+            for offset in list(self._pending):
+                buffered = self._pending[offset]
+                if offset >= self._streamed:
+                    continue
+                del self._pending[offset]
+                self._pending_bytes -= len(buffered)
+                trimmed = buffered[self._streamed - offset :]
+                if not trimmed:
+                    continue
+                # Two held windows can overlap and trim to the same start; both
+                # carry the same bytes there, so the longer copy wins outright.
+                existing = self._pending.get(self._streamed)
+                if existing is not None and len(existing) >= len(trimmed):
+                    continue
+                if existing is not None:
+                    self._pending_bytes -= len(existing)
+                self._pending[self._streamed] = trimmed
+                self._pending_bytes += len(trimmed)
+            head = self._pending.pop(self._streamed, None)
+            if head is None:
+                return
+            self._pending_bytes -= len(head)
+            await self._send_locked(head)
+
     async def write_at(self, offset: int, data: bytes) -> None:
         async with self._cond:
             self._raise_if_dead()
@@ -166,29 +316,25 @@ class SFTPSink:
                 # A window this session already streamed, re-sent after a lost
                 # response. Streaming it again would duplicate bytes.
                 return
-            await self._cond.wait_for(
-                lambda: self._failure is not None or self._streamed >= offset
-            )
-            if self._failure is not None:
-                raise self._failure
+            if offset > self._streamed and (
+                self._pending_bytes + len(data) <= _SINK_PENDING_MAX_BYTES
+            ):
+                # Ahead of its turn: hold it rather than block the request, which
+                # is what lets a window the client gave up on be re-planned later.
+                self._hold(offset, data)
+                return
+            if offset > self._streamed:
+                await self._cond.wait_for(
+                    lambda: self._failure is not None or self._streamed >= offset
+                )
+                if self._failure is not None:
+                    raise self._failure
             if offset < self._streamed:
                 data = data[self._streamed - offset :]
             if not data:
                 return
-            try:
-                if self._channel is None:
-                    await self._open_channel()
-                await self._run(self._channel.sendall, data)
-            except UploadSinkError as exc:
-                self._failure = exc
-                self._cond.notify_all()
-                raise
-            except Exception as exc:
-                self._failure = await self._stream_failure(exc)
-                self._cond.notify_all()
-                raise self._failure from exc
-            self._streamed += len(data)
-            self._cond.notify_all()
+            await self._send_locked(data)
+            await self._drain_locked()
 
     async def _stream_failure(self, exc: Exception) -> UploadSinkError:
         """Prefer the remote writer's complaint over a generic socket error.
@@ -238,16 +384,49 @@ class SFTPSink:
             return
         except Exception:
             # Servers without the posix-rename extension refuse to rename onto
-            # an existing file, so clear the old name first.
+            # an existing file. The destination is moved aside rather than
+            # removed: if the staging file cannot be put in place, the file the
+            # user already had must still be there.
             pass
         try:
-            await self._run(self._client.remove, self._destination)
+            attr = await self._run(self._client.lstat, self._destination)
         except Exception:
-            pass
+            attr = None
+        if attr is not None and stat.S_ISDIR(getattr(attr, "st_mode", 0) or 0):
+            # A directory in the way is not a destination to displace: the
+            # staging file cannot replace it, and moving it aside would hide it.
+            raise UploadSinkError(
+                "A directory already exists at the upload destination.",
+                code="INVALID_DESTINATION",
+                status=400,
+            )
+        saved = self._replaced
+        try:
+            await self._run(self._client.rename, self._destination, saved)
+        except Exception:
+            # The usual case for a new file: there is no destination to save.
+            saved = ""
         try:
             await self._run(self._client.rename, self._staging, self._destination)
         except Exception as exc:
+            if saved:
+                try:
+                    await self._run(self._client.rename, saved, self._destination)
+                except Exception:
+                    logger.warning(
+                        "Could not restore %s; the replaced file is at %s",
+                        self._destination,
+                        saved,
+                        exc_info=True,
+                    )
             raise _sink_error(exc, self._destination) from exc
+        if saved:
+            try:
+                await self._run(self._client.remove, saved)
+            except Exception:
+                logger.warning(
+                    "Could not remove the replaced file %s", saved, exc_info=True
+                )
 
     async def _close_client(self) -> None:
         if self._client_closed:
@@ -263,6 +442,15 @@ class SFTPSink:
         async with self._cond:
             self._raise_if_dead()
             self._closed = True
+            await self._drain_locked()
+            if self._pending:
+                # The engine only publishes a session whose ranges are complete,
+                # so held bytes behind a hole mean the archive would be short:
+                # refuse instead of renaming a truncated file into place.
+                raise UploadSinkError(
+                    "Upload is missing data ahead of a buffered window.",
+                    code="SINK_ERROR",
+                )
             await self._finish_stream()
             await self._publish()
             await self._close_client()
@@ -270,6 +458,8 @@ class SFTPSink:
     async def abort(self) -> None:
         async with self._cond:
             self._closed = True
+            self._pending.clear()
+            self._pending_bytes = 0
             if self._failure is None:
                 self._failure = UploadSinkError(
                     "Upload cancelled.", code="CONNECTION_CLOSED"
@@ -291,7 +481,7 @@ class SFTPSink:
 class SFTPManager:
     def __init__(self, max_workers: int | None = None):
         self._sessions: dict[str, SFTPSession] = {}
-        self._locks: dict[str, asyncio.Lock] = {}
+        self._locks: dict[str, _TabLock] = {}
         self._upload_clients: dict[str, set[paramiko.SFTPClient]] = {}
         workers = max_workers or max(16, min(64, (os.cpu_count() or 4) * 4))
         self._executor = concurrent.futures.ThreadPoolExecutor(
@@ -303,6 +493,10 @@ class SFTPManager:
             await self.close_sftp(tab_id)
         self._executor.shutdown(wait=False, cancel_futures=True)
 
+    def _tab_lock(self, tab_id: str) -> _TabLockScope:
+        """Claim the tab's lock entry for the lifetime of the returned scope."""
+        return _TabLockScope(self._locks, tab_id)
+
     async def open_sftp(
         self,
         session_id: str,
@@ -310,8 +504,7 @@ class SFTPManager:
         ssh_manager,
         source_tab_id: str | None = None,
     ) -> bool:
-        lock = self._locks.setdefault(tab_id, asyncio.Lock())
-        async with lock:
+        async with self._tab_lock(tab_id):
             await self._close_sftp_unlocked(tab_id)
             client = await ssh_manager.open_sftp_channel(
                 session_id, source_tab_id or tab_id
@@ -383,13 +576,10 @@ class SFTPManager:
         )
 
     async def close_sftp(self, tab_id: str) -> None:
-        lock = self._locks.setdefault(tab_id, asyncio.Lock())
-        async with lock:
+        # The scope forgets the tab's entry once its last user is done, so an
+        # entry is never dropped underneath a request that is queued on it.
+        async with self._tab_lock(tab_id):
             await self._close_sftp_unlocked(tab_id)
-        # The tab is gone, so its lock is dead weight; without this the map keeps
-        # one entry per tab ever opened. A late request creates a fresh lock and
-        # finds no session.
-        self._locks.pop(tab_id, None)
 
     async def _close_sftp_unlocked(self, tab_id: str) -> None:
         for client in self._upload_clients.pop(tab_id, set()):
@@ -419,8 +609,7 @@ class SFTPManager:
                 await self.close_sftp(tab_id)
 
     async def list_directory(self, tab_id: str, path: str = ".") -> dict[str, Any]:
-        lock = self._locks.setdefault(tab_id, asyncio.Lock())
-        async with lock:
+        async with self._tab_lock(tab_id):
             session = self._get_session(tab_id)
             session.last_activity = time.time()
             try:
@@ -551,19 +740,26 @@ class SFTPManager:
         chunk_size: int = 4 * 1024 * 1024,
         expected_session_id: str | None = None,
     ) -> AsyncIterator[bytes]:
-        lock = self._locks.setdefault(tab_id, asyncio.Lock())
-        async with lock:
-            session = self._get_session(tab_id, expected_session_id=expected_session_id)
-            session.last_activity = time.time()
-            resolved = _resolve_remote_path(session.cwd, remote_path, session.home)
-            try:
-                remote_file = await self._run_blocking(
-                    session.client.open, resolved, "rb"
-                )
-            except Exception as exc:
-                raise _map_error(exc, resolved) from exc
-
+        # The scope is held for the whole download: the generator keeps using
+        # the tab's client across chunks, so its lock entry must not be dropped.
+        scope = self._tab_lock(tab_id)
+        lock = scope.lock
+        # Bound before the try: a lookup that fails must still reach the exits.
+        session: SFTPSession | None = None
+        remote_file: Any = None
+        resolved = ""
         try:
+            async with lock:
+                session = self._get_session(tab_id, expected_session_id=expected_session_id)
+                session.last_activity = time.time()
+                resolved = _resolve_remote_path(session.cwd, remote_path, session.home)
+                try:
+                    remote_file = await self._run_blocking(
+                        session.client.open, resolved, "rb"
+                    )
+                except Exception as exc:
+                    raise _map_error(exc, resolved) from exc
+
             while True:
                 # Every SFTP request on this tab takes the lock: one paramiko
                 # client carries a single request stream, so a concurrent
@@ -584,12 +780,15 @@ class SFTPManager:
                 ) from exc
             raise mapped from exc
         finally:
-            session.last_activity = time.time()
-            async with lock:
-                try:
-                    await self._run_blocking(remote_file.close)
-                except Exception:
-                    pass
+            if session is not None:
+                session.last_activity = time.time()
+            if remote_file is not None:
+                async with lock:
+                    try:
+                        await self._run_blocking(remote_file.close)
+                    except Exception:
+                        pass
+            scope.release()
 
     async def stream_bulk_zip(
         self,
@@ -606,14 +805,19 @@ class SFTPManager:
         yield, because one paramiko SFTPClient carries a single request stream.
         Files must already be validated by ``prepare_bulk_download``.
         """
-        lock = self._locks.setdefault(tab_id, asyncio.Lock())
-        async with lock:
-            session = self._get_session(tab_id, expected_session_id=expected_session_id)
-            session.last_activity = time.time()
-
-        sentinel = object()
-        archive = self._bulk_zip_sync(session, files, chunk_size)
+        # Held for the whole archive, like the download: the generator keeps
+        # using the tab's client across chunks.
+        scope = self._tab_lock(tab_id)
+        lock = scope.lock
+        # Bound before the try: a lookup that fails must still reach the exits.
+        session: SFTPSession | None = None
         try:
+            async with lock:
+                session = self._get_session(tab_id, expected_session_id=expected_session_id)
+                session.last_activity = time.time()
+
+            sentinel = object()
+            archive = self._bulk_zip_sync(session, files, chunk_size)
             while True:
                 async with lock:
                     chunk = await self._run_blocking(_next_or_sentinel, archive, sentinel)
@@ -632,11 +836,12 @@ class SFTPManager:
                 ) from exc
             raise mapped from exc
         finally:
-            session.last_activity = time.time()
+            if session is not None:
+                session.last_activity = time.time()
+            scope.release()
 
     async def _locked(self, tab_id: str, work, expected_session_id: str | None = None):
-        lock = self._locks.setdefault(tab_id, asyncio.Lock())
-        async with lock:
+        async with self._tab_lock(tab_id):
             session = self._get_session(tab_id, expected_session_id=expected_session_id)
             session.last_activity = time.time()
             try:
@@ -1094,6 +1299,16 @@ def _dedupe_arcname(arcname: str, taken: set[str]) -> str:
             return candidate
         index += 1
 
+
+# How much out-of-order upload data one sink may hold before it blocks the
+# request instead. The engine runs `concurrency` windows of its own chunk size at
+# once, so the budget follows those knobs rather than assuming their defaults,
+# with 128 MiB as the floor (four 32 MiB windows plus room for a re-sent copy).
+_SINK_PENDING_MAX_BYTES = max(
+    128 * 1024 * 1024,
+    int(os.getenv("TORRUS_UPLOAD_CHUNK_BYTES", str(32 * 1024 * 1024)))
+    * max(1, int(os.getenv("TORRUS_UPLOAD_CONCURRENCY", "4"))),
+)
 
 # Bulk archives are spooled to disk past this size and each member is read in
 # bounded blocks, so a large tree cannot be assembled in memory.

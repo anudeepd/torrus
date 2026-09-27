@@ -305,7 +305,7 @@ function Breadcrumbs({ path, list, onEdit }: BreadcrumbsProps) {
 
   return (
     <div
-      className="flex h-7 min-w-0 flex-1 items-center overflow-hidden border border-transparent px-1 hover:border-surface-800 hover:bg-surface-900 max-xs:h-10"
+      className="transition-colors flex h-7 min-w-0 flex-1 items-center overflow-hidden border border-transparent px-1 hover:border-surface-800 hover:bg-surface-900 max-xs:h-10"
       onClick={event => {
         if (event.target === event.currentTarget) onEdit()
       }}
@@ -318,7 +318,7 @@ function Breadcrumbs({ path, list, onEdit }: BreadcrumbsProps) {
             <>
               <button
                 type="button"
-                className="min-h-6 min-w-6 px-1 text-xs text-slate-400 hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 max-xs:h-10"
+                className="transition-colors min-h-6 min-w-6 px-1 text-xs text-slate-400 hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 max-xs:h-10"
                 onClick={() => setExpanded(true)}
                 title={`Show ${hiddenCount} hidden path segments`}
               >
@@ -328,12 +328,12 @@ function Breadcrumbs({ path, list, onEdit }: BreadcrumbsProps) {
             </>
           )}
           {index === 1 && expanded && segments.length > 4 && (
-            <button type="button" onClick={() => setExpanded(false)} className="min-h-6 min-w-6 px-1 text-xs text-slate-400 hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500" title="Collapse path" aria-label="Collapse path">…</button>
+            <button type="button" onClick={() => setExpanded(false)} className="transition-colors min-h-6 min-w-6 px-1 text-xs text-slate-400 hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500" title="Collapse path" aria-label="Collapse path">…</button>
           )}
           <button
             type="button"
             onClick={() => list(segment.path)}
-            className={clsx('min-h-6 min-w-6 max-w-32 truncate px-1 font-mono text-xs hover:text-brand-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 max-xs:h-10', {
+            className={clsx('min-h-6 min-w-6 max-w-32 truncate px-1 font-mono text-xs transition-colors hover:text-brand-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 max-xs:h-10', {
               'font-medium text-brand-400': index === visible.length - 1,
               'text-slate-400': index !== visible.length - 1,
             })}
@@ -347,7 +347,7 @@ function Breadcrumbs({ path, list, onEdit }: BreadcrumbsProps) {
       <button
         type="button"
         onClick={onEdit}
-        className="ml-1 flex h-6 w-6 flex-shrink-0 items-center justify-center text-slate-400 hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 max-xs:h-10 max-xs:w-10"
+        className="transition-colors ml-1 flex h-6 w-6 flex-shrink-0 items-center justify-center text-slate-400 hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 max-xs:h-10 max-xs:w-10"
         title={isMac ? 'Edit path (Ctrl+L)' : 'Edit path'}
         aria-label="Edit path"
       >
@@ -388,7 +388,7 @@ function StatusRail({
         'text-brand-400': tone === 'success',
       })}>{label}</span>
       <span className="min-w-0 flex-1 break-words text-slate-300">{message}</span>
-      <button type="button" onClick={onDismiss} className="-my-1 flex h-6 w-6 flex-shrink-0 items-center justify-center text-slate-400 hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 max-xs:-my-2 max-xs:h-11 max-xs:w-11" aria-label="Dismiss message">
+      <button type="button" onClick={onDismiss} className="transition-colors -my-1 flex h-6 w-6 flex-shrink-0 items-center justify-center text-slate-400 hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 max-xs:-my-2 max-xs:h-11 max-xs:w-11" aria-label="Dismiss message">
         <X className="h-3.5 w-3.5" />
       </button>
     </m.div>
@@ -953,26 +953,25 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
               onPointerDown={event => event.stopPropagation()}
               onKeyDown={event => moveMenuFocus(event, moreMenuRef.current, () => closeMoreMenu(true))}
             >
-              <button type="button" role="menuitem" onClick={() => { list(path); closeMoreMenu(true) }} className="flex h-11 w-full items-center gap-2 px-3 text-left text-xs text-slate-300 hover:bg-surface-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-500">
+              <button type="button" role="menuitem" onClick={() => { list(path); closeMoreMenu(true) }} className="transition-colors flex h-11 w-full items-center gap-2 px-3 text-left text-xs text-slate-300 hover:bg-surface-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-500">
                 <RefreshCw className="h-3.5 w-3.5" /> Refresh
               </button>
-              <button type="button" role="menuitem" onClick={() => { closeMoreMenu(true); setNewFolderOpen(true) }} className="flex h-11 w-full items-center gap-2 px-3 text-left text-xs text-slate-300 hover:bg-surface-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-500">
+              <button type="button" role="menuitem" onClick={() => { closeMoreMenu(true); setNewFolderOpen(true) }} className="transition-colors flex h-11 w-full items-center gap-2 px-3 text-left text-xs text-slate-300 hover:bg-surface-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-500">
                 <FolderPlus className="h-3.5 w-3.5" /> New folder
               </button>
             </m.div>
             </div>
           )}
           </AnimatePresence>
+          <AnimatePresence initial={false}>
           {selectedPaths.length > 0 && (
-            <div className="mx-1 h-5 border-l border-surface-800" />
-          )}
-          {selectedPaths.length > 0 && (
-            <>
+            <m.div key="selection-actions" {...fade} transition={exitTransition} className="flex items-center gap-1">
+              <div className="mx-1 h-5 border-l border-surface-800" />
               <span className="hidden text-2xs text-slate-400 md2:inline">{selectedPaths.length} selected</span>
               <button
                 type="button"
                 onClick={clearFileSelection}
-                className="flex h-8 w-8 items-center justify-center text-slate-400 hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 max-xs:h-11 max-xs:w-11"
+                className="transition-colors flex h-8 w-8 items-center justify-center text-slate-400 hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 max-xs:h-11 max-xs:w-11"
                 title="Clear selection"
                 aria-label="Clear selection"
               >
@@ -986,8 +985,9 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
               <Button className="max-xs:h-11 max-xs:w-11 max-xs:px-0" variant="danger" size="sm" onClick={() => setDeletePaths(selectedPaths)} title="Delete selection (Delete)">
                 <Trash2 className="h-3.5 w-3.5" />
               </Button>
-            </>
+            </m.div>
           )}
+          </AnimatePresence>
           <Button
             ref={helpButtonRef}
             className="min-h-6 min-w-6 max-xs:h-11 max-xs:w-11 max-xs:px-0"
@@ -1057,7 +1057,7 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
-              className="flex h-8 flex-shrink-0 items-center px-2 font-sans text-xs font-medium text-brand-300 hover:text-brand-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 max-xs:h-11"
+              className="transition-colors flex h-8 flex-shrink-0 items-center px-2 font-sans text-xs font-medium text-brand-300 hover:text-brand-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 max-xs:h-11"
             >
               Choose files
             </button>
@@ -1065,7 +1065,7 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
           <button
             type="button"
             onClick={clearDropFeedback}
-            className="flex h-8 w-8 flex-shrink-0 items-center justify-center text-slate-400 hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 max-xs:h-11 max-xs:w-11"
+            className="transition-colors flex h-8 w-8 flex-shrink-0 items-center justify-center text-slate-400 hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 max-xs:h-11 max-xs:w-11"
             aria-label="Dismiss upload status"
           >
             <X className="h-3.5 w-3.5" />
@@ -1100,8 +1100,9 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
           'pointer-events-none opacity-50': disconnected,
         })}
       >
+        <AnimatePresence initial={false} mode="wait">
         {loading && entries.length === 0 && (
-          <div className="p-2">
+          <m.div key="listing-skeleton" {...fade} transition={exitTransition} className="p-2">
             {[0, 1, 2].map(row => (
               <div key={row} className="mb-2 grid h-8 animate-pulse grid-cols-[20px_24px_minmax(0,1fr)_96px_104px_112px_144px] items-center gap-2 opacity-50 max-xs:grid-cols-[20px_24px_minmax(0,1fr)]">
                 <div className="h-3.5 w-3.5 bg-surface-800" />
@@ -1113,14 +1114,13 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
                 <div className="h-3 bg-surface-800 max-xs:hidden" />
               </div>
             ))}
-          </div>
+          </m.div>
         )}
 
         {!loading && entries.length === 0 && (
-          <div className="flex h-full items-center justify-center text-xs text-slate-400">This folder is empty</div>
+          <m.div key="listing-empty" {...fade} transition={exitTransition} className="flex h-full items-center justify-center text-xs text-slate-400">This folder is empty</m.div>
         )}
 
-        <AnimatePresence initial={false} mode="wait">
         {entries.length > 0 && (
           <m.div key={path} {...fade} transition={exitTransition} className={clsx({ 'pointer-events-none opacity-60': loading })} aria-busy={loading}>
             <div className="sticky top-0 z-10 grid h-8 grid-cols-[20px_24px_minmax(0,1fr)_96px_104px_112px_144px] items-center gap-2 border-b border-surface-800 bg-surface-950 px-2 font-mono text-2xs font-medium tabular-nums text-slate-400 max-xs:grid-cols-[20px_24px_minmax(0,1fr)]">
@@ -1142,27 +1142,32 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
                 className="h-3.5 w-3.5 accent-brand-500"
               />
               </label>
-              <button type="button" className="col-span-2 flex h-full min-w-0 items-center gap-1 pl-8 text-left hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 max-xs:pl-8" onClick={() => toggleSort('name')} title="Sort by name">
+              <button type="button" className="transition-colors col-span-2 flex h-full min-w-0 items-center gap-1 pl-8 text-left hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 max-xs:pl-8" onClick={() => toggleSort('name')} title="Sort by name">
                 <span>name</span><SortIndicator rules={sortRules} sortKey="name" />
               </button>
-              <button type="button" className="flex h-full min-w-0 items-center gap-1 text-left hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 max-xs:hidden" onClick={() => toggleSort('size')} title="Sort by size">
+              <button type="button" className="transition-colors flex h-full min-w-0 items-center gap-1 text-left hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 max-xs:hidden" onClick={() => toggleSort('size')} title="Sort by size">
                 <span>size</span><SortIndicator rules={sortRules} sortKey="size" />
               </button>
-              <button type="button" className="flex h-full min-w-0 items-center gap-1 text-left hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 max-xs:hidden" onClick={() => toggleSort('owner')} title="Sort by owner">
+              <button type="button" className="transition-colors flex h-full min-w-0 items-center gap-1 text-left hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 max-xs:hidden" onClick={() => toggleSort('owner')} title="Sort by owner">
                 <span>owner</span><SortIndicator rules={sortRules} sortKey="owner" />
               </button>
-              <button type="button" className="flex h-full min-w-0 items-center gap-1 text-left hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 max-xs:hidden" onClick={() => toggleSort('mode')} title="Sort by permissions">
+              <button type="button" className="transition-colors flex h-full min-w-0 items-center gap-1 text-left hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 max-xs:hidden" onClick={() => toggleSort('mode')} title="Sort by permissions">
                 <span>permissions</span><SortIndicator rules={sortRules} sortKey="mode" />
               </button>
-              <button type="button" className="flex h-full min-w-0 items-center gap-1 text-left hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 max-xs:hidden" onClick={() => toggleSort('mtime')} title="Sort by date">
+              <button type="button" className="transition-colors flex h-full min-w-0 items-center gap-1 text-left hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 max-xs:hidden" onClick={() => toggleSort('mtime')} title="Sort by date">
                 <span>date</span><SortIndicator rules={sortRules} sortKey="mtime" />
               </button>
             </div>
+            {/* exit-only: a removed row fades where it stood instead of vanishing
+                mid-frame, while a large listing pays for no enter animation. */}
+            <AnimatePresence initial={false}>
             {sortedEntries.map((entry) => {
               const selected = selectedPaths.includes(entry.path)
               return (
-                <div
+                <m.div
                   key={entry.path}
+                  exit={{ opacity: 0 }}
+                  transition={exitTransition}
                   id={`sftp-entry-${tabId}-${encodeURIComponent(entry.path)}`}
                   role="option"
                   aria-selected={selected}
@@ -1183,7 +1188,7 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
                       entries: contextEntries,
                     })
                   }}
-                  className={clsx('grid min-h-8 cursor-default grid-cols-[20px_24px_minmax(0,1fr)_96px_104px_112px_144px] items-center gap-2 px-2 py-1 font-mono text-xs max-xs:min-h-11 max-xs:grid-cols-[20px_24px_minmax(0,1fr)]', {
+                  className={clsx('grid min-h-8 cursor-default grid-cols-[20px_24px_minmax(0,1fr)_96px_104px_112px_144px] items-center gap-2 px-2 py-1 font-mono text-xs transition-colors max-xs:min-h-11 max-xs:grid-cols-[20px_24px_minmax(0,1fr)]', {
                     'bg-brand-500/10 hover:bg-brand-500/20': selected,
                     'hover:bg-surface-800': !selected,
                   })}
@@ -1237,9 +1242,10 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
                   <span className="text-left text-slate-400 max-xs:hidden" title={ownershipTitle(entry)}>{formatOwnership(entry)}</span>
                   <span className="text-left text-slate-400 max-xs:hidden" title={permissionTitle(entry.mode)}>{formatMode(entry.mode)}</span>
                   <span className="text-left tabular-nums text-slate-400 max-xs:hidden">{formatDate(entry.mtime)}</span>
-                </div>
+                </m.div>
               )
             })}
+            </AnimatePresence>
           </m.div>
         )}
         </AnimatePresence>
@@ -1326,7 +1332,7 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
                 item.action()
                 setContextMenu(null)
               }}
-              className={clsx('flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-surface-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-500 max-xs:h-11', {
+              className={clsx('flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs transition-colors hover:bg-surface-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-500 max-xs:h-11', {
                 'text-red-300': item.danger,
                 'text-slate-300': !item.danger,
               })}

@@ -1,10 +1,11 @@
-import { Suspense, lazy, useRef, useCallback, useState, useEffect, Component, type ReactNode } from 'react'
+import { Suspense, lazy, useRef, useCallback, useState, useEffect } from 'react'
 import { X, AlertTriangle } from 'lucide-react'
 import clsx from 'clsx'
 import type { Socket } from 'socket.io-client'
 import type { PaneNode } from '@/store/layoutStore'
 import { useLayoutStore } from '@/store/layoutStore'
 import { useTerminalStore } from '@/store/terminalStore'
+import { PaneErrorBoundary } from '@/components/ui/PaneErrorBoundary'
 const TerminalPane = lazy(() => import('@/components/terminal/TerminalPane'))
 const SFTPBrowser = lazy(() => import('@/components/sftp/SFTPBrowser'))
 
@@ -15,27 +16,6 @@ interface SplitPaneProps {
   isOnlyPane: boolean
 }
 
-interface ErrorBoundaryState {
-  hasError: boolean
-  error?: Error
-}
-
-class LeafErrorBoundary extends Component<{ children: ReactNode; fallback: ReactNode }, ErrorBoundaryState> {
-  state: ErrorBoundaryState = { hasError: false }
-  static getDerivedStateFromError(error: Error): ErrorBoundaryState {
-    return { hasError: true, error }
-  }
-  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
-    console.error("Pane error:", error, errorInfo)
-  }
-  render() {
-    if (this.state.hasError) {
-      return this.props.fallback
-    }
-    return this.props.children
-  }
-}
-
 function LeafPaneErrorFallback({ tabId, onClose }: { tabId: string; onClose: () => void }) {
   return (
     <div className="flex flex-col w-full h-full bg-surface-900 items-center justify-center p-4">
@@ -44,7 +24,7 @@ function LeafPaneErrorFallback({ tabId, onClose }: { tabId: string; onClose: () 
       <p className="text-xs text-slate-400 mb-3">Tab: {tabId}</p>
       <button
         onClick={onClose}
-        className="text-xs px-3 py-1 bg-surface-700 hover:bg-surface-600 text-slate-200 rounded"
+        className="text-xs px-3 py-1 bg-surface-700 hover:bg-surface-600 text-slate-200 rounded transition-colors"
       >
         Close Pane
       </button>
@@ -89,7 +69,7 @@ function LeafPane({ tabId, socket, onClose, isOnlyPane }: {
       role="tabpanel"
       aria-labelledby={`torrus-tab-${tabId}`}
       className={clsx(
-        'flex flex-col w-full h-full',
+        'flex flex-col w-full h-full transition-[outline-color]',
         isFocused ? 'outline outline-1 outline-brand-500' : 'outline outline-1 outline-surface-700'
       )}
       onMouseDown={() => setFocused(tabId)}
@@ -131,7 +111,7 @@ function LeafPane({ tabId, socket, onClose, isOnlyPane }: {
       </div>
 
       <div className="flex-1 min-h-0 relative">
-        <LeafErrorBoundary fallback={<LeafPaneErrorFallback tabId={tabId} onClose={() => onClose(tabId)} />}>
+        <PaneErrorBoundary fallback={<LeafPaneErrorFallback tabId={tabId} onClose={() => onClose(tabId)} />}>
           <Suspense fallback={<div className="flex h-full items-center justify-center text-xs text-slate-400">Loading…</div>}>
             {tab?.type === 'sftp' ? (
               <SFTPBrowser tabId={tabId} sourceTabId={tab.sourceTabId} socket={socket} />
@@ -144,7 +124,7 @@ function LeafPane({ tabId, socket, onClose, isOnlyPane }: {
               />
             )}
           </Suspense>
-        </LeafErrorBoundary>
+        </PaneErrorBoundary>
       </div>
     </div>
   )

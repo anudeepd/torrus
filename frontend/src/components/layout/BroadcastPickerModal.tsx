@@ -64,7 +64,7 @@ export default function BroadcastPickerModal({ connectedTabs, initialIncluded, b
   }
 
   return (
-    <Dialog label="Broadcast input" onClose={onClose} className="w-80 p-0">
+    <Dialog label="Broadcast input" onClose={onClose} className="w-80 !p-0">
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-surface-800">
           <div className="flex items-center gap-2">

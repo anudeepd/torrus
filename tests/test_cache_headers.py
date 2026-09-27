@@ -22,3 +22,18 @@ async def test_spa_shell_revalidates_and_hashed_assets_are_immutable():
     assert (
         bundled_asset.headers["cache-control"] == "public, max-age=31536000, immutable"
     )
+
+
+@pytest.mark.asyncio
+async def test_the_document_policy_keeps_a_same_origin_referrer():
+    """ldapgate's logout CSRF check rejects a POST with no Referer at all."""
+    from torrus.server import add_app_security_headers
+
+    request = Request({"type": "http", "path": "/", "headers": []})
+
+    async def shell(_request):
+        return Response()
+
+    response = await add_app_security_headers(request, shell)
+
+    assert response.headers["referrer-policy"] == "same-origin"

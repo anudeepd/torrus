@@ -41,7 +41,7 @@ export default function TransferQueue({ transfers, onDismiss, onRetry }: Transfe
                 <button
                   type="button"
                   onClick={() => onRetry(item.id)}
-                  className="flex h-7 w-7 flex-shrink-0 items-center justify-center text-slate-400 hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+                  className="flex h-7 w-7 flex-shrink-0 items-center justify-center text-slate-400 transition-colors hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
                   aria-label={`Retry ${item.name}`}
                   title="Retry upload"
                 >
@@ -52,7 +52,7 @@ export default function TransferQueue({ transfers, onDismiss, onRetry }: Transfe
                 <button
                   type="button"
                   onClick={() => onDismiss(item.id)}
-                  className="flex h-7 w-7 flex-shrink-0 items-center justify-center text-slate-400 hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+                  className="flex h-7 w-7 flex-shrink-0 items-center justify-center text-slate-400 transition-colors hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
                   aria-label={`Dismiss ${item.name}`}
                 >
                   <X className="h-3.5 w-3.5" />
