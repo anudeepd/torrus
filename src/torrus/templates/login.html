@@ -15,6 +15,7 @@
       font-display: swap;
     }
     :root {
+      color-scheme: dark;
       --bg: #020617;
       --card: #0f172a;
       --card-border: #1e293b;
@@ -43,11 +44,13 @@
       font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
       background: var(--bg);
       color: var(--text);
-      min-height: 100svh;
+      min-height: 100dvh;
       display: flex;
       align-items: center;
       justify-content: center;
-      padding: 1.5rem;
+      /* Viewport-fit=cover: keep the card clear of the notch and home indicator. */
+      padding: calc(1.5rem + env(safe-area-inset-top)) calc(1.5rem + env(safe-area-inset-right))
+        calc(1.5rem + env(safe-area-inset-bottom)) calc(1.5rem + env(safe-area-inset-left));
       -webkit-font-smoothing: antialiased;
     }
 
@@ -143,8 +146,8 @@
     input[type="text"]::placeholder,
     input[type="password"]::placeholder { color: var(--faint); }
 
-    input[type="text"]:focus,
-    input[type="password"]:focus {
+    input[type="text"]:focus-visible,
+    input[type="password"]:focus-visible {
       border-color: var(--focus);
       box-shadow: 0 0 0 3px var(--focus-glow);
     }

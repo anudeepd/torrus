@@ -1,4 +1,4 @@
-import clsx from 'clsx'
+import { cn } from '@/lib/cn'
 import { Check, Download, RotateCcw, Upload, X, XCircle } from 'lucide-react'
 import type { TransferItem } from '@/store/sftpStore'
 import { AnimatePresence } from 'motion/react'
@@ -17,7 +17,7 @@ export default function TransferQueue({ transfers, onDismiss, onRetry }: Transfe
 
   return (
     <div
-      className="pointer-events-none absolute bottom-4 right-4 z-40 flex max-h-[calc(100%-2rem)] w-[min(360px,calc(100vw-2rem))] flex-col gap-2 overflow-y-auto"
+      className="pointer-events-none absolute bottom-4 right-4 z-menu flex max-h-[calc(100%-2rem)] w-[min(360px,calc(100vw-2rem))] flex-col gap-2 overflow-y-auto overscroll-contain"
     >
       <AnimatePresence initial={false}>
         {[...transfers].reverse().map(item => (
@@ -32,36 +32,36 @@ export default function TransferQueue({ transfers, onDismiss, onRetry }: Transfe
           >
             <div className="flex items-center gap-2 px-3 pt-2.5 text-xs">
               {item.direction === 'upload'
-                ? <Upload className="h-3.5 w-3.5 flex-shrink-0 text-slate-400" />
-                : <Download className="h-3.5 w-3.5 flex-shrink-0 text-slate-400" />}
+                ? <Upload aria-hidden="true" className="size-3.5 flex-shrink-0 text-slate-400" />
+                : <Download aria-hidden="true" className="size-3.5 flex-shrink-0 text-slate-400" />}
               <span className="min-w-0 flex-1 truncate font-mono text-slate-200">{item.name}</span>
-              {item.status === 'done' && <Check className="h-3.5 w-3.5 flex-shrink-0 text-brand-400" />}
-              {item.status === 'error' && <XCircle className="h-3.5 w-3.5 flex-shrink-0 text-red-400" />}
+              {item.status === 'done' && <Check aria-hidden="true" className="size-3.5 flex-shrink-0 text-brand-400" />}
+              {item.status === 'error' && <XCircle aria-hidden="true" className="size-3.5 flex-shrink-0 text-red-400" />}
               {item.status === 'error' && item.direction === 'upload' && (
                 <button
                   type="button"
                   onClick={() => onRetry(item.id)}
-                  className="flex h-7 w-7 flex-shrink-0 items-center justify-center text-slate-400 transition-colors hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+                  className="flex size-7 flex-shrink-0 items-center justify-center text-slate-400 transition-colors hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
                   aria-label={`Retry ${item.name}`}
                   title="Retry upload"
                 >
-                  <RotateCcw className="h-3.5 w-3.5" />
+                  <RotateCcw aria-hidden="true" className="size-3.5" />
                 </button>
               )}
               {(item.status === 'done' || item.status === 'error') && (
                 <button
                   type="button"
                   onClick={() => onDismiss(item.id)}
-                  className="flex h-7 w-7 flex-shrink-0 items-center justify-center text-slate-400 transition-colors hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+                  className="flex size-7 flex-shrink-0 items-center justify-center text-slate-400 transition-colors hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
                   aria-label={`Dismiss ${item.name}`}
                 >
-                  <X className="h-3.5 w-3.5" />
+                  <X aria-hidden="true" className="size-3.5" />
                 </button>
               )}
             </div>
             <div className="mx-3 mt-2 h-1 overflow-hidden bg-surface-800" role="progressbar" aria-label={`${item.name} transfer progress`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={item.progress}>
               <m.div
-                className={clsx('h-full', {
+                className={cn('h-full', {
                   'animate-pulse bg-brand-500 motion-reduce:animate-none': item.status === 'active',
                   'bg-brand-500': item.status === 'done',
                   'bg-red-400': item.status === 'error',

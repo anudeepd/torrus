@@ -3,7 +3,7 @@ import { AnimatePresence } from 'motion/react'
 import * as m from 'motion/react-m'
 import { exitTransition, fade } from '@/motion/tokens'
 import { Eye, EyeOff } from 'lucide-react'
-import clsx from 'clsx'
+import { cn } from '@/lib/cn'
 
 interface InputProps extends InputHTMLAttributes<HTMLInputElement> {
   label?: string
@@ -32,7 +32,7 @@ const Input = forwardRef<HTMLInputElement, InputProps>(
             type={isPassword && passwordVisible ? 'text' : type}
             aria-invalid={error ? true : undefined}
             aria-describedby={error ? errorId : undefined}
-            className={clsx(
+            className={cn(
               'w-full bg-surface-900 border border-surface-700 rounded-md px-3 py-2 text-sm font-mono text-slate-200 placeholder-slate-400',
               'focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus:border-brand-500 transition-colors',
               { 'border-red-500': !!error, 'pr-10': isPassword, 'torrus-password-input': isPassword },
@@ -46,20 +46,20 @@ const Input = forwardRef<HTMLInputElement, InputProps>(
               aria-label={passwordVisible ? 'Hide password' : 'Show password'}
               aria-controls={inputId}
               aria-pressed={passwordVisible}
-              className="absolute inset-y-0 right-1 my-auto inline-flex h-8 w-8 items-center justify-center rounded-md text-slate-400 hover:bg-surface-800 hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+              className="absolute inset-y-0 right-1 my-auto inline-flex size-8 items-center justify-center rounded-md text-slate-400 hover:bg-surface-800 hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
               onClick={event => {
                 setPasswordVisible(visible => !visible)
                 event.currentTarget.parentElement?.querySelector<HTMLInputElement>('input')?.focus()
               }}
             >
               {passwordVisible
-                ? <EyeOff aria-hidden="true" className="h-4 w-4" />
-                : <Eye aria-hidden="true" className="h-4 w-4" />}
+                ? <EyeOff aria-hidden="true" className="size-4" />
+                : <Eye aria-hidden="true" className="size-4" />}
             </button>
           )}
         </div>
         <AnimatePresence initial={false}>
-          {error && <m.p id={errorId} role="alert" {...fade} transition={exitTransition} className="text-xs text-red-400">{error}</m.p>}
+          {error && <m.p id={errorId} role="alert" {...fade} transition={exitTransition} className="text-xs text-red-400 text-pretty">{error}</m.p>}
         </AnimatePresence>
       </div>
     )

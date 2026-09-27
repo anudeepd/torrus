@@ -1,6 +1,6 @@
 import { Suspense, lazy, useRef, useCallback, useState, useEffect } from 'react'
 import { X, AlertTriangle } from 'lucide-react'
-import clsx from 'clsx'
+import { cn } from '@/lib/cn'
 import type { Socket } from 'socket.io-client'
 import type { PaneNode } from '@/store/layoutStore'
 import { useLayoutStore } from '@/store/layoutStore'
@@ -19,9 +19,9 @@ interface SplitPaneProps {
 function LeafPaneErrorFallback({ tabId, onClose }: { tabId: string; onClose: () => void }) {
   return (
     <div className="flex flex-col w-full h-full bg-surface-900 items-center justify-center p-4">
-      <AlertTriangle className="w-8 h-8 text-red-400 mb-2" />
-      <p className="text-sm text-slate-300 mb-2">Pane failed to load</p>
-      <p className="text-xs text-slate-400 mb-3">Tab: {tabId}</p>
+      <AlertTriangle className="size-8 text-red-400 mb-2" aria-hidden="true" />
+      <p className="text-sm text-slate-300 mb-2 text-pretty">Pane failed to load</p>
+      <p className="text-xs text-slate-400 mb-3 text-pretty">Tab: {tabId}</p>
       <button
         onClick={onClose}
         className="text-xs px-3 py-1 bg-surface-700 hover:bg-surface-600 text-slate-200 rounded transition-colors"
@@ -68,7 +68,7 @@ function LeafPane({ tabId, socket, onClose, isOnlyPane }: {
       id={`torrus-panel-${tabId}`}
       role="tabpanel"
       aria-labelledby={`torrus-tab-${tabId}`}
-      className={clsx(
+      className={cn(
         'flex flex-col w-full h-full transition-[outline-color]',
         isFocused ? 'outline outline-1 outline-brand-500' : 'outline outline-1 outline-surface-700'
       )}
@@ -90,7 +90,7 @@ function LeafPane({ tabId, socket, onClose, isOnlyPane }: {
           if (dragTabId && dragTabId !== tabId) swapTabs(dragTabId, tabId)
           setDragTab(null)
         }}
-        className={clsx(
+        className={cn(
           'flex-shrink-0 h-7 flex items-center justify-between px-2 border-b border-surface-800 select-none cursor-grab active:cursor-grabbing transition-colors',
           dragOver && dragTabId !== tabId
             ? 'bg-brand-500/20 border-brand-500'
@@ -100,12 +100,14 @@ function LeafPane({ tabId, socket, onClose, isOnlyPane }: {
         <span className="text-xs text-slate-400 font-mono truncate">{label}</span>
         {!isOnlyPane && (
           <button
+            type="button"
             onMouseDown={e => e.stopPropagation()}
             onClick={() => onClose(tabId)}
             title="Close pane"
+            aria-label="Close pane"
             className="flex-shrink-0 p-0.5 text-slate-400 hover:text-red-400 transition-colors rounded"
           >
-            <X className="w-3.5 h-3.5" />
+            <X className="size-3.5" aria-hidden="true" />
           </button>
         )}
       </div>
@@ -184,7 +186,7 @@ function ResizeHandle({
       aria-valuemin={10}
       aria-valuemax={90}
       tabIndex={0}
-      className={clsx(
+      className={cn(
         'flex-shrink-0 bg-surface-800 hover:bg-brand-500 active:bg-brand-400 transition-colors',
         'focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500',
         dir === 'h' ? 'w-1 cursor-col-resize' : 'h-1 cursor-row-resize'
@@ -224,7 +226,7 @@ export default function SplitPane({ node, socket, onClose, isOnlyPane }: SplitPa
   return (
     <div
       ref={containerRef}
-      className={clsx('flex w-full h-full', node.dir === 'h' ? 'flex-row' : 'flex-col')}
+      className={cn('flex w-full h-full', node.dir === 'h' ? 'flex-row' : 'flex-col')}
     >
       <div style={{ flex: node.ratio, minWidth: 0, minHeight: 0, overflow: 'hidden' }}>
         <SplitPane node={node.a} socket={socket} onClose={onClose} isOnlyPane={false} />

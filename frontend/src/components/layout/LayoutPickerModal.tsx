@@ -1,13 +1,13 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { X } from 'lucide-react'
-import clsx from 'clsx'
+import { cn } from '@/lib/cn'
 import Dialog from '@/components/ui/Dialog'
 import type { PaneNode } from '@/store/layoutStore'
 import { makeSplitId } from '@/store/layoutStore'
 import type { Tab } from '@/types'
 import * as m from 'motion/react-m'
 import { AnimatePresence } from 'motion/react'
-import { spatialTransition, surfaceSpring } from '@/motion/tokens'
+import { microTransition, surfaceSpring } from '@/motion/tokens'
 
 // ─── Preset layout builders ────────────────────────────────────────────────
 
@@ -109,9 +109,11 @@ function SlotPicker({ slotIndex, tabIds, tabs, onChange }: {
 }) {
   return (
     <div className="flex items-center gap-2">
-      <span className="text-xs text-slate-400 w-12 flex-shrink-0">Slot {slotIndex + 1}</span>
+      <label htmlFor={`slot-${slotIndex}`} className="text-xs text-slate-400 w-12 flex-shrink-0">Slot {slotIndex + 1}</label>
       <select
-        className="flex-1 bg-surface-800 border border-surface-600 rounded px-2 py-1 text-xs text-slate-200 transition-colors focus:outline-none focus:border-brand-500"
+        id={`slot-${slotIndex}`}
+        name={`slot-${slotIndex + 1}`}
+        className="flex-1 bg-surface-800 border border-surface-600 rounded px-2 py-1 text-xs text-slate-200 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus:border-brand-500"
         value={tabIds[slotIndex] ?? ''}
         onChange={e => onChange(slotIndex, e.target.value)}
       >
@@ -140,29 +142,24 @@ export default function LayoutPickerModal({ tabs, onApply, onClose }: Props) {
     tabs.slice(0, PRESETS[0].slots).map(t => t.id)
   )
 
-  // Resize slot assignments when preset changes
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setSlotTabIds(prev => {
-      const next = Array.from({ length: selected.slots }, (_, i) => prev[i] ?? tabs[i]?.id ?? '')
-      return next
-    })
-  }, [selected, tabs])
+  // The row count follows the preset while the picks stay user state, so the
+  // rendered list is derived here rather than reconciled in an effect.
+  const slotIds = Array.from({ length: selected.slots }, (_, i) => slotTabIds[i] ?? tabs[i]?.id ?? '')
 
-  const allFilled = slotTabIds.length === selected.slots && slotTabIds.every(Boolean)
+  const allFilled = slotIds.length === selected.slots && slotIds.every(Boolean)
 
   const handleApply = () => {
     if (!allFilled) return
-    onApply(selected.build(slotTabIds))
+    onApply(selected.build(slotIds))
   }
 
   return (
-    <Dialog label="Split layout" onClose={onClose} className="w-[520px] !p-0">
+    <Dialog label="Split layout" onClose={onClose} className="max-w-[520px] p-0">
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-surface-800">
-          <h2 className="text-sm font-semibold text-slate-200">Split layout</h2>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-300 transition-colors">
-            <X className="w-4 h-4" />
+          <h2 className="text-sm font-semibold text-slate-200 text-balance">Split layout</h2>
+          <button type="button" onClick={onClose} aria-label="Close split layout picker" className="text-slate-400 hover:text-slate-300 transition-colors">
+            <X className="size-4" aria-hidden="true" />
           </button>
         </div>
 
@@ -175,7 +172,7 @@ export default function LayoutPickerModal({ tabs, onApply, onClose }: Props) {
                 onClick={() => setSelected(preset)}
                 whileTap={{ scale: 0.97 }}
                 layout
-                className={clsx(
+                className={cn(
                   'relative flex flex-col gap-2 p-3 rounded-lg border transition-colors',
                   selected.id === preset.id
                     ? 'border-brand-500 bg-brand-500/10'
@@ -196,22 +193,22 @@ export default function LayoutPickerModal({ tabs, onApply, onClose }: Props) {
           </div>
 
           {/* Slot assignments */}
-          <m.div layout transition={spatialTransition} className="flex flex-col gap-2">
+          <m.div layout transition={microTransition} className="flex flex-col gap-2">
             <span className="text-xs font-medium text-slate-400">Assign tabs to slots</span>
             <AnimatePresence initial={false} mode="popLayout">
               {Array.from({ length: selected.slots }, (_, i) => (
                 <m.div
                   key={`slot-${i}`}
                   layout
-                  initial={{ opacity: 0, height: 0, y: -6 }}
-                  animate={{ opacity: 1, height: 'auto', y: 0 }}
-                  exit={{ opacity: 0, height: 0, y: -6 }}
-                  transition={spatialTransition}
+                  initial={{ opacity: 0, y: -6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -6 }}
+                  transition={microTransition}
                   className="overflow-hidden"
                 >
                   <SlotPicker
                     slotIndex={i}
-                    tabIds={slotTabIds}
+                    tabIds={slotIds}
                     tabs={tabs}
                     onChange={(idx, tabId) => setSlotTabIds(prev => {
                       const next = [...prev]

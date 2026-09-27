@@ -1,5 +1,5 @@
 import { type ButtonHTMLAttributes, forwardRef } from 'react'
-import clsx from 'clsx'
+import { cn } from '@/lib/cn'
 
 interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: 'primary' | 'secondary' | 'ghost' | 'danger'
@@ -7,11 +7,12 @@ interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 }
 
 const Button = forwardRef<HTMLButtonElement, ButtonProps>(
-  ({ variant = 'secondary', size = 'md', className, children, ...props }, ref) => {
+  ({ variant = 'secondary', size = 'md', type = 'button', className, children, ...props }, ref) => {
     return (
       <button
         ref={ref}
-        className={clsx(
+        type={type}
+        className={cn(
           'motion-press inline-flex items-center justify-center gap-1.5 font-medium rounded-md focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 disabled:opacity-50 disabled:cursor-not-allowed',
           {
             'bg-brand-700 hover:bg-brand-600 text-white': variant === 'primary',

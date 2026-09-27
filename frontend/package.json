@@ -1,6 +1,6 @@
 {
   "name": "torrus-frontend",
-  "version": "0.2.52",
+  "version": "0.2.53",
   "type": "module",
   "private": true,
   "engines": {
@@ -25,6 +25,7 @@
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "socket.io-client": "^4.7.4",
+    "tailwind-merge": "^2.6.1",
     "zustand": "^4.5.5"
   },
   "overrides": {

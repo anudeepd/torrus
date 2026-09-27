@@ -289,7 +289,7 @@ describe('SFTPBrowser', () => {
     fireEvent.click(screen.getByRole('button', { name: 'New folder' }))
     expect(screen.getByRole('heading', { name: 'New folder' })).toHaveClass('text-sm', 'font-semibold')
     expect(screen.getByLabelText('Folder name').parentElement).toHaveClass('gap-1')
-    fireEvent.change(screen.getByPlaceholderText('Folder name'), { target: { value: 'archive' } })
+    fireEvent.change(screen.getByLabelText('Folder name'), { target: { value: 'archive' } })
     socket.emit.mockClear()
     fireEvent.click(screen.getByRole('button', { name: 'Create' }))
     expect(socket.emit).toHaveBeenCalledWith('sftp:mkdir', expect.objectContaining({ path: '/var/log/archive' }))
@@ -379,7 +379,7 @@ describe('SFTPBrowser', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('Failed to delete item: Permission denied.')
     expect(screen.getByRole('alert')).toHaveTextContent('ERROR')
     expect(screen.getByText('Failed to delete item: Permission denied.')).toHaveClass('break-words')
-    expect(screen.getByRole('button', { name: 'Dismiss message' })).toHaveClass('max-xs:h-11', 'max-xs:w-11')
+    expect(screen.getByRole('button', { name: 'Dismiss message' })).toHaveClass('max-xs:size-11')
 
     act(() => vi.advanceTimersByTime(11999))
     expect(screen.getByRole('alert')).toBeInTheDocument()

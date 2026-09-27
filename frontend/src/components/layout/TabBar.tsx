@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo, type FormEvent } from 'react'
 import { Plus, X, Pencil, Bookmark, Copy, Folder, GitFork, Settings, LogOut, Menu, PanelLeftClose, Radio, Columns2, Command, Shield, ChevronLeft, ChevronRight } from 'lucide-react'
-import clsx from 'clsx'
+import { cn } from '@/lib/cn'
 import Dialog from '@/components/ui/Dialog'
 import { useTerminalStore } from '@/store/terminalStore'
 import { useSavedServerStore } from '@/store/savedServerStore'
@@ -58,7 +58,7 @@ function submitLogout() {
 function StatusDot({ status }: { status: Tab['status'] }) {
   return (
     <span
-      className={clsx('w-1.5 h-1.5 rounded-full flex-shrink-0', {
+      className={cn('size-1.5 rounded-full flex-shrink-0', {
         'bg-slate-500': status === 'disconnected',
         'bg-brand-400 animate-pulse': status === 'connecting',
         'bg-green-400': status === 'connected',
@@ -109,7 +109,7 @@ function SaveSessionDialog({ state, onSave, onClose }: {
   return (
     <Dialog label="Save Session" initialFocus={inputRef} onClose={onClose} className="w-72 gap-3">
         <div className="flex items-center gap-2">
-          <Bookmark className="w-4 h-4 text-brand-400" />
+          <Bookmark className="size-4 text-brand-400" aria-hidden="true" />
           <h2 className="text-sm font-semibold text-slate-200">Save Session</h2>
         </div>
         <p className="text-xs text-slate-400">
@@ -117,18 +117,21 @@ function SaveSessionDialog({ state, onSave, onClose }: {
         </p>
         <form onSubmit={handleSubmit} className="flex flex-col gap-3">
           <div className="flex flex-col gap-1">
-            <label className="text-xs text-slate-400 font-medium">Name</label>
+            <label htmlFor="save-session-name" className="text-xs text-slate-400 font-medium">Name</label>
             <input
+              id="save-session-name"
+              name="session-name"
+              autoComplete="off"
               ref={inputRef}
-              className="w-full bg-surface-950 border border-surface-700 rounded-md px-3 py-2 text-sm text-slate-200 placeholder-slate-400 focus:outline-none focus:border-brand-500 transition-colors"
-              placeholder={`${state.tab.username}@${state.tab.host}`}
+              className="w-full bg-surface-950 border border-surface-700 rounded-md px-3 py-2 text-sm text-slate-200 placeholder-slate-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus:border-brand-500 transition-colors"
+              placeholder={`${state.tab.username}@${state.tab.host}…`}
               value={name}
               onChange={e => setName(e.target.value)}
               spellCheck={false}
             />
           </div>
           <AnimatePresence initial={false}>
-            {error && <m.p {...fade} transition={exitTransition} className="text-xs text-red-400 text-center">{error}</m.p>}
+            {error && <m.p role="alert" {...fade} transition={exitTransition} className="text-xs text-red-400 text-center">{error}</m.p>}
           </AnimatePresence>
           <div className="flex gap-2">
             <button
@@ -190,13 +193,9 @@ export default function TabBar({ actions, inSplitMode, compactSidebar = false, s
     return () => window.cancelAnimationFrame(frame)
   }, [activeTabId, tabs.length])
 
-  // Reset save dialog if its tab is closed
-  useEffect(() => {
-    if (saveDialog && !tabs.find(t => t.id === saveDialog.tab.id)) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setSaveDialog(null)
-    }
-  }, [tabs, saveDialog])
+  // A dialog whose tab has been closed is simply not the dialog to render; the
+  // state is replaced when the next tab opens one, so no effect has to clear it.
+  const activeSaveDialog = saveDialog && tabs.some(t => t.id === saveDialog.tab.id) ? saveDialog : null
 
   // Focus input when entering edit mode
   useEffect(() => {
@@ -261,7 +260,7 @@ export default function TabBar({ actions, inSplitMode, compactSidebar = false, s
 
   return (
     <>
-    <div className={clsx('flex-shrink-0 bg-surface-900 border-b border-surface-800', compactSidebar ? 'grid h-[92px] grid-cols-[40px_minmax(0,1fr)_40px] grid-rows-[46px_46px]' : 'h-[46px] flex items-center')}>
+    <div className={cn('flex-shrink-0 bg-surface-900 border-b border-surface-800', compactSidebar ? 'grid h-[92px] grid-cols-[40px_minmax(0,1fr)_40px] grid-rows-[46px_46px]' : 'h-[46px] flex items-center')}>
       {compactSidebar && (
         <button
           type="button"
@@ -271,31 +270,33 @@ export default function TabBar({ actions, inSplitMode, compactSidebar = false, s
           aria-expanded={sidebarOpen}
           className="col-start-1 row-start-1 h-[46px] w-10 flex-shrink-0 flex items-center justify-center text-slate-400 transition-colors hover:bg-surface-800 hover:text-slate-200"
         >
-          <Menu className="h-4 w-4" />
+          <Menu className="size-4" />
         </button>
       )}
       {/* Logo branding */}
-      <div className={clsx('h-10 flex-shrink-0 flex items-center px-3 border-r border-surface-800', compactSidebar ? 'col-start-2 row-start-1 self-center border-r-0 px-2 [&>div>span]:inline' : 'max-nav:w-10 max-nav:justify-center max-nav:px-2 max-nav:[&>div>span]:hidden')}>
+      <div className={cn('h-10 flex-shrink-0 flex items-center px-3 border-r border-surface-800', compactSidebar ? 'col-start-2 row-start-1 self-center border-r-0 px-2 [&>div>span]:inline' : 'max-nav:w-10 max-nav:justify-center max-nav:px-2 max-nav:[&>div>span]:hidden')}>
         <Logo size="sm" showText={true} />
       </div>
 
       {compactSidebar && (
         <button type="button" onClick={actions.openCommandPalette} title="Open command palette" aria-label="Open command palette" className="col-start-3 row-start-1 flex h-[46px] w-10 justify-self-end items-center justify-center text-slate-400 transition-colors hover:bg-surface-800 hover:text-slate-200">
-          <Command className="h-4 w-4" />
+          <Command className="size-4" />
         </button>
       )}
 
       {/* New tab button */}
       <button
+        type="button"
         onClick={actions.addTab}
         title="New tab"
-        className={clsx('h-10 flex-shrink-0 w-10 flex items-center justify-center text-slate-400 hover:text-slate-300 hover:bg-surface-800 transition-colors border-r border-surface-800', compactSidebar && 'col-start-1 row-start-2 self-center')}
+        aria-label="New tab"
+        className={cn('h-10 flex-shrink-0 w-10 flex items-center justify-center text-slate-400 hover:text-slate-300 hover:bg-surface-800 transition-colors border-r border-surface-800', compactSidebar && 'col-start-1 row-start-2 self-center')}
       >
-        <Plus className="w-4 h-4" />
+        <Plus className="size-4" aria-hidden="true" />
       </button>
 
       {/* Tab buttons */}
-      <div className={clsx('flex-1 h-full min-w-0 overflow-hidden', compactSidebar && 'col-start-2 row-start-2', compactSidebar && inSplitMode && 'col-end-4')}>
+      <div className={cn('flex-1 h-full min-w-0 overflow-hidden', compactSidebar && 'col-start-2 row-start-2', compactSidebar && inSplitMode && 'col-end-4')}>
         <div
           ref={tabListRef}
           className="torrus-tab-strip flex h-full items-center flex-nowrap overflow-x-scroll overflow-y-hidden"
@@ -369,8 +370,8 @@ export default function TabBar({ actions, inSplitMode, compactSidebar = false, s
                 e.preventDefault()
                 setContextMenu({ tabId: tab.id, x: e.clientX, y: e.clientY })
               }}
-              className={clsx(
-                'relative group h-[40px] flex flex-shrink-0 select-none items-center min-w-32 max-w-48 border-r border-surface-800 whitespace-nowrap transition-colors text-xs font-mono max-xs:min-w-28 max-xs:max-w-36',
+              className={cn(
+                'relative group h-10 flex flex-shrink-0 select-none items-center min-w-32 max-w-48 border-r border-surface-800 whitespace-nowrap transition-colors text-xs font-mono max-xs:min-w-28 max-xs:max-w-36',
                 activeTabId === tab.id
                   ? 'bg-surface-950 text-slate-200'
                   : 'text-slate-400 hover:text-slate-300 hover:bg-surface-800'
@@ -384,7 +385,8 @@ export default function TabBar({ actions, inSplitMode, compactSidebar = false, s
               {editingTabId === tab.id ? (
                 <input
                   ref={editInputRef}
-                  className="ml-3 min-w-0 flex-1 bg-transparent border-b border-brand-500 outline-none text-xs font-mono text-slate-200"
+                  className="ml-3 min-w-0 flex-1 bg-transparent border-b border-brand-500 outline-none focus-visible:ring-2 focus-visible:ring-brand-500 text-xs font-mono text-slate-200"
+                  aria-label={`Rename ${tabDisplayName(tab, tabs)}`}
                   value={editValue}
                   onChange={e => setEditValue(e.target.value)}
                   onKeyDown={e => {
@@ -413,9 +415,9 @@ export default function TabBar({ actions, inSplitMode, compactSidebar = false, s
                   }}
                 >
                   <StatusDot status={tab.status} />
-                  {tab.type === 'sftp' && <Folder className="h-3.5 w-3.5 flex-shrink-0 text-brand-400" />}
+                  {tab.type === 'sftp' && <Folder className="size-3.5 flex-shrink-0 text-brand-400" aria-hidden="true" />}
                   {broadcastEnabled && tab.type === 'terminal' && tab.status === 'connected' && (
-                    <Radio className="flex-shrink-0 w-3 h-3 text-amber-400" />
+                    <Radio className="flex-shrink-0 size-3 text-amber-400" />
                   )}
                   <span className="min-w-0 flex-1 truncate">{tabDisplayName(tab, tabs)}</span>
                 </button>
@@ -424,10 +426,11 @@ export default function TabBar({ actions, inSplitMode, compactSidebar = false, s
               <button
                 type="button"
                 onClick={(e) => { e.stopPropagation(); actions.closeTab(tab.id) }}
-                className="mr-2 flex h-6 w-6 flex-shrink-0 items-center justify-center rounded opacity-0 transition-opacity hover:text-red-400 focus:opacity-100 group-hover:opacity-100 max-xs:opacity-100"
+                className="mr-2 flex size-6 flex-shrink-0 items-center justify-center rounded opacity-0 transition-opacity hover:text-red-400 focus:opacity-100 group-hover:opacity-100 max-xs:opacity-100"
                 title={`Close ${tabDisplayName(tab, tabs)}`}
+                aria-label={`Close ${tabDisplayName(tab, tabs)}`}
               >
-                <X className="w-3 h-3" />
+                <X className="size-3" aria-hidden="true" />
               </button>
             </m.div>
           ))}
@@ -436,14 +439,15 @@ export default function TabBar({ actions, inSplitMode, compactSidebar = false, s
       </div>
 
       {/* Spacer + Broadcast toggle + Close All + Settings + Logout */}
-      <div className={clsx('h-10 flex-shrink-0 flex items-center', compactSidebar && 'col-start-3 row-start-2 justify-self-end')}>
+      <div className={cn('h-10 flex-shrink-0 flex items-center', compactSidebar && 'col-start-3 row-start-2 justify-self-end')}>
       {inSplitMode && !compactSidebar && (
         <button
           onClick={actions.exitSplit}
           title="Exit split mode"
+          aria-label="Exit split mode"
           className="h-10 flex-shrink-0 flex items-center justify-center gap-1.5 px-3 text-xs text-brand-400 bg-brand-500/10 hover:bg-brand-500/20 transition-colors border-l border-surface-800 max-wide:w-10 max-wide:px-0"
         >
-          <X className="w-3.5 h-3.5" />
+          <X className="size-3.5" aria-hidden="true" />
           <span className="max-wide:hidden">Exit split</span>
         </button>
       )}
@@ -451,9 +455,10 @@ export default function TabBar({ actions, inSplitMode, compactSidebar = false, s
         <button
           onClick={actions.openSplitPicker}
           title="Split layout"
+          aria-label="Split layout"
           className="h-10 flex-shrink-0 flex items-center justify-center gap-1.5 px-3 text-xs text-slate-400 hover:text-slate-300 hover:bg-surface-800 transition-colors border-l border-surface-800 max-wide:w-10 max-wide:px-0"
         >
-          <Columns2 className="w-3.5 h-3.5" />
+          <Columns2 className="size-3.5" aria-hidden="true" />
           <span className="max-wide:hidden">Split</span>
         </button>
       )}
@@ -461,14 +466,15 @@ export default function TabBar({ actions, inSplitMode, compactSidebar = false, s
         <button
           onClick={actions.openBroadcastPicker}
           title={broadcastEnabled ? 'Broadcast active — click to manage' : 'Broadcast input to multiple terminals'}
-          className={clsx(
+          aria-label={broadcastEnabled ? 'Manage broadcast' : 'Broadcast input to multiple terminals'}
+          className={cn(
             'h-10 flex-shrink-0 flex items-center justify-center gap-1.5 px-3 text-xs border-l border-surface-800 transition-colors max-wide:w-10 max-wide:px-0',
             broadcastEnabled
               ? 'text-amber-400 bg-amber-400/10 hover:bg-amber-400/20'
               : 'text-slate-400 hover:text-slate-300 hover:bg-surface-800'
           )}
         >
-          <Radio className="w-3.5 h-3.5" />
+          <Radio className="size-3.5" aria-hidden="true" />
           <span className="max-wide:hidden">Broadcast</span>
         </button>
       )}
@@ -476,35 +482,39 @@ export default function TabBar({ actions, inSplitMode, compactSidebar = false, s
         <button
           onClick={actions.closeAllTabs}
           title="Close all tabs"
+          aria-label="Close all tabs"
           className="h-10 flex-shrink-0 flex items-center justify-center gap-1 px-3 text-xs text-slate-400 hover:text-red-400 hover:bg-surface-800 transition-colors border-l border-surface-800 max-wide:w-10 max-wide:px-0"
         >
-          <PanelLeftClose className="w-3.5 h-3.5" />
+          <PanelLeftClose className="size-3.5" aria-hidden="true" />
           <span className="max-wide:hidden">Close All</span>
         </button>
       )}
       {!compactSidebar && <button
         onClick={actions.openSettings}
         title={`Settings (${modKey}+,)`}
+        aria-label={`Settings (${modKey}+,)`}
         className="h-10 flex-shrink-0 w-10 flex items-center justify-center text-slate-400 hover:text-slate-300 hover:bg-surface-800 transition-colors border-l border-surface-800"
       >
-        <Settings className="w-3.5 h-3.5" />
+        <Settings className="size-3.5" aria-hidden="true" />
       </button>}
       {ldapEnabled && isAdmin && (
         <button
           onClick={actions.openAdmin}
           title="Admin console"
+          aria-label="Admin console"
           className="h-10 flex-shrink-0 w-10 flex items-center justify-center text-slate-400 hover:text-brand-300 hover:bg-surface-800 transition-colors border-l border-surface-800"
         >
-          <Shield className="w-3.5 h-3.5" />
+          <Shield className="size-3.5" aria-hidden="true" />
         </button>
       )}
       {ldapEnabled && (
         <button
           onClick={submitLogout}
           title="Logout"
+          aria-label="Logout"
           className="h-10 flex-shrink-0 w-10 flex items-center justify-center text-red-500 hover:text-red-400 hover:bg-surface-800 transition-colors border-l border-surface-800"
         >
-          <LogOut className="w-3.5 h-3.5" />
+          <LogOut className="size-3.5" aria-hidden="true" />
         </button>
       )}
       </div>
@@ -526,14 +536,15 @@ export default function TabBar({ actions, inSplitMode, compactSidebar = false, s
               setContextMenu(null)
               tabRefs.current[contextMenu.tabId]?.focus()
             })}
-            className="fixed z-50 bg-surface-800 border border-surface-700 rounded-lg shadow-xl py-1 min-w-36"
+            className="fixed z-menu bg-surface-800 border border-surface-700 rounded-lg shadow-xl py-1 min-w-36"
             style={{ left: contextMenu.x, top: contextMenu.y }}
           >
             <button
+              type="button"
               role="menuitem" className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-300 hover:bg-surface-700 transition-colors"
               onClick={() => startEditing(tab)}
             >
-              <Pencil className="w-3 h-3" />
+              <Pencil className="size-3" aria-hidden="true" />
               Rename
             </button>
             {tabIndex > 0 && (
@@ -541,7 +552,7 @@ export default function TabBar({ actions, inSplitMode, compactSidebar = false, s
                 role="menuitem" className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-300 hover:bg-surface-700 transition-colors"
                 onClick={() => { setContextMenu(null); moveTab(tab.id, tabs[tabIndex - 1].id) }}
               >
-                <ChevronLeft className="w-3 h-3" />
+                <ChevronLeft className="size-3" />
                 Move left
               </button>
             )}
@@ -550,7 +561,7 @@ export default function TabBar({ actions, inSplitMode, compactSidebar = false, s
                 role="menuitem" className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-300 hover:bg-surface-700 transition-colors"
                 onClick={() => { setContextMenu(null); moveTab(tab.id, tabs[tabIndex + 1].id) }}
               >
-                <ChevronRight className="w-3 h-3" />
+                <ChevronRight className="size-3" />
                 Move right
               </button>
             )}
@@ -560,14 +571,14 @@ export default function TabBar({ actions, inSplitMode, compactSidebar = false, s
                 role="menuitem" className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-300 hover:bg-surface-700 transition-colors"
                 onClick={() => { setContextMenu(null); actions.openSftpTab(tab.id) }}
               >
-                <Folder className="w-3 h-3" />
+                <Folder className="size-3" />
                 Open SFTP
               </button>
               <button
                 role="menuitem" className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-300 hover:bg-surface-700 transition-colors"
                 onClick={() => { setContextMenu(null); actions.cloneTab(tab.id) }}
               >
-                <GitFork className="w-3 h-3" />
+                <GitFork className="size-3" />
                 Clone (same connection)
               </button>
               </>
@@ -577,7 +588,7 @@ export default function TabBar({ actions, inSplitMode, compactSidebar = false, s
                 role="menuitem" className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-300 hover:bg-surface-700 transition-colors"
                 onClick={() => { setContextMenu(null); actions.duplicateTab(tab.id) }}
               >
-                <Copy className="w-3 h-3" />
+                <Copy className="size-3" />
                 Duplicate (new connection)
               </button>
             )}
@@ -592,16 +603,17 @@ export default function TabBar({ actions, inSplitMode, compactSidebar = false, s
                   })
                 }}
               >
-                <Bookmark className="w-3 h-3" />
+                <Bookmark className="size-3" />
                 Save to sessions
               </button>
             )}
             <div className="my-1 border-t border-surface-700" />
             <button
+              type="button"
               role="menuitem" className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-red-400 hover:bg-surface-700 transition-colors"
               onClick={() => { setContextMenu(null); actions.closeTab(tab.id) }}
             >
-              <X className="w-3 h-3" />
+              <X className="size-3" />
               Close
             </button>
           </m.div>
@@ -613,16 +625,16 @@ export default function TabBar({ actions, inSplitMode, compactSidebar = false, s
 
     {/* Save session dialog — rendered outside the overflow-hidden TabBar */}
     <AnimatePresence initial={false}>
-    {saveDialog && (
+    {activeSaveDialog && (
       <SaveSessionDialog
         key="save-session"
-        state={saveDialog}
+        state={activeSaveDialog}
         onSave={(name) => {
           const ok = addServer({
             name,
-            host: saveDialog.tab.host!,
-            port: saveDialog.tab.port ?? 22,
-            username: saveDialog.tab.username!,
+            host: activeSaveDialog.tab.host!,
+            port: activeSaveDialog.tab.port ?? 22,
+            username: activeSaveDialog.tab.username!,
           })
           if (ok) setSaveDialog(null)
           return ok

@@ -16,6 +16,7 @@ export const motionScale = { menu: 0.96, dialog: 0.97, press: 0.96 } as const
 export const surfaceSpring = { type: 'spring', stiffness: 420, damping: 30, mass: 0.72 } as const
 export const spatialSpring = { type: 'spring', stiffness: 340, damping: 27, mass: 0.82 } as const
 export const exitTransition = { duration: motionDuration.micro, ease: motionEase.exit } as const
+export const microTransition = { duration: motionDuration.micro, ease: motionEase.move } as const
 export const surfaceTransition = { duration: motionDuration.surface, ease: motionEase.move } as const
 export const spatialTransition = { duration: motionDuration.spatial, ease: motionEase.move } as const
 export const progressTransition = { duration: motionDuration.instant, ease: 'linear' } as const

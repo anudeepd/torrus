@@ -43,13 +43,13 @@ export class PaneErrorBoundary extends Component<PaneErrorBoundaryProps, PaneErr
  * too, so they keep their own `LeafPaneErrorFallback` instead). */
 export function PaneErrorFallback({ message }: { message: string }) {
   return (
-    <div className="flex h-full w-full flex-col items-center justify-center gap-3 bg-surface-950">
-      <AlertTriangle className="h-8 w-8 text-red-400" />
-      <p className="text-sm text-slate-300">{message}</p>
+    <div role="alert" className="flex h-full w-full flex-col items-center justify-center gap-3 bg-surface-950">
+      <AlertTriangle aria-hidden="true" className="size-8 text-red-400" />
+      <p className="text-sm text-slate-300 text-pretty">{message}</p>
       <button
         type="button"
         onClick={() => window.location.reload()}
-        className="rounded bg-surface-700 px-3 py-1 text-xs text-slate-200 transition-colors hover:bg-surface-600"
+        className="rounded bg-surface-700 px-3 py-1 text-xs text-slate-200 transition-colors hover:bg-surface-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
       >
         Reload
       </button>

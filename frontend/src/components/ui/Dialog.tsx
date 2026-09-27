@@ -1,5 +1,5 @@
 import type { ReactNode, RefObject } from 'react'
-import clsx from 'clsx'
+import { cn } from '@/lib/cn'
 import { useDialogPresence } from '@/hooks/useDialogPresence'
 import { exitTransition, fade, surface, surfaceSpring } from '@/motion/tokens'
 import * as m from 'motion/react-m'
@@ -35,11 +35,16 @@ interface DialogProps {
  * enter/exit transitions. Every dialog in the app renders through this, so
  * focus, layering and reduced motion are fixed in one place.
  *
- * `className` carries width, padding and internal layout. The panel's `p-5` is
- * the default for a dialog that does not set its own padding; because classes
- * are concatenated rather than merged, a consumer that wants a different
- * padding must mark it important (`!p-0`, `!p-6`) — otherwise `p-5` wins on
- * stylesheet order regardless of where it appears in `className`.
+ * `className` carries width, padding and internal layout. The panel merges its
+ * classes through `cn`, so a consumer's class replaces the default it collides
+ * with — `w-80` supersedes the panel's `w-full`, `p-0` supersedes its `p-5` — and
+ * no `!important` marker is needed.
+ *
+ * The panel is the scroll container for a long dialog, so it contains overscroll
+ * rather than chaining the scroll to the page behind it.
+ *
+ * The layer is fixed, so the `html` safe-area padding in `index.css` does not
+ * move it — it carries its own `env(safe-area-inset-*)` padding instead.
  */
 export default function Dialog({
   onClose,
@@ -60,16 +65,18 @@ export default function Dialog({
     <m.div
       {...fade}
       transition={exitTransition}
-      className={clsx(
-        'fixed inset-0 flex justify-center p-4',
+      className={cn(
+        'fixed inset-0 flex justify-center px-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-[max(1rem,env(safe-area-inset-top))]',
         LAYER_CLASS[layer],
-        align === 'top' ? 'items-start pt-[min(22vh,9rem)]' : 'items-center',
+        align === 'top'
+          ? 'items-start pt-[max(min(22dvh,9rem),env(safe-area-inset-top))]'
+          : 'items-center',
       )}
       onMouseDown={event => { if (dismissable && event.target === event.currentTarget) onClose() }}
     >
       <div
         aria-hidden="true"
-        className={clsx('pointer-events-none absolute inset-0', scrimClassName ?? 'bg-black/60')}
+        className={cn('pointer-events-none absolute inset-0', scrimClassName ?? 'bg-black/60')}
       />
       <m.div
         {...surface}
@@ -81,8 +88,8 @@ export default function Dialog({
         aria-label={label}
         aria-labelledby={labelledBy}
         tabIndex={-1}
-        className={clsx(
-          'relative flex w-full flex-col rounded-xl border border-surface-700 bg-surface-900 p-5 shadow-2xl',
+        className={cn(
+          'relative flex w-full flex-col overscroll-contain rounded-xl border border-surface-700 bg-surface-900 p-5 shadow-2xl',
           className,
         )}
       >

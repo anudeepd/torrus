@@ -1,13 +1,13 @@
 import { useState } from 'react'
 import { Radio, X } from 'lucide-react'
-import clsx from 'clsx'
+import { cn } from '@/lib/cn'
 import Dialog from '@/components/ui/Dialog'
 import type { PaneNode } from '@/store/layoutStore'
 import { makeSplitId } from '@/store/layoutStore'
 import type { Tab } from '@/types'
 import * as m from 'motion/react-m'
 import { AnimatePresence } from 'motion/react'
-import { exitTransition, fade, surfaceTransition } from '@/motion/tokens'
+import { exitTransition, fade, microTransition, surfaceTransition } from '@/motion/tokens'
 
 // ─── Auto-layout for N terminals ───────────────────────────────────────────
 
@@ -64,15 +64,15 @@ export default function BroadcastPickerModal({ connectedTabs, initialIncluded, b
   }
 
   return (
-    <Dialog label="Broadcast input" onClose={onClose} className="w-80 !p-0">
+    <Dialog label="Broadcast input" onClose={onClose} className="w-80 p-0">
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-surface-800">
           <div className="flex items-center gap-2">
-            <Radio className="w-4 h-4 text-amber-400" />
-            <h2 className="text-sm font-semibold text-slate-200">Broadcast input</h2>
+            <Radio className="size-4 text-amber-400" aria-hidden="true" />
+            <h2 className="text-sm font-semibold text-slate-200 text-balance">Broadcast input</h2>
           </div>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-300 transition-colors">
-            <X className="w-4 h-4" />
+          <button type="button" onClick={onClose} aria-label="Close broadcast picker" className="text-slate-400 hover:text-slate-300 transition-colors">
+            <X className="size-4" aria-hidden="true" />
           </button>
         </div>
 
@@ -92,8 +92,8 @@ export default function BroadcastPickerModal({ connectedTabs, initialIncluded, b
                   layout
                   animate={{ scale: isChecked ? 1 : 0.985 }}
                   whileTap={{ scale: 0.975 }}
-                  transition={surfaceTransition}
-                  className={clsx(
+                  transition={microTransition}
+                  className={cn(
                     'flex items-center gap-3 px-3 py-2 rounded-lg cursor-pointer transition-colors',
                     isChecked ? 'bg-amber-400/10 border border-amber-400/30' : 'bg-surface-800 border border-surface-700'
                   )}
@@ -134,9 +134,9 @@ export default function BroadcastPickerModal({ connectedTabs, initialIncluded, b
           <AnimatePresence initial={false}>
             {broadcastEnabled && (
               <m.button
-                initial={{ opacity: 0, height: 0 }}
-                animate={{ opacity: 1, height: 'auto' }}
-                exit={{ opacity: 0, height: 0, transition: exitTransition }}
+                initial={{ opacity: 0, y: -6 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -6, transition: exitTransition }}
                 transition={surfaceTransition}
                 onClick={onDisable}
                 className="w-full overflow-hidden px-3 py-2 rounded-md text-sm text-slate-400 bg-surface-800 hover:bg-surface-700 hover:text-red-400 transition-colors"

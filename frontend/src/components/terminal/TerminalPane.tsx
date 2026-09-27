@@ -851,7 +851,7 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
               transition={surfaceSpring}
               className="flex items-center gap-3 rounded-xl border border-surface-700 bg-surface-900/95 px-5 py-4 text-sm text-slate-300 shadow-2xl"
             >
-              <LoaderCircle className="h-4 w-4 animate-spin text-brand-400" />
+              <LoaderCircle aria-hidden="true" className="size-4 animate-spin text-brand-400" />
               <span>Connecting to {tab?.host || 'host'}…</span>
             </m.div>
           </m.div>
@@ -884,21 +884,25 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
                 search(event.shiftKey ? 'previous' : 'next')
               }
             }}
-            placeholder="Find in terminal"
+            placeholder="Find in terminal…"
             aria-label="Find in terminal"
-            className="h-7 w-44 rounded bg-surface-950 px-2 text-xs text-slate-200 outline-none placeholder:text-slate-400 focus:ring-1 focus:ring-brand-500"
+            name="find"
+            type="text"
+            autoComplete="off"
+            spellCheck={false}
+            className="h-7 w-44 rounded bg-surface-950 px-2 text-xs text-slate-200 outline-none placeholder:text-slate-400 focus-visible:ring-2 focus-visible:ring-brand-500"
           />
           <AnimatePresence initial={false}>
             {findQuery && findResult === false && <m.span key="no-match" {...fade} transition={exitTransition} className="px-1 text-3xs text-amber-400">No match</m.span>}
           </AnimatePresence>
           <button type="button" onClick={() => search('previous')} title="Previous match (Shift+Enter)" aria-label="Previous match" className="rounded p-1 text-slate-400 transition-colors hover:bg-surface-800 hover:text-slate-200">
-            <ChevronUp className="h-3.5 w-3.5" />
+            <ChevronUp aria-hidden="true" className="size-3.5" />
           </button>
           <button type="button" onClick={() => search('next')} title="Next match (Enter)" aria-label="Next match" className="rounded p-1 text-slate-400 transition-colors hover:bg-surface-800 hover:text-slate-200">
-            <ChevronDown className="h-3.5 w-3.5" />
+            <ChevronDown aria-hidden="true" className="size-3.5" />
           </button>
           <button type="button" onClick={closeFind} title="Close find (Esc)" aria-label="Close find" className="rounded p-1 text-slate-400 transition-colors hover:bg-surface-800 hover:text-slate-200">
-            <X className="h-3.5 w-3.5" />
+            <X aria-hidden="true" className="size-3.5" />
           </button>
         </m.div>
       )}

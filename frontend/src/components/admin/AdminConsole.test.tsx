@@ -132,7 +132,7 @@ describe('AdminConsole', () => {
     const expectFixedTable = (name: string) => {
       const table = screen.getByRole('table', { name })
       expect(table).toHaveClass('table-fixed')
-      expect(table.parentElement).toHaveClass('max-h-[70vh]', 'overflow-y-auto', 'overflow-x-hidden')
+      expect(table.parentElement).toHaveClass('max-h-[70dvh]', 'overflow-y-auto', 'overflow-x-hidden')
       expect(table.parentElement?.parentElement).not.toHaveClass('overflow-hidden')
       expect(table.querySelector('thead')).toHaveClass('sticky', 'top-0', 'z-10')
     }

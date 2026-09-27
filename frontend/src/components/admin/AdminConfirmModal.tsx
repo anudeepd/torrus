@@ -46,16 +46,16 @@ export default function AdminConfirmModal({ request, onClose }: AdminConfirmModa
     >
         <div className="flex items-start gap-3">
           <div className={`mt-0.5 rounded-lg p-2 ${request.destructive ? 'bg-red-500/10 text-red-300' : 'bg-amber-500/10 text-amber-300'}`}>
-            <AlertTriangle className="h-4 w-4" />
+            <AlertTriangle aria-hidden="true" className="size-4" />
           </div>
           <div className="min-w-0 flex-1">
             <div className="flex items-start justify-between gap-3">
-              <h2 id="admin-confirm-title" className="text-sm font-semibold text-slate-200">{request.title}</h2>
+              <h2 id="admin-confirm-title" className="text-balance text-sm font-semibold text-slate-200">{request.title}</h2>
               <button type="button" onClick={onClose} disabled={submitting} className="rounded-md p-1 text-slate-400 transition-colors hover:bg-surface-800 hover:text-slate-200 disabled:opacity-40" aria-label="Close confirmation">
-                <X className="h-4 w-4" />
+                <X aria-hidden="true" className="size-4" />
               </button>
             </div>
-            <p className="mt-2 text-xs leading-relaxed text-slate-400">{request.description}</p>
+            <p className="mt-2 text-pretty text-xs leading-relaxed text-slate-400">{request.description}</p>
           </div>
         </div>
 
@@ -65,6 +65,7 @@ export default function AdminConfirmModal({ request, onClose }: AdminConfirmModa
             <input
               ref={inputRef}
               id="admin-confirmation-input"
+              name="confirmation"
               type="text"
               value={value}
               onChange={event => setValue(event.target.value)}
@@ -78,7 +79,7 @@ export default function AdminConfirmModal({ request, onClose }: AdminConfirmModa
           <div className="flex justify-end gap-2">
             <button type="button" onClick={onClose} disabled={submitting} className="rounded-md bg-surface-800 px-3 py-2 text-xs text-slate-400 transition-colors hover:bg-surface-700 hover:text-slate-200 disabled:opacity-40">Cancel</button>
             <button type="submit" disabled={!matches || submitting} className={`inline-flex items-center gap-1.5 rounded-md px-3 py-2 text-xs font-medium text-white transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${request.destructive ? 'bg-red-700 hover:bg-red-600' : 'bg-brand-700 hover:bg-brand-600'}`}>
-              {submitting && <LoaderCircle className="h-3.5 w-3.5 animate-spin" />}
+              {submitting && <LoaderCircle aria-hidden="true" className="size-3.5 animate-spin" />}
               {submitting ? 'Working…' : request.confirmLabel}
             </button>
           </div>

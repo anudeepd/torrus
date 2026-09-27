@@ -1,5 +1,61 @@
 # Changelog
 
+## [0.2.53] - 2026-09-27
+
+### Fixed
+
+- **A dialog could span the whole viewport.** The panel's base class list sets
+  `w-full` and every consumer sets its own width (`w-80`, `w-72`, `w-[520px]`),
+  but class lists went through `clsx`, which only concatenates — so the base class
+  won on stylesheet order and six dialogs rendered edge to edge (the close-tab
+  confirm measured 1248 px inside a 1280 px viewport, and 358 px on a 390 px
+  phone). Class logic now goes through `cn` (clsx + tailwind-merge, with the
+  project's z-index scale registered so the layer tokens merge too), which is what
+  makes a consumer's class beat the default it collides with. The `!p-0` / `!p-6`
+  markers that worked around the same trap are gone.
+- **Deleting a saved session asked for nothing.** The row's context menu, the
+  compact menu and the toolbar button removed the entry from storage on one
+  click; all three now open a `role="alertdialog"` confirmation first.
+- **Icon-only controls had no accessible name.** The tab close button, New tab,
+  Settings, Admin, Logout, Exit split, Split, Broadcast, Close All, the SFTP
+  toolbar, the session row actions, the pane close and both pickers' close
+  buttons were labelled by `title` alone (or not at all), and the toolbar's text
+  labels disappear below the `wide` breakpoint. Each carries an `aria-label` now,
+  and every decorative lucide icon is `aria-hidden`.
+- **The saved-session row was a `div` with a click handler.** It is a button
+  again, so Enter/Space select it, and Shift+F10 opens its action menu.
+- **Form fields were unnamed and unlabelled.** Session edit, save-session, the
+  connect form, the admin filters and the SFTP dialogs now associate their labels
+  (`htmlFor`/`id`), set `name` and `autocomplete` (credentials keep
+  `username`/`current-password`), use `inputMode="numeric"` for ports, announce
+  validation with `role="alert"`, and Connect focuses the first invalid field
+  instead of only printing a line below the form.
+- **Keyboard gaps.** The SFTP breadcrumb bar was a clickable `div` (now a
+  keyboard-operable control), the inline rename fields showed no focus ring, and
+  the skip link's landing point (`<main>`) had its outline removed with nothing
+  in its place.
+
+### Changed
+
+- **Motion stays on the compositor.** The sidebar rail swaps its width instantly
+  and the panel inside it slides and fades instead of tweening `width`; the admin
+  session details, the broadcast picker's disable row and the layout picker's slot
+  rows fade and translate rather than animating `height`; the admin table viewport
+  swaps its cap without a `max-height` transition (and caps at `70dvh`, not `70vh`);
+  breadcrumb segments fade under a static cap instead of tweening `max-width`; and
+  tap feedback uses the 180 ms `microTransition` token rather than the 280/380 ms
+  surface tokens.
+- **Long lists, scroll containers and fixed layers.** `content-visibility: auto`
+  on the session rows, the admin tables and the SFTP listing; `overscroll-contain`
+  on the scrollers so they cannot chain to the page behind; safe-area padding on
+  the fixed dialog and drawer layers; `min-h-dvh` on the admin 401 screen.
+- **Copy and numbers.** `…` in placeholders and status text, `text-balance` on
+  headings and `text-pretty` on body copy, `tabular-nums` on the admin stat tiles
+  and the activity timestamps (now formatted with `Intl.DateTimeFormat`), byte
+  sizes through `Intl.NumberFormat`, and the ten `tracking-*` overrides dropped.
+- **139 square `h-N w-N` pairs became `size-N`**, and the two empty states (the
+  shell's and the SFTP listing's) gained a next action instead of a sentence.
+
 ## [0.2.52] - 2026-09-27
 
 ### Fixed

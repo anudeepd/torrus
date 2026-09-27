@@ -13,6 +13,7 @@ const TerminalPane = lazy(() => import('@/components/terminal/TerminalPane'))
 const SFTPBrowser = lazy(() => import('@/components/sftp/SFTPBrowser'))
 import SettingsDialog from '@/components/settings/SettingsDialog'
 import Logo from '@/components/ui/Logo'
+import Button from '@/components/ui/Button'
 import AuthRedirectOverlay from '@/components/ui/AuthRedirectOverlay'
 import CommandPalette from '@/components/ui/CommandPalette'
 import PendingCloseDialog from './PendingCloseDialog'
@@ -538,7 +539,7 @@ export default function AppLayout({ navigateToAdmin = () => window.location.assi
           actions={tabBarActions}
         />
 
-        <main id="torrus-main" tabIndex={-1} className="flex-1 relative overflow-hidden min-h-0 focus:outline-none">
+        <main id="torrus-main" tabIndex={-1} className="flex-1 relative overflow-hidden min-h-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-500">
           {/* The empty state and the single/split shells cross-fade; `initial={false}`
               keeps the first paint still, and the key stays constant for plain tab
               switches so their own keyframe animation is not remounted. `mode="wait"`
@@ -549,7 +550,8 @@ export default function AppLayout({ navigateToAdmin = () => window.location.assi
           {tabs.length === 0 ? (
             <m.div key="empty-state" {...fade} transition={exitTransition} className="flex h-full flex-col items-center justify-center gap-4 text-slate-400">
               <Logo size="lg" showText={false} className="opacity-40" />
-              <p className="max-w-sm px-6 text-center text-sm leading-relaxed text-balance">Open a terminal tab or select a saved session from the sidebar</p>
+              <p className="max-w-sm px-6 text-center text-sm leading-relaxed text-pretty">Open a terminal tab or select a saved session from the sidebar</p>
+              <Button variant="primary" size="sm" onClick={handleAddTab}>New connection</Button>
             </m.div>
           ) : layoutRoot && activeTabInLayout ? (
             <m.div key="split-layout" {...fade} transition={exitTransition} className="absolute inset-0">

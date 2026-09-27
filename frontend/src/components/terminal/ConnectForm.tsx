@@ -1,4 +1,4 @@
-import { useId, useState, type FormEvent } from 'react'
+import { useId, useRef, useState, type FormEvent } from 'react'
 import { Terminal } from 'lucide-react'
 import Button from '@/components/ui/Button'
 import Input from '@/components/ui/Input'
@@ -24,15 +24,30 @@ export default function ConnectForm({
   const [password, setPassword] = useState('')
   const [localError, setLocalError] = useState('')
   const formErrorId = useId()
+  const hostRef = useRef<HTMLInputElement>(null)
+  const portRef = useRef<HTMLInputElement>(null)
+  const usernameRef = useRef<HTMLInputElement>(null)
 
+  // Validation copy stays form-level (one line, role="alert", linked through
+  // aria-describedby), but focus moves to the field that failed so the fix is
+  // one keystroke away instead of a re-tab from the top.
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault()
     setLocalError('')
-    if (!host.trim()) { setLocalError('Host is required.'); return }
-    if (!username.trim()) { setLocalError('Username is required.'); return }
+    if (!host.trim()) {
+      setLocalError('Host is required.')
+      hostRef.current?.focus()
+      return
+    }
+    if (!username.trim()) {
+      setLocalError('Username is required.')
+      usernameRef.current?.focus()
+      return
+    }
     const parsedPort = parseInt(port, 10)
     if (!Number.isFinite(parsedPort) || parsedPort < 1 || parsedPort > 65535) {
       setLocalError('Port must be 1-65535.')
+      portRef.current?.focus()
       return
     }
     onConnect({
@@ -52,8 +67,8 @@ export default function ConnectForm({
     <m.div {...fade} className="torrus-connect-container flex h-full items-center justify-center bg-surface-950">
       <m.div {...surface} transition={surfaceSpring} className="torrus-connect-card flex w-96 max-w-[calc(100%-1.5rem)] flex-col gap-4 rounded-xl border border-surface-700 bg-surface-900 p-4 shadow-2xl">
         <div className="flex items-center gap-2">
-          <Terminal className="w-5 h-5 text-brand-400" />
-          <h2 className="torrus-connect-title whitespace-nowrap text-xs font-semibold text-slate-200">SSH Connection</h2>
+          <Terminal aria-hidden="true" className="size-5 text-brand-400" />
+          <h2 className="torrus-connect-title whitespace-nowrap text-balance text-xs font-semibold text-slate-200">SSH Connection</h2>
         </div>
 
         <form
@@ -68,8 +83,10 @@ export default function ConnectForm({
           <div className="torrus-connect-endpoint flex flex-col gap-2">
             <div className="min-w-0 flex-1">
               <Input
+                ref={hostRef}
                 label="Host"
-                placeholder="hostname or IP"
+                name="host"
+                placeholder="hostname or IP…"
                 value={host}
                 onChange={e => setHost(e.target.value)}
                 autoComplete="off"
@@ -80,12 +97,16 @@ export default function ConnectForm({
             </div>
             <div className="torrus-connect-port w-full">
               <Input
+                ref={portRef}
                 label="Port"
+                name="port"
                 type="number"
+                inputMode="numeric"
                 min={1}
                 max={65535}
                 value={port}
                 onChange={e => setPort(e.target.value)}
+                autoComplete="off"
                 data-testid="port-input"
                 {...errorFieldProps}
               />
@@ -93,8 +114,10 @@ export default function ConnectForm({
           </div>
 
           <Input
+            ref={usernameRef}
             label="Username"
-            placeholder="username"
+            name="username"
+            placeholder="username…"
             value={username}
             onChange={e => setUsername(e.target.value)}
             autoComplete="username"
@@ -105,8 +128,9 @@ export default function ConnectForm({
 
           <Input
             label="Password"
+            name="password"
             type="password"
-            placeholder="password"
+            placeholder="password…"
             value={password}
             onChange={e => setPassword(e.target.value)}
             autoComplete="current-password"

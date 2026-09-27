@@ -1,3 +1,5 @@
+import { cn } from '@/lib/cn'
+
 interface LogoProps {
   size?: 'sm' | 'md' | 'lg'
   showText?: boolean
@@ -5,9 +7,9 @@ interface LogoProps {
 }
 
 const sizeMap = {
-  sm: 'w-6 h-6',
-  md: 'w-8 h-8',
-  lg: 'w-12 h-12',
+  sm: 'size-6',
+  md: 'size-8',
+  lg: 'size-12',
 }
 
 const textSizeMap = {
@@ -18,11 +20,13 @@ const textSizeMap = {
 
 export default function Logo({ size = 'md', showText = true, className = '' }: LogoProps) {
   return (
-    <div className={`flex items-center gap-2 ${className}`}>
+    <div className={cn('flex items-center gap-2', className)}>
       <svg
         viewBox="0 0 128 128"
         xmlns="http://www.w3.org/2000/svg"
-        className={`${sizeMap[size]} flex-shrink-0`}
+        aria-hidden="true"
+        focusable="false"
+        className={cn(sizeMap[size], 'flex-shrink-0')}
       >
         {/* Rounded square background */}
         <rect x="4" y="4" width="120" height="120" rx="24" fill="#ecfdf5" />
@@ -41,7 +45,7 @@ export default function Logo({ size = 'md', showText = true, className = '' }: L
       </svg>
 
       {showText && (
-        <span className={`font-semibold text-slate-100 ${textSizeMap[size]} tracking-tight`}>
+        <span className={cn('font-semibold text-slate-100', textSizeMap[size])}>
           Torrus
         </span>
       )}

@@ -18,8 +18,10 @@ describe('AuthRedirectOverlay', () => {
     act(() => { window.dispatchEvent(new Event(AUTH_REDIRECT_EVENT)) })
 
     expect(screen.getByText('Session expired')).toBeInTheDocument()
-    expect(screen.getByText('Your session has ended. Redirecting to sign in...')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Sign in now' })).toBeInTheDocument()
+    expect(screen.getByText('Your session has ended. Redirecting to sign in…')).toBeInTheDocument()
+    const action = screen.getByRole('button', { name: 'Sign in now' })
+    expect(action).toBeInTheDocument()
+    expect(action).toHaveFocus()
   })
 
   it('renders signing out overlay on auth-logout event', () => {
@@ -28,8 +30,9 @@ describe('AuthRedirectOverlay', () => {
     act(() => { window.dispatchEvent(new Event(AUTH_LOGOUT_EVENT)) })
 
     expect(screen.getByText('Signing out')).toBeInTheDocument()
-    expect(screen.getByText('Ending your session...')).toBeInTheDocument()
+    expect(screen.getByText('Ending your session…')).toBeInTheDocument()
     expect(screen.queryByRole('button')).not.toBeInTheDocument()
+    expect(screen.getByRole('alert')).toHaveFocus()
   })
 
   it('calls redirectToLdapLoginNow when Sign in now is clicked', () => {

@@ -25,8 +25,8 @@ export default function PendingCloseDialog({
   return (
     <Dialog role="alertdialog" label={label} initialFocus={cancelRef} onClose={onCancel} className="w-80 gap-4">
         <div>
-          <h2 className="text-sm font-semibold text-slate-200">{title}</h2>
-          <p className="mt-2 text-xs leading-relaxed text-slate-400">{message}</p>
+          <h2 className="text-sm font-semibold text-slate-200 text-balance">{title}</h2>
+          <p className="mt-2 text-xs leading-relaxed text-slate-400 text-pretty">{message}</p>
         </div>
         <div className="flex gap-2">
           <button
