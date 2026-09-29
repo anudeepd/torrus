@@ -17,3 +17,7 @@ proxy:
     idle_timeout: 0
     app_name: Torrus
     secure_cookies: true
+    # Largest request the gate lets through. Uploads arrive in
+    # TORRUS_UPLOAD_CHUNK_BYTES windows (32 MiB by default) and a smaller limit
+    # rejects them with a bare 413, so keep this at or above the window size.
+    max_body_size: 33554432

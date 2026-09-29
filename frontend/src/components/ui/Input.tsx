@@ -1,9 +1,10 @@
-import { type InputHTMLAttributes, forwardRef, useId, useState } from 'react'
+import { type InputHTMLAttributes, forwardRef, useCallback, useId, useLayoutEffect, useRef, useState } from 'react'
 import { AnimatePresence } from 'motion/react'
 import * as m from 'motion/react-m'
 import { exitTransition, fade } from '@/motion/tokens'
 import { Eye, EyeOff } from 'lucide-react'
 import { cn } from '@/lib/cn'
+import { browserDrawsRevealButton } from '@/lib/revealButton'
 
 interface InputProps extends InputHTMLAttributes<HTMLInputElement> {
   label?: string
@@ -17,6 +18,19 @@ const Input = forwardRef<HTMLInputElement, InputProps>(
     const errorId = `${inputId}-error`
     const isPassword = type === 'password'
     const [passwordVisible, setPasswordVisible] = useState(false)
+    // The browser's own reveal button, when it draws one, is the only one shown.
+    const [nativeReveal, setNativeReveal] = useState(false)
+    const customToggle = isPassword && !nativeReveal
+    const inputRef = useRef<HTMLInputElement | null>(null)
+    const setRefs = useCallback((node: HTMLInputElement | null) => {
+      inputRef.current = node
+      if (typeof ref === 'function') ref(node)
+      else if (ref) ref.current = node
+    }, [ref])
+
+    useLayoutEffect(() => {
+      setNativeReveal(isPassword && !!inputRef.current && browserDrawsRevealButton(inputRef.current))
+    }, [isPassword])
 
     return (
       <div className="flex flex-col gap-1">
@@ -27,7 +41,7 @@ const Input = forwardRef<HTMLInputElement, InputProps>(
         )}
         <div className="relative">
           <input
-            ref={ref}
+            ref={setRefs}
             id={inputId}
             type={isPassword && passwordVisible ? 'text' : type}
             aria-invalid={error ? true : undefined}
@@ -35,12 +49,12 @@ const Input = forwardRef<HTMLInputElement, InputProps>(
             className={cn(
               'w-full bg-surface-900 border border-surface-700 rounded-md px-3 py-2 text-sm font-mono text-slate-200 placeholder-slate-400',
               'focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus:border-brand-500 transition-colors',
-              { 'border-red-500': !!error, 'pr-10': isPassword, 'torrus-password-input': isPassword },
+              { 'border-red-500': !!error, 'pr-10': customToggle, 'torrus-password-input': isPassword },
               className
             )}
             {...props}
           />
-          {isPassword && (
+          {customToggle && (
             <button
               type="button"
               aria-label={passwordVisible ? 'Hide password' : 'Show password'}

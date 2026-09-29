@@ -82,10 +82,10 @@ def test_login_template_keeps_its_csp_and_password_contract():
     # CSRF token travels with the form.
     assert '<input type="hidden" name="csrf_token" value="{{ csrf_token }}">' in template
 
-    # The custom toggle must be the only reveal control: the browser's own
-    # affordances would double up with it.
+    # Edge's own reveal control stays hidden. Firefox's cannot be hidden from CSS,
+    # so the script defers to it instead of doubling up; that runs in a real
+    # Firefox in the login-reveal e2e specs of lagun and xwing.
     assert 'input[type="password"]::-ms-reveal' in template
-    assert "::-moz-reveal" not in template
     assert "credentials-auto-fill-button" not in template
     assert "password.type = showing ? 'text' : 'password';" in template
 

@@ -19,7 +19,7 @@
       --bg: #020617;
       --card: #0f172a;
       --card-border: #334155;
-      --surface-800: #1e293b;
+      --hover: #1e293b;
       --field: #0f172a;
       --field-border: #334155;
       --label: #94a3b8;
@@ -45,7 +45,7 @@
       font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
       background: var(--bg);
       color: var(--text);
-      min-height: 100dvh;
+      min-height: 100svh;
       display: flex;
       align-items: center;
       justify-content: center;
@@ -147,8 +147,8 @@
     input[type="text"]::placeholder,
     input[type="password"]::placeholder { color: var(--faint); }
 
-    input[type="text"]:focus-visible,
-    input[type="password"]:focus-visible {
+    input[type="text"]:focus,
+    input[type="password"]:focus {
       border-color: var(--focus);
       box-shadow: 0 0 0 3px var(--focus-glow);
     }
@@ -162,6 +162,19 @@
     }
     input[type="password"]::-ms-reveal {
       display: none;
+    }
+    /* The browser's own reveal control is the only one shown when it draws one
+       (see browserDrawsRevealButton below), so the room reserved for the custom
+       toggle goes back to the text. */
+    .password-field.native-reveal input {
+      padding-inline-end: 0.75rem;
+    }
+    /* Measuring stick for browserDrawsRevealButton: same box as the password
+       input, never seen, never focused. */
+    .reveal-probe {
+      position: absolute;
+      visibility: hidden;
+      pointer-events: none;
     }
 
     .password-toggle {
@@ -187,7 +200,7 @@
     }
 
     .password-toggle:hover {
-      background: var(--surface-800);
+      background: var(--hover);
       color: var(--text);
     }
 
@@ -276,18 +289,6 @@
       }
     }
 
-    .sr-only {
-      position: absolute;
-      width: 1px;
-      height: 1px;
-      padding: 0;
-      margin: -1px;
-      overflow: hidden;
-      clip: rect(0, 0, 0, 0);
-      white-space: nowrap;
-      border: 0;
-    }
-
     @keyframes login-error-up {
       from {
         opacity: 0;
@@ -332,15 +333,25 @@
       text-decoration: none;
     }
     .powered-by a:hover { color: var(--accent-soft); }
+    .powered-by a:focus-visible {
+      outline: 2px solid var(--focus);
+      outline-offset: 2px;
+    }
+    /* The error is focused on every failed sign-in (see the script below), so it
+       needs a visible indicator of its own rather than the browser default,
+       whose computed colour is near-black on this dark surface. */
+    .error:focus-visible {
+      outline: 2px solid var(--focus);
+      outline-offset: 2px;
+    }
   
   </style>
 </head>
 <body>
   <main class="login-shell">
-    <h1 class="sr-only">Sign in to Torrus</h1>
     <div class="feedback-slot" aria-live="off">
       {% if error %}
-      <div class="error" id="login-error" role="alert">
+      <div class="error" id="login-error" role="alert" tabindex="-1">
         <svg class="error-icon" aria-hidden="true" width="14" height="14" viewBox="0 0 15 15" fill="none">
           <path d="M7.5 1a6.5 6.5 0 1 0 0 13A6.5 6.5 0 0 0 7.5 1ZM7 4.5a.5.5 0 0 1 1 0v4a.5.5 0 0 1-1 0v-4Zm.5 6.5a.75.75 0 1 1 0-1.5.75.75 0 0 1 0 1.5Z" fill="currentColor"/>
         </svg>
@@ -351,7 +362,7 @@
 
     <div class="card">
       <div class="logo-wrap">
-        <svg class="brand-logo" viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg" width="36" height="36">
+        <svg class="brand-logo" aria-hidden="true" viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg" width="36" height="36">
           <rect x="4" y="4" width="120" height="120" rx="24" fill="#ecfdf5"/>
           <circle cx="64" cy="64" r="54" fill="none" stroke="#16a34a" stroke-width="3.6"/>
           <circle cx="64" cy="64" r="38" fill="none" stroke="#0d9488" stroke-width="3.2"/>
@@ -360,7 +371,7 @@
             points="52,56 64,64 52,72"/>
           <rect x="70" y="58" width="8" height="12" rx="1.5" fill="#10b981"/>
         </svg>
-        <span class="logo-text">Torrus</span>
+        <h1 class="logo-text">Torrus</h1>
       </div>
 
       <form method="POST" action="{{ login_path }}" id="login-form">
@@ -369,7 +380,7 @@
 
         <div class="field">
           <label for="username">Username</label>
-          <input type="text" id="username" name="username" autocomplete="username"{% if error %} aria-describedby="login-error" aria-invalid="true"{% endif %} autofocus required>
+          <input type="text" id="username" name="username" autocomplete="username"{% if error %} aria-describedby="login-error" aria-invalid="true"{% endif %}{% if not error %} autofocus{% endif %} required spellcheck="false">
         </div>
 
         <div class="field">
@@ -417,26 +428,66 @@
     const hasError = {{ 'true' if error else 'false' }};
     let loginSubmitting = false;
 
+    // Firefox draws its own reveal button inside <input type="password"> when
+    // layout.forms.reveal-password-button.enabled is on (Nightly, some forks, any
+    // profile that sets it), next to the custom toggle. Page CSS cannot remove it:
+    // ::-moz-reveal is user-agent-only, ::-ms-reveal is Edge's, and painting it
+    // invisible is undone by Firefox's `input:autofill { color: FieldText !important }`,
+    // which is the normal state of a login page. What it does do is reserve room at
+    // the end of the field, so the password input reports a smaller clientWidth than
+    // an identical text input. When it does, the browser's control is the only one shown.
+    function browserDrawsRevealButton(field) {
+      const probe = document.createElement('input');
+      probe.type = 'text';
+      probe.tabIndex = -1;
+      probe.autocomplete = 'off';
+      probe.className = 'reveal-probe';
+      probe.setAttribute('aria-hidden', 'true');
+      field.parentNode.appendChild(probe);
+      const reserved = probe.clientWidth - field.clientWidth;
+      probe.remove();
+      return reserved > 2;
+    }
+
     if (password && passwordToggle) {
-      passwordToggle.hidden = false;
-      passwordToggle.addEventListener('click', function() {
-        const showing = password.type === 'password';
-        password.type = showing ? 'text' : 'password';
-        passwordToggle.setAttribute('aria-label', showing ? 'Hide password' : 'Show password');
-        passwordToggle.setAttribute('aria-pressed', String(showing));
-        password.focus();
-      });
+      if (browserDrawsRevealButton(password)) {
+        password.parentNode.classList.add('native-reveal');
+      } else {
+        passwordToggle.hidden = false;
+        passwordToggle.addEventListener('click', function() {
+          const showing = password.type === 'password';
+          password.type = showing ? 'text' : 'password';
+          passwordToggle.setAttribute('aria-label', showing ? 'Hide password' : 'Show password');
+          passwordToggle.setAttribute('aria-pressed', String(showing));
+          password.focus();
+        });
+      }
     }
 
 
     if (hasError && username && !username.value) {
-      username.value = sessionStorage.getItem(storageKey) || '';
+      try {
+        username.value = sessionStorage.getItem(storageKey) || '';
+      } catch (error) {
+        // Storage can be disabled by browser privacy settings; login still works.
+      }
+    }
+
+    // The alert is server-rendered, so a live region never announces it: move
+    // focus there instead. #username has no autofocus in that case.
+    const loginError = document.getElementById('login-error');
+    if (hasError && loginError) {
+      loginError.focus();
     }
 
 
     if (username) {
       username.addEventListener('input', function() {
-        sessionStorage.setItem(storageKey, username.value);
+        try {
+          sessionStorage.setItem(storageKey, username.value);
+        } catch (error) {
+          // Storage is a convenience only and must never block authentication.
+        }
       });
     }
 
@@ -447,8 +498,12 @@
       const btn = document.getElementById('submit-btn');
       const label = btn.querySelector('.submit-label');
 
-      sessionStorage.setItem(storageKey, username.value);
-      label.textContent = 'Signing in';
+      try {
+        sessionStorage.setItem(storageKey, username.value);
+      } catch (error) {
+        // Storage is a convenience only and must never block authentication.
+      }
+      label.textContent = 'Signing in…';
       btn.disabled = true;
       loginForm.setAttribute('aria-busy', 'true');
       btn.classList.add('loading');

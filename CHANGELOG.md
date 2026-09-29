@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.2.55] - 2026-09-29
+
+### Fixed
+
+- **Two eye icons in Firefox's password fields.** Firefox can draw its own reveal
+  button inside `<input type="password">` (`layout.forms.reveal-password-button.enabled`:
+  on in Nightly, some forks and any profile that sets it), next to the app's own
+  toggle. Page CSS cannot hide it: `::-moz-reveal` is user-agent-only, `::-ms-reveal`
+  is Edge's, and painting it invisible is undone by Firefox's
+  `input:autofill { color: FieldText !important }`. The login page and `Input` now
+  measure whether the browser reserves room for its own button and, if it does, show
+  only that one and drop the room they kept for the custom toggle.
+- The login page is now the same page as lagun's, xwing's and ldapgate's apart from branding:
+  guarded `sessionStorage` access (blocked storage can no longer throw after a failed
+  sign-in), the error takes focus and the username is autofocused only when there is no error,
+  focus-visible outlines, `spellcheck="false"` on the username field, an `aria-hidden` brand
+  mark, a visible `<h1>` instead of a hidden one, `100svh` instead of `100dvh`, and the
+  "Signing in…" label. Fields key their focus ring on `:focus` rather than `:focus-visible`,
+  so the ring is visible for the pointer too.
+
 ## [0.2.54] - 2026-09-29
 
 ### Fixed

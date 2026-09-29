@@ -168,7 +168,8 @@
 .xterm-selection {
   overflow: hidden;
 }
-/* Custom password toggle replaces Edge's native reveal control. */
+/* Custom password toggle replaces Edge's native reveal control. Firefox's own
+   button cannot be styled away; Input defers to it instead (lib/revealButton.ts). */
 .torrus-password-input::-ms-reveal {
   display: none;
 }

@@ -106,6 +106,25 @@ TORRUS_ADMIN_USERS=alice,bob torrus serve --ldap-config /path/to/ldapgate.yaml
 ```
 Session controls use immutable session identity plus generation checks. New user allowlist entries and disable/re-enable changes apply immediately without restarting Torrus; disabling a user revokes known LDAP cookies and closes that user's active SSH tabs. Policy mutation requires LDAPGate user-wide revocation support (0.1.22+); older deployments fail closed without changing policy.
 
+### Uploads behind LDAPGate
+
+Uploads arrive at the gate in `TORRUS_UPLOAD_CHUNK_BYTES` windows, and ldapgate
+answers any request body over `proxy.max_body_size` with a bare 413 before the
+request reaches Torrus. Its default is 10 MB, so keep the setting at or above the
+window:
+
+```yaml
+proxy:
+    max_body_size: 33554432   # 32 MiB, matching TORRUS_UPLOAD_CHUNK_BYTES
+```
+
+Torrus caps the window at that limit on startup and logs a warning naming the
+setting to raise, so an upload does not fail — it just shifts less data per
+request. Raise both together, or lower both to 16 MiB if you would rather retry
+smaller windows on a flaky link. Any reverse proxy in front of ldapgate needs a
+limit at least as large (`client_max_body_size 32m` on nginx, whose default is
+1 MB).
+
 ### Terminal input audit
 
 LDAP deployments persist completed command lines after Enter, not raw
