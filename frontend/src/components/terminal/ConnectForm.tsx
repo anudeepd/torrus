@@ -65,10 +65,10 @@ export default function ConnectForm({
 
   return (
     <m.div {...fade} className="torrus-connect-container flex h-full items-center justify-center bg-surface-950">
-      <m.div {...surface} transition={surfaceSpring} className="torrus-connect-card flex w-96 max-w-[calc(100%-1.5rem)] flex-col gap-4 rounded-xl border border-surface-700 bg-surface-900 p-4 shadow-2xl">
+      <m.div {...surface} transition={surfaceSpring} className="torrus-connect-card flex w-96 max-w-[calc(100%-1.5rem)] flex-col gap-4 rounded-xl border border-surface-700 bg-surface-900 p-5 shadow-2xl">
         <div className="flex items-center gap-2">
           <Terminal aria-hidden="true" className="size-5 text-brand-400" />
-          <h2 className="torrus-connect-title whitespace-nowrap text-balance text-xs font-semibold text-slate-200">SSH Connection</h2>
+          <h2 className="torrus-connect-title whitespace-nowrap text-balance text-xs font-semibold text-slate-200">SSH connection</h2>
         </div>
 
         <form

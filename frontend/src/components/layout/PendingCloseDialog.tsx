@@ -23,7 +23,7 @@ export default function PendingCloseDialog({
   const label = kind === 'all' ? 'Close all tabs' : 'Close tab'
 
   return (
-    <Dialog role="alertdialog" label={label} initialFocus={cancelRef} onClose={onCancel} className="w-80 gap-4">
+    <Dialog role="alertdialog" layer="confirm" label={label} initialFocus={cancelRef} onClose={onCancel} className="w-80 gap-4">
         <div>
           <h2 className="text-sm font-semibold text-slate-200 text-balance">{title}</h2>
           <p className="mt-2 text-xs leading-relaxed text-slate-400 text-pretty">{message}</p>
@@ -33,14 +33,14 @@ export default function PendingCloseDialog({
             ref={cancelRef}
             type="button"
             onClick={onCancel}
-            className="flex-1 rounded-md bg-surface-800 px-3 py-2 text-sm text-slate-400 transition-colors hover:bg-surface-700 hover:text-slate-200"
+            className="flex-1 rounded-md bg-surface-800 px-3 py-2 text-sm text-slate-400 transition-colors hover:bg-surface-700 hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
           >
             Cancel
           </button>
           <button
             type="button"
             onClick={onConfirm}
-            className="flex-1 rounded-md bg-red-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-red-500"
+            className="flex-1 rounded-md bg-red-700 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-red-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
           >
             {label}
           </button>

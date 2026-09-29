@@ -19,7 +19,7 @@ describe('AuthRedirectOverlay', () => {
 
     expect(screen.getByText('Session expired')).toBeInTheDocument()
     expect(screen.getByText('Your session has ended. Redirecting to sign in…')).toBeInTheDocument()
-    const action = screen.getByRole('button', { name: 'Sign in now' })
+    const action = screen.getByRole('button', { name: 'Sign in' })
     expect(action).toBeInTheDocument()
     expect(action).toHaveFocus()
   })
@@ -35,7 +35,7 @@ describe('AuthRedirectOverlay', () => {
     expect(screen.getByRole('alert')).toHaveFocus()
   })
 
-  it('calls redirectToLdapLoginNow when Sign in now is clicked', () => {
+  it('calls redirectToLdapLoginNow when Sign in is clicked', () => {
     const assign = vi.fn()
     Object.defineProperty(window, 'location', {
       value: { ...window.location, assign, pathname: '/', search: '', hash: '' },
@@ -46,7 +46,7 @@ describe('AuthRedirectOverlay', () => {
     act(() => { window.dispatchEvent(new Event(AUTH_REDIRECT_EVENT)) })
 
     act(() => {
-      screen.getByRole('button', { name: 'Sign in now' }).click()
+      screen.getByRole('button', { name: 'Sign in' }).click()
     })
 
     expect(assign).toHaveBeenCalledOnce()

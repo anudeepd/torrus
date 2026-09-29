@@ -107,10 +107,10 @@ function SaveSessionDialog({ state, onSave, onClose }: {
   }
 
   return (
-    <Dialog label="Save Session" initialFocus={inputRef} onClose={onClose} className="w-72 gap-3">
+    <Dialog label="Save session" initialFocus={inputRef} onClose={onClose} className="w-72 gap-3">
         <div className="flex items-center gap-2">
           <Bookmark className="size-4 text-brand-400" aria-hidden="true" />
-          <h2 className="text-sm font-semibold text-slate-200">Save Session</h2>
+          <h2 className="text-sm font-semibold text-slate-200">Save session</h2>
         </div>
         <p className="text-xs text-slate-400">
           {state.tab.username}@{state.tab.host}{state.tab.port !== 22 ? `:${state.tab.port}` : ''}
@@ -123,7 +123,7 @@ function SaveSessionDialog({ state, onSave, onClose }: {
               name="session-name"
               autoComplete="off"
               ref={inputRef}
-              className="w-full bg-surface-950 border border-surface-700 rounded-md px-3 py-2 text-sm text-slate-200 placeholder-slate-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus:border-brand-500 transition-colors"
+              className="w-full bg-surface-900 border border-surface-700 rounded-md px-3 py-2 text-sm font-mono text-slate-200 placeholder-slate-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus:border-brand-500 transition-colors"
               placeholder={`${state.tab.username}@${state.tab.host}…`}
               value={name}
               onChange={e => setName(e.target.value)}
@@ -137,13 +137,13 @@ function SaveSessionDialog({ state, onSave, onClose }: {
             <button
               type="button"
               onClick={onClose}
-              className="flex-1 px-3 py-2 rounded-md text-sm text-slate-400 bg-surface-800 hover:bg-surface-700 hover:text-slate-200 transition-colors"
+              className="flex-1 px-3 py-2 rounded-md text-sm text-slate-400 bg-surface-800 hover:bg-surface-700 hover:text-slate-200 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
             >
               Cancel
             </button>
             <button
               type="submit"
-              className="flex-1 px-3 py-2 rounded-md text-sm font-medium text-white bg-brand-700 hover:bg-brand-600 transition-colors"
+              className="flex-1 px-3 py-2 rounded-md text-sm font-medium text-white bg-brand-700 hover:bg-brand-600 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
             >
               Save
             </button>
@@ -274,7 +274,7 @@ export default function TabBar({ actions, inSplitMode, compactSidebar = false, s
         </button>
       )}
       {/* Logo branding */}
-      <div className={cn('h-10 flex-shrink-0 flex items-center px-3 border-r border-surface-800', compactSidebar ? 'col-start-2 row-start-1 self-center border-r-0 px-2 [&>div>span]:inline' : 'max-nav:w-10 max-nav:justify-center max-nav:px-2 max-nav:[&>div>span]:hidden')}>
+      <div className={cn('h-10 flex-shrink-0 flex items-center px-3 border-r border-surface-800', compactSidebar ? 'col-start-2 row-start-1 self-center border-r-0 px-2 [&>div>span]:inline' : 'max-wide:w-10 max-wide:justify-center max-wide:px-2 max-wide:[&>div>span]:hidden')}>
         <Logo size="sm" showText={true} />
       </div>
 
@@ -426,7 +426,7 @@ export default function TabBar({ actions, inSplitMode, compactSidebar = false, s
               <button
                 type="button"
                 onClick={(e) => { e.stopPropagation(); actions.closeTab(tab.id) }}
-                className="mr-2 flex size-6 flex-shrink-0 items-center justify-center rounded opacity-0 transition-opacity hover:text-red-400 focus:opacity-100 group-hover:opacity-100 max-xs:opacity-100"
+                className="mr-2 flex size-6 flex-shrink-0 items-center justify-center rounded-md opacity-0 transition-[opacity,color,background-color] hover:bg-surface-700 hover:text-red-400 focus:opacity-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 group-hover:opacity-100 max-xs:opacity-100"
                 title={`Close ${tabDisplayName(tab, tabs)}`}
                 aria-label={`Close ${tabDisplayName(tab, tabs)}`}
               >
@@ -443,8 +443,8 @@ export default function TabBar({ actions, inSplitMode, compactSidebar = false, s
       {inSplitMode && !compactSidebar && (
         <button
           onClick={actions.exitSplit}
-          title="Exit split mode"
-          aria-label="Exit split mode"
+          title="Exit split"
+          aria-label="Exit split"
           className="h-10 flex-shrink-0 flex items-center justify-center gap-1.5 px-3 text-xs text-brand-400 bg-brand-500/10 hover:bg-brand-500/20 transition-colors border-l border-surface-800 max-wide:w-10 max-wide:px-0"
         >
           <X className="size-3.5" aria-hidden="true" />
@@ -454,8 +454,8 @@ export default function TabBar({ actions, inSplitMode, compactSidebar = false, s
       {tabs.length >= 2 && (!compactSidebar || !inSplitMode) && (
         <button
           onClick={actions.openSplitPicker}
-          title="Split layout"
-          aria-label="Split layout"
+          title="Split"
+          aria-label="Split"
           className="h-10 flex-shrink-0 flex items-center justify-center gap-1.5 px-3 text-xs text-slate-400 hover:text-slate-300 hover:bg-surface-800 transition-colors border-l border-surface-800 max-wide:w-10 max-wide:px-0"
         >
           <Columns2 className="size-3.5" aria-hidden="true" />
@@ -536,12 +536,12 @@ export default function TabBar({ actions, inSplitMode, compactSidebar = false, s
               setContextMenu(null)
               tabRefs.current[contextMenu.tabId]?.focus()
             })}
-            className="fixed z-menu bg-surface-800 border border-surface-700 rounded-lg shadow-xl py-1 min-w-36"
+            className="fixed z-menu bg-surface-800 border border-surface-700 rounded-lg shadow-xl py-1 min-w-40"
             style={{ left: contextMenu.x, top: contextMenu.y }}
           >
             <button
               type="button"
-              role="menuitem" className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-300 hover:bg-surface-700 transition-colors"
+              role="menuitem" className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-300 hover:bg-surface-700 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-500"
               onClick={() => startEditing(tab)}
             >
               <Pencil className="size-3" aria-hidden="true" />
@@ -549,7 +549,8 @@ export default function TabBar({ actions, inSplitMode, compactSidebar = false, s
             </button>
             {tabIndex > 0 && (
               <button
-                role="menuitem" className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-300 hover:bg-surface-700 transition-colors"
+                type="button"
+                role="menuitem" className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-300 hover:bg-surface-700 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-500"
                 onClick={() => { setContextMenu(null); moveTab(tab.id, tabs[tabIndex - 1].id) }}
               >
                 <ChevronLeft className="size-3" />
@@ -558,7 +559,8 @@ export default function TabBar({ actions, inSplitMode, compactSidebar = false, s
             )}
             {tabIndex >= 0 && tabIndex < tabs.length - 1 && (
               <button
-                role="menuitem" className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-300 hover:bg-surface-700 transition-colors"
+                type="button"
+                role="menuitem" className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-300 hover:bg-surface-700 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-500"
                 onClick={() => { setContextMenu(null); moveTab(tab.id, tabs[tabIndex + 1].id) }}
               >
                 <ChevronRight className="size-3" />
@@ -568,14 +570,16 @@ export default function TabBar({ actions, inSplitMode, compactSidebar = false, s
             {tab.type === 'terminal' && tab.status === 'connected' && (
               <>
               <button
-                role="menuitem" className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-300 hover:bg-surface-700 transition-colors"
+                type="button"
+                role="menuitem" className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-300 hover:bg-surface-700 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-500"
                 onClick={() => { setContextMenu(null); actions.openSftpTab(tab.id) }}
               >
                 <Folder className="size-3" />
                 Open SFTP
               </button>
               <button
-                role="menuitem" className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-300 hover:bg-surface-700 transition-colors"
+                type="button"
+                role="menuitem" className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-300 hover:bg-surface-700 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-500"
                 onClick={() => { setContextMenu(null); actions.cloneTab(tab.id) }}
               >
                 <GitFork className="size-3" />
@@ -585,16 +589,18 @@ export default function TabBar({ actions, inSplitMode, compactSidebar = false, s
             )}
             {tab.host && tab.username && (
               <button
-                role="menuitem" className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-300 hover:bg-surface-700 transition-colors"
+                type="button"
+                role="menuitem" className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-300 hover:bg-surface-700 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-500"
                 onClick={() => { setContextMenu(null); actions.duplicateTab(tab.id) }}
               >
-                <Copy className="size-3" />
+                <Copy className="size-3" aria-hidden="true" />
                 Duplicate (new connection)
               </button>
             )}
             {tab.host && tab.username && (
               <button
-                role="menuitem" className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-300 hover:bg-surface-700 transition-colors"
+                type="button"
+                role="menuitem" className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-300 hover:bg-surface-700 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-500"
                 onClick={() => {
                   setContextMenu(null)
                   setSaveDialog({

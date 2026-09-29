@@ -1,6 +1,6 @@
 {
   "name": "torrus-frontend",
-  "version": "0.2.53",
+  "version": "0.2.54",
   "type": "module",
   "private": true,
   "engines": {

@@ -33,12 +33,12 @@ describe('CommandPalette', () => {
   it('filters the command list as the query narrows', () => {
     renderPalette()
 
-    expect(screen.getByRole('option', { name: /New terminal tab/ })).toBeInTheDocument()
+    expect(screen.getByRole('option', { name: /New tab/ })).toBeInTheDocument()
 
     fireEvent.change(screen.getByLabelText('Search commands and tabs'), { target: { value: 'settings' } })
 
     expect(screen.getByRole('option', { name: /Open settings/ })).toBeInTheDocument()
-    expect(screen.queryByRole('option', { name: /New terminal tab/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('option', { name: /New tab/ })).not.toBeInTheDocument()
   })
 
   it('runs the highlighted command on Enter and closes', () => {

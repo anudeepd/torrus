@@ -248,7 +248,7 @@ describe('AppLayout LDAP auth handling', () => {
       expect(event.defaultPrevented).toBe(false)
     }
 
-    expect(screen.queryByRole('dialog', { name: 'Command Palette' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('dialog', { name: 'Command palette' })).not.toBeInTheDocument()
   })
 
   it('opens settings via Ctrl+, across macOS, Windows, and Linux user agents', async () => {

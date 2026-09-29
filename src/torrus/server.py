@@ -204,20 +204,51 @@ _HTTP_ERROR_CODES = {
 }
 
 
+# Human copy for machine codes that reach users (upload router raises bare
+# snake_case codes as HTTPException detail; websocket/HTTP paths share the same
+# message per code).
+_ERROR_MESSAGES = {
+    "auth_required": "Authentication required.",
+    "session_owner_mismatch": "Session is not available to this user.",
+    "invalid_request": "Request parameters are invalid.",
+    "invalid_filename": "The file name is not valid.",
+    "invalid_directory": "The destination folder is not valid.",
+    "invalid_size": "The file size is not valid.",
+}
+
+
+def _error_envelope(status_code: int, code: str, message: str) -> JSONResponse:
+    return JSONResponse(
+        status_code=status_code,
+        content={"ok": False, "code": code, "message": message},
+    )
+
+
+def _frontend_unbuilt_response() -> JSONResponse:
+    return _error_envelope(
+        503, "frontend_unbuilt", "The app is temporarily unavailable. Try again shortly."
+    )
+
+
 @fastapi_app.exception_handler(StarletteHTTPException)
 async def _http_exception_envelope(
     _request: Request, exc: StarletteHTTPException
 ) -> JSONResponse:
-    detail = exc.detail if isinstance(exc.detail, str) else "Request failed."
-    return JSONResponse(
-        status_code=exc.status_code,
-        content={
-            "ok": False,
-            "code": _HTTP_ERROR_CODES.get(exc.status_code, "http_error"),
-            "message": detail,
-        },
-        headers=getattr(exc, "headers", None),
+    code = exc.detail if isinstance(exc.detail, str) and exc.detail in _ERROR_MESSAGES else None
+    if code is not None:
+        message = _ERROR_MESSAGES[code]
+    elif isinstance(exc.detail, str):
+        message = exc.detail
+    else:
+        message = "Request failed."
+    response = _error_envelope(
+        exc.status_code,
+        code or _HTTP_ERROR_CODES.get(exc.status_code, "http_error"),
+        message,
     )
+    if getattr(exc, "headers", None):
+        response.headers.update(exc.headers)
+    return response
 
 
 @fastapi_app.exception_handler(RequestValidationError)
@@ -705,7 +736,7 @@ async def _root_static_file(name: str, media_type: str) -> Response:
         path = _static / name
         if path.exists():
             return FileResponse(str(path), media_type=media_type)
-    return JSONResponse(status_code=404, content={"detail": "Not found"})
+    return _error_envelope(404, "not_found", "Not found.")
 
 
 @fastapi_app.get("/favicon.svg", include_in_schema=False)
@@ -932,16 +963,10 @@ async def admin_shell(request: Request):
     if error:
         return error
     if not _static:
-        return JSONResponse(
-            status_code=503,
-            content={"ok": False, "code": "frontend_unbuilt"},
-        )
+        return _frontend_unbuilt_response()
     index = _static / "index.html"
     if not index.exists():
-        return JSONResponse(
-            status_code=503,
-            content={"ok": False, "code": "frontend_unbuilt"},
-        )
+        return _frontend_unbuilt_response()
     return FileResponse(str(index), headers={"Cache-Control": APP_SHELL_CACHE_CONTROL})
 
 
@@ -1706,17 +1731,14 @@ async def sftp_stream_bulk_download(request: Request):
 @fastapi_app.get("/{full_path:path}", include_in_schema=False)
 async def spa_fallback(full_path: str):
     if full_path.lower().startswith("socket.io"):
-        return JSONResponse(status_code=404, content={"detail": "Not found"})
+        return _error_envelope(404, "not_found", "Not found.")
     if _static:
         index = _static / "index.html"
         if index.exists():
             return FileResponse(
                 str(index), headers={"Cache-Control": APP_SHELL_CACHE_CONTROL}
             )
-    return JSONResponse(
-        status_code=503,
-        content={"detail": "Frontend not built. Run: cd frontend && npm run build"},
-    )
+    return _frontend_unbuilt_response()
 
 
 # ---------------------------------------------------------------------------
@@ -1979,7 +2001,7 @@ async def _require_auth(sid: str, tab_id: str) -> bool:
                 "ssh:error",
                 {
                     "tab_id": tab_id,
-                    "message": "Authentication required.",
+                    "message": _ERROR_MESSAGES["auth_required"],
                     "code": "auth_required",
                 },
                 to=sid,
@@ -2009,7 +2031,7 @@ async def _require_session_owner(sid: str, session_id: str, tab_id: str) -> str 
             "ssh:error",
             {
                 "tab_id": tab_id,
-                "message": "Session is not available to this user.",
+                "message": _ERROR_MESSAGES["session_owner_mismatch"],
                 "code": "session_owner_mismatch",
             },
             to=sid,
@@ -2433,7 +2455,11 @@ async def on_ssh_disconnect(sid, data):
     if result == "forbidden":
         await sio.emit(
             "ssh:error",
-            {"tab_id": tab_id, "message": "Session owner mismatch.", "code": result},
+            {
+                "tab_id": tab_id,
+                "message": _ERROR_MESSAGES["session_owner_mismatch"],
+                "code": "session_owner_mismatch",
+            },
             to=sid,
         )
         return
@@ -3060,6 +3086,20 @@ async def on_sftp_accounts(sid, data):
 
 _UPLOAD_MAX_BYTES = int(os.getenv("TORRUS_MAX_UPLOAD_BYTES", str(1024**4)))
 _UPLOAD_CHUNK_BYTES = int(os.getenv("TORRUS_UPLOAD_CHUNK_BYTES", str(32 * 1024 * 1024)))
+if _ldap_config is not None:
+    # ldapgate rejects any request whose Content-Length exceeds
+    # proxy.max_body_size (default 10 MB) with a bare 413 before it reaches the
+    # upload router, so a larger window would fail every upload past that size.
+    _ldap_body_limit = int(_ldap_config.proxy.max_body_size)
+    if _ldap_body_limit < _UPLOAD_CHUNK_BYTES:
+        logger.warning(
+            "Upload window %d exceeds ldapgate proxy.max_body_size %d; using %d. "
+            "Raise max_body_size for larger windows.",
+            _UPLOAD_CHUNK_BYTES,
+            _ldap_body_limit,
+            _ldap_body_limit,
+        )
+        _UPLOAD_CHUNK_BYTES = _ldap_body_limit
 _UPLOAD_SESSION_TTL = int(os.getenv("TORRUS_UPLOAD_SESSION_TTL", "3600"))
 _UPLOAD_CONCURRENCY = int(os.getenv("TORRUS_UPLOAD_CONCURRENCY", "4"))
 

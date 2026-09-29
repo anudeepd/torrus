@@ -17,27 +17,26 @@ export default function SettingsDialog({ onClose }: SettingsDialogProps) {
   const reset = useSettingsStore(s => s.reset)
 
   return (
-    <Dialog label="Terminal Settings" onClose={onClose} className="w-80 gap-4">
-        <div className="flex items-center justify-between">
+    <Dialog label="Terminal settings" onClose={onClose} className="w-80 gap-4">
+        <div className="-mx-5 -mt-5 flex items-center justify-between border-b border-surface-800 px-5 py-4">
           <div className="flex items-center gap-2">
             <Settings aria-hidden="true" className="size-4 text-brand-400" />
-            <h2 className="text-balance text-sm font-semibold text-slate-200">Terminal Settings</h2>
+            <h2 className="text-balance text-sm font-semibold text-slate-200">Terminal settings</h2>
           </div>
           <button
             type="button"
             onClick={reset}
             className="flex items-center gap-1 text-xs text-slate-400 hover:text-slate-300 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
-            title="Reset to defaults"
           >
             <RotateCcw aria-hidden="true" className="size-3" />
-            Reset
+            Reset to defaults
           </button>
         </div>
 
         <div className="flex flex-col gap-4">
           {/* Scrollback buffer */}
           <div className="flex flex-col gap-1">
-            <label htmlFor="settings-scrollback" className="text-sm text-slate-200">Scrollback lines</label>
+            <label htmlFor="settings-scrollback" className="text-xs font-medium text-slate-400">Scrollback lines</label>
             <p id="settings-scrollback-help" className="text-pretty text-xs text-slate-400">Number of lines kept in terminal history</p>
             <select
               id="settings-scrollback"
@@ -46,7 +45,7 @@ export default function SettingsDialog({ onClose }: SettingsDialogProps) {
               aria-describedby="settings-scrollback-help"
               value={scrollbackLines}
               onChange={e => update({ scrollbackLines: parseInt(e.target.value, 10) })}
-              className="mt-1 w-full bg-surface-950 border border-surface-700 rounded-md px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-brand-500 transition-colors"
+              className="mt-1 w-full bg-surface-900 border border-surface-700 rounded-md px-3 py-2 text-sm text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus:border-brand-500 transition-colors"
             >
               {SCROLLBACK_OPTIONS.map(n => (
                 <option key={n} value={n}>{n.toLocaleString()}</option>
@@ -56,7 +55,7 @@ export default function SettingsDialog({ onClose }: SettingsDialogProps) {
 
           {/* Font size */}
           <div className="flex flex-col gap-1">
-            <label htmlFor="settings-font-size" className="text-sm text-slate-200">Font size</label>
+            <label htmlFor="settings-font-size" className="text-xs font-medium text-slate-400">Font size</label>
             <p id="settings-font-size-help" className="text-pretty text-xs text-slate-400">Terminal font size in pixels</p>
             <select
               id="settings-font-size"
@@ -65,7 +64,7 @@ export default function SettingsDialog({ onClose }: SettingsDialogProps) {
               aria-describedby="settings-font-size-help"
               value={fontSize}
               onChange={e => update({ fontSize: parseInt(e.target.value, 10) })}
-              className="mt-1 w-full bg-surface-950 border border-surface-700 rounded-md px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-brand-500 transition-colors"
+              className="mt-1 w-full bg-surface-900 border border-surface-700 rounded-md px-3 py-2 text-sm text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus:border-brand-500 transition-colors"
             >
               {FONT_SIZE_OPTIONS.map(n => (
                 <option key={n} value={n}>{n}px</option>

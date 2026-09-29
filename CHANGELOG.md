@@ -1,5 +1,62 @@
 # Changelog
 
+## [0.2.54] - 2026-09-29
+
+### Fixed
+
+- **Uploads over 10 MB failed behind LDAP auth.** ldapgate rejects any request
+  whose body exceeds `proxy.max_body_size` (default 10 MB) with a bare 413, but
+  the upload window defaults to 32 MB. The window is now capped at
+  `max_body_size` when an ldapgate config is loaded.
+- **A failed finalize showed "Upload session not found".** The server drops the
+  session when the remote write fails, so the client's retry of `/complete`
+  returned 404 and hid the real reason (for example "Permission denied"). A 500
+  from `/complete` is no longer retried, so the server's message is shown.
+- **An upload could hang for good after a network drop.** When a window failed
+  twice the client halved it and left the abandoned tail for the next pass, so
+  the other workers raced ahead of the gap. The SFTP sink writes in order and
+  buffers out-of-order windows, and once that buffer filled every worker blocked
+  waiting for a gap nobody was going to send. The abandoned tail is now queued
+  next, ahead of later windows. The sink also no longer parks a write behind a
+  full buffer indefinitely: after 60 s it answers with a retryable 503, so no
+  client can be held open by a gap that never fills.
+- **Enter in the New folder dialog created the folder and reopened the dialog.**
+  Closing the dialog returned focus to the New folder button while the Enter
+  keypress was still being handled, which activated it again.
+- **Ctrl+L in the SFTP browser** now edits the path on every platform, as the
+  terminal already claimed it from the address bar.
+- **Abandoned upload staging files stayed on the remote host forever.** An upload
+  the server no longer tracks (restart, lost SSH connection, killed process)
+  leaves its hidden `.name.upload-part-<id>` file behind. Listing a directory now
+  removes staging files untouched for twice the session TTL (six hours at
+  minimum), so a live or paused upload is never touched.
+
+### Changed
+
+- **A failed request names the failure, not the code path that raised it.** The
+  envelope's `code` was the status-derived string and its `message` was whatever
+  `HTTPException.detail` held, which on the upload router is a bare snake_case
+  identifier — users saw `invalid_size` or `session_owner_mismatch` where a
+  sentence belonged, and clients had to parse prose to tell them apart. Those
+  identifiers are the `code` now and each carries its own copy, free-text details
+  keep the status-derived code, the static and SPA fallbacks answer with the same
+  `{ok, code, message}` envelope (`not_found`) instead of a bare `{"detail": …}`,
+  and an unbuilt frontend answers `frontend_unbuilt` with "The app is temporarily
+  unavailable. Try again shortly." instead of a build command. The websocket
+  errors (`ssh:error` on a missing session or a mismatched owner) carry the same
+  copy as their HTTP counterparts.
+- **A contrast and focus pass over the app shell.** Placeholders move from
+  `slate-700` to `slate-400` and `text-2xs` labels become `text-xs`; the admin
+  console's `amber-300`/`green-300` status text becomes `-400`; every control
+  whose outline had been removed carries a `focus-visible` ring (dialog and picker
+  buttons, context-menu items, the pane close, the sidebar rail toggle); disabled
+  toolbar buttons use `disabled:opacity-50`/`cursor-not-allowed` instead of
+  hand-written class branches; dialog titles are sentence case and the command
+  palette names entries the way the toolbar does ("New tab", "Split", "Exit
+  split"); the admin view tabs read one `VIEW_LABELS` map instead of printing
+  their raw keys; the two copies of the lazy-pane fallback are one `PaneFallback`
+  component; and the favicon is redrawn on a 128 viewBox.
+
 ## [0.2.53] - 2026-09-27
 
 ### Fixed

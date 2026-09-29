@@ -4,6 +4,7 @@ import * as m from 'motion/react-m'
 const AdminConsole = lazy(() => import('./components/admin/AdminConsole'))
 import AppLayout from './components/layout/AppLayout'
 import { PaneErrorBoundary, PaneErrorFallback } from './components/ui/PaneErrorBoundary'
+import { PaneFallback } from './components/ui/PaneFallback'
 import { spatialTransition } from './motion/tokens'
 import { useServerConfigStore } from './store/serverConfigStore'
 import { redirectToLdapLogin } from './utils/authRedirect'
@@ -72,9 +73,4 @@ export default function App() {
       )}
     </AnimatePresence>
   )
-}
-
-/** Shown while a lazily loaded surface's chunk arrives. */
-function PaneFallback() {
-  return <div className="flex h-full items-center justify-center bg-surface-950 text-xs text-slate-400">Loading…</div>
 }

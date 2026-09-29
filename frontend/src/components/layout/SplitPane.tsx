@@ -18,15 +18,15 @@ interface SplitPaneProps {
 
 function LeafPaneErrorFallback({ tabId, onClose }: { tabId: string; onClose: () => void }) {
   return (
-    <div className="flex flex-col w-full h-full bg-surface-900 items-center justify-center p-4">
+    <div className="flex flex-col w-full h-full bg-surface-950 items-center justify-center p-4">
       <AlertTriangle className="size-8 text-red-400 mb-2" aria-hidden="true" />
       <p className="text-sm text-slate-300 mb-2 text-pretty">Pane failed to load</p>
       <p className="text-xs text-slate-400 mb-3 text-pretty">Tab: {tabId}</p>
       <button
         onClick={onClose}
-        className="text-xs px-3 py-1 bg-surface-700 hover:bg-surface-600 text-slate-200 rounded transition-colors"
+        className="rounded bg-surface-700 px-3 py-1 text-xs text-slate-200 transition-colors hover:bg-surface-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
       >
-        Close Pane
+        Close pane
       </button>
     </div>
   )
@@ -105,7 +105,7 @@ function LeafPane({ tabId, socket, onClose, isOnlyPane }: {
             onClick={() => onClose(tabId)}
             title="Close pane"
             aria-label="Close pane"
-            className="flex-shrink-0 p-0.5 text-slate-400 hover:text-red-400 transition-colors rounded"
+            className="flex-shrink-0 rounded-md p-0.5 text-slate-400 hover:bg-surface-800 hover:text-red-400 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
           >
             <X className="size-3.5" aria-hidden="true" />
           </button>

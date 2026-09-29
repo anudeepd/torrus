@@ -48,6 +48,13 @@ type RetentionInfo = {
 }
 
 type View = 'sessions' | 'users' | 'activity' | 'stats' | 'retention'
+const VIEW_LABELS: Record<View, string> = {
+  sessions: 'Sessions',
+  users: 'Users & policy',
+  activity: 'Submitted input',
+  stats: 'Stats',
+  retention: 'Retention',
+}
 type ActivityFilters = {
   username: string
   input: string
@@ -259,7 +266,6 @@ export default function AdminConsole({ onClose }: { onClose?: () => void }) {
     }
   }, [loadCsrf, refresh])
 
-  const currentCount = sessionTotal
   const [now, setNow] = useState(0)
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 1000)
@@ -274,7 +280,7 @@ export default function AdminConsole({ onClose }: { onClose?: () => void }) {
           <Shield aria-hidden="true" className="mx-auto mb-3 size-6 text-brand-400" />
           <h1 id="admin-auth-title" className="text-balance text-base font-semibold">Admin access required</h1>
           <p className="mt-2 text-pretty text-sm text-slate-400">{error.message}</p>
-          <a className="transition-colors mt-5 inline-flex rounded-md bg-brand-500 px-3 py-2 text-xs font-medium text-white hover:bg-brand-400" href={`/_auth/login?next=${encodeURIComponent('/admin')}`}>Authenticate</a>
+          <a className="transition-colors mt-5 inline-flex rounded-md bg-brand-700 px-3 py-2 text-xs font-medium text-white hover:bg-brand-600" href={`/_auth/login?next=${encodeURIComponent('/admin')}`}>Authenticate</a>
         </section>
       </div>
     )
@@ -285,28 +291,28 @@ export default function AdminConsole({ onClose }: { onClose?: () => void }) {
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
       transition={surfaceTransition}
-      className="admin-shell flex h-dvh min-h-0 flex-col overflow-hidden bg-surface-950 text-slate-200"
+      className="admin-shell flex h-full min-h-0 flex-col overflow-hidden bg-surface-950 text-slate-200"
     >
       <header className="sticky top-0 z-30 flex min-h-14 shrink-0 items-center gap-3 border-b border-surface-800 bg-surface-900 px-4 sm:px-5">
-        {onClose && <button type="button" onClick={onClose} className="rounded-md p-1.5 text-slate-400 transition-colors hover:bg-surface-800 hover:text-slate-200" aria-label="Back to terminal"><ChevronLeft aria-hidden="true" className="size-4" /></button>}
+        {onClose && <button type="button" onClick={onClose} className="rounded-md p-1 text-slate-400 transition-colors hover:bg-surface-800 hover:text-slate-200" title="Back to terminal" aria-label="Back to terminal"><ChevronLeft aria-hidden="true" className="size-4" /></button>}
         <Shield aria-hidden="true" className="size-4 text-brand-400" />
         <div className="min-w-0 flex-1">
           <h1 className="text-balance text-sm font-semibold">Admin Console</h1>
           <p className="text-pretty text-2xs text-slate-400">Owner-bound sessions, submitted input, and policy controls</p>
         </div>
-        <span className={`hidden text-2xs tabular-nums sm:inline ${stale ? 'text-amber-300' : 'text-slate-400'}`} aria-live="polite">{stale ? 'Stale' : `Updated ${lastUpdated ? age(lastUpdated / 1000) : '—'}`} · {streamState}</span>
-        <button type="button" onClick={() => void refresh()} disabled={loading} className="flex items-center gap-1.5 rounded-md border border-surface-700 px-2.5 py-1.5 text-xs text-slate-400 transition-colors hover:bg-surface-800 hover:text-slate-200 disabled:opacity-50"><RefreshCw aria-hidden="true" className={`size-3.5 ${loading ? 'animate-spin' : ''}`} /> Refresh</button>
+        <span className={`hidden text-2xs tabular-nums sm:inline ${stale ? 'text-amber-400' : 'text-slate-400'}`} aria-live="polite">{stale ? 'Stale' : `Updated ${lastUpdated ? age(lastUpdated / 1000) : '—'}`} · {streamState}</span>
+        <button type="button" onClick={() => void refresh()} disabled={loading} className="flex items-center gap-1.5 rounded-md border border-surface-700 px-2 py-1 text-xs text-slate-400 transition-colors hover:bg-surface-800 hover:text-slate-200 disabled:cursor-not-allowed disabled:opacity-50"><RefreshCw aria-hidden="true" className={`size-3.5 ${loading ? 'animate-spin' : ''}`} /> Refresh</button>
       </header>
 
       <div className="flex min-h-0 flex-1">
         <nav className="hidden w-52 shrink-0 border-r border-surface-800 bg-surface-900 p-3 sm:block" aria-label="Admin views">
           <p className="mb-2 px-2 text-3xs font-semibold uppercase text-slate-400">Operator view</p>
           {([
-            ['sessions', Terminal, `Sessions (${currentCount})`],
-            ['users', UserRound, 'Users & policy'],
-            ['activity', Activity, 'Submitted input'],
-            ['stats', Activity, 'Stats'],
-            ['retention', CircleStop, 'Retention'],
+            ['sessions', Terminal, VIEW_LABELS.sessions],
+            ['users', UserRound, VIEW_LABELS.users],
+            ['activity', Activity, VIEW_LABELS.activity],
+            ['stats', Activity, VIEW_LABELS.stats],
+            ['retention', CircleStop, VIEW_LABELS.retention],
           ] as const).map(([key, Icon, label]) => (
             <button key={key} type="button" aria-current={view === key ? 'page' : undefined} onClick={() => setView(key)} className={`mb-1 flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-xs transition-colors ${view === key ? 'bg-brand-500/10 text-brand-300' : 'text-slate-400 hover:bg-surface-800 hover:text-slate-300'}`}><Icon aria-hidden="true" className="size-3.5" /> {label}</button>
           ))}
@@ -338,12 +344,12 @@ export default function AdminConsole({ onClose }: { onClose?: () => void }) {
                   aria-selected={view === key}
                   tabIndex={view === key ? 0 : -1}
                   onClick={() => setView(key)}
-                  className={`rounded-md px-3 py-1.5 text-xs capitalize transition-colors ${view === key ? 'bg-brand-500/10 text-brand-300' : 'text-slate-400'}`}
-                >{key}</button>
+                  className={`rounded-md px-3 py-1.5 text-xs transition-colors ${view === key ? 'bg-brand-500/10 text-brand-300' : 'text-slate-400 hover:bg-surface-800 hover:text-slate-300'}`}
+                >{VIEW_LABELS[key]}</button>
               ))}
             </div>
             <AnimatePresence initial={false}>
-              {notice && <m.div key="admin-notice" {...fade} transition={exitTransition} className="sticky top-0 z-30 mb-3 flex items-center gap-2 rounded-md border border-green-900/50 bg-green-950/95 px-3 py-2 text-xs text-green-300 backdrop-blur-sm" role="status"><Check aria-hidden="true" className="size-3.5" /> {notice}</m.div>}
+              {notice && <m.div key="admin-notice" {...fade} transition={exitTransition} className="sticky top-0 z-30 mb-3 flex items-center gap-2 rounded-md border border-green-900/50 bg-green-950/95 px-3 py-2 text-xs text-green-400 backdrop-blur-sm" role="status"><Check aria-hidden="true" className="size-3.5" /> {notice}</m.div>}
               {error && <m.div key="admin-error" {...fade} transition={exitTransition} className="sticky top-0 z-30 mb-3 flex items-center gap-2 rounded-md border border-red-900/60 bg-red-950/95 px-3 py-2 text-xs text-red-300 backdrop-blur-sm" role="alert"><X aria-hidden="true" className="size-3.5" /> {error.message}</m.div>}
             </AnimatePresence>
             <AnimatePresence mode="wait" initial={false}>
@@ -390,7 +396,7 @@ function AdminTableViewport({ label, children }: { label: string; children: Reac
           aria-label={`${action} ${label} vertically`}
           onClick={() => setExpanded(value => !value)}
           title={`${action} ${label} vertically`}
-          className="flex size-7 items-center justify-center rounded text-slate-400 transition-colors hover:bg-surface-800 hover:text-slate-300"
+          className="flex size-7 items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-surface-800 hover:text-slate-300"
         >
           {expanded ? <ChevronDown aria-hidden="true" className="size-4" /> : <ChevronUp aria-hidden="true" className="size-4" />}
         </button>
@@ -408,12 +414,12 @@ function SessionsTable({ sessions, total, selected, onSelect, onAction, onReques
     <section aria-labelledby="sessions-title">
       <div className="mb-3 flex items-end justify-between">
         <div>
-          <h2 id="sessions-title" className="text-balance text-base font-semibold">Session inventory</h2>
+          <h2 id="sessions-title" className="text-balance text-base font-semibold">Sessions</h2>
           <p className="mt-1 text-pretty text-xs text-slate-400">Active SSH channels only. Instance and generation prevent stale-target actions.</p>
         </div>
         <span className="text-xs tabular-nums text-slate-400">{total} active</span>
       </div>
-      <AdminTableViewport label="Session inventory">
+      <AdminTableViewport label="Sessions">
         <table className="w-full table-fixed text-left text-xs tabular-nums">
           <caption className="sr-only">Owner-bound active SSH sessions</caption>
           <thead className="sticky top-0 z-10 border-b border-surface-800 bg-surface-900 text-3xs uppercase text-slate-400">
@@ -421,7 +427,7 @@ function SessionsTable({ sessions, total, selected, onSelect, onAction, onReques
           </thead>
           <tbody>
             {sessions.length === 0
-              ? <tr><td colSpan={5} className="px-3 py-12 text-center text-slate-400">No active sessions.</td></tr>
+              ? <tr><td colSpan={5} className="px-3 py-12 text-center text-pretty text-slate-400">No active sessions</td></tr>
               : sessions.map(session => (
                 <tr key={session.session_instance_id} className={`border-b border-surface-800/70 last:border-0 [content-visibility:auto] [contain-intrinsic-size:auto_2.25rem] ${selected?.session_instance_id === session.session_instance_id ? 'bg-brand-500/5' : ''}`}>
                   <td className="break-words px-3 py-3 [overflow-wrap:anywhere]">
@@ -432,7 +438,7 @@ function SessionsTable({ sessions, total, selected, onSelect, onAction, onReques
                     </div>
                     <div className="mt-1 break-words text-2xs text-slate-400 [overflow-wrap:anywhere]">SSH account {session.username} · tab {session.tab_id}</div>
                   </td>
-                  <td className="px-3 py-3 text-green-300">Connected</td>
+                  <td className="px-3 py-3 text-green-400">Connected</td>
                   <td className="px-3 py-3 text-slate-400">{age(session.last_activity)}</td>
                   <td className="break-words px-3 py-3 font-mono text-3xs text-slate-400 [overflow-wrap:anywhere]">gen {session.generation}<br />{session.session_instance_id}</td>
                   <td className="break-words px-3 py-3 text-right [overflow-wrap:anywhere]">
@@ -446,7 +452,7 @@ function SessionsTable({ sessions, total, selected, onSelect, onAction, onReques
                           confirmLabel: 'Send interrupt',
                           action: async () => { await onAction(`/api/admin/sessions/${encodeURIComponent(session.session_instance_id)}/interrupt`, { generation: session.generation }, 'Interrupt queued.') },
                         })}
-                        className="rounded border border-amber-900/60 px-2 py-1 text-2xs text-amber-300 transition-colors hover:bg-amber-950/40"
+                        className="rounded-md border border-amber-900/60 px-2 py-1 text-xs text-amber-400 transition-colors hover:bg-amber-950/40"
                       >Interrupt</button>
                       <button
                         type="button"
@@ -458,7 +464,7 @@ function SessionsTable({ sessions, total, selected, onSelect, onAction, onReques
                           destructive: true,
                           action: async () => { await onAction(`/api/admin/sessions/${encodeURIComponent(session.session_instance_id)}/kick`, { generation: session.generation }, 'Session closed.') },
                         })}
-                        className="rounded border border-red-900/60 px-2 py-1 text-2xs text-red-300 transition-colors hover:bg-red-950/40"
+                        className="rounded-md bg-red-700 px-2 py-1 text-xs text-white transition-colors hover:bg-red-600"
                       >Kick</button>
                     </div>
                   </td>
@@ -472,7 +478,7 @@ function SessionsTable({ sessions, total, selected, onSelect, onAction, onReques
         <m.aside {...fade} transition={exitTransition} className="mt-3 block rounded-lg border border-brand-900/50 bg-brand-950/10 p-4" aria-label="Session details">
           <div className="flex items-start justify-between">
             <div><h3 className="text-balance text-sm font-semibold">Session details</h3><p className="mt-1 text-pretty text-xs text-slate-400">Stable target identity for action confirmation.</p></div>
-            <button type="button" onClick={() => onSelect(null)} className="text-slate-400 transition-colors hover:text-slate-200" aria-label="Close session details">×</button>
+            <button type="button" onClick={() => onSelect(null)} className="rounded-md p-1 text-slate-400 transition-colors hover:bg-surface-800 hover:text-slate-200" aria-label="Close session details"><X aria-hidden="true" className="size-4" /></button>
           </div>
           <dl className="mt-3 grid gap-2 text-xs sm:grid-cols-2">
             <div><dt className="text-slate-400">Owner</dt><dd>{selected.owner_ldap_username || 'local'}</dd></div>
@@ -514,9 +520,9 @@ function AddUserForm({ fingerprint, onAction }: { fingerprint: string; onAction:
       <div className="min-w-0 flex-1">
         <label htmlFor="admin-add-user" className="text-xs font-medium text-slate-300">Add LDAP user</label>
         <p className="mt-1 text-pretty text-2xs text-slate-400">User must already exist in LDAP. Access applies immediately.</p>
-        <input id="admin-add-user" name="username" value={username} onChange={event => setUsername(event.target.value)} autoComplete="off" spellCheck={false} placeholder="username…" className="transition-colors mt-2 w-full rounded border border-surface-700 bg-surface-950 px-2.5 py-2 text-sm text-slate-200 outline-none placeholder:text-slate-700 focus:border-brand-500" />
+        <input id="admin-add-user" name="username" value={username} onChange={event => setUsername(event.target.value)} autoComplete="off" spellCheck={false} placeholder="username…" className="transition-colors mt-2 w-full rounded-md border border-surface-700 bg-surface-950 px-2.5 py-2 text-sm text-slate-200 outline-none placeholder:text-slate-400 focus:border-brand-500" />
       </div>
-      <button type="submit" disabled={!username.trim() || submitting} className="rounded border border-brand-700/60 px-3 py-2 text-xs text-brand-300 transition-colors hover:bg-brand-950/40 disabled:opacity-50">{submitting ? 'Adding…' : 'Add user'}</button>
+      <button type="submit" disabled={!username.trim() || submitting} className="rounded-md bg-brand-700 px-2 py-1 text-xs text-white transition-colors hover:bg-brand-600 disabled:cursor-not-allowed disabled:opacity-50">{submitting ? 'Adding…' : 'Add user'}</button>
     </form>
   )
 }
@@ -540,11 +546,11 @@ function UsersTable({ users, fingerprint, onAction, onRequestAction }: { users: 
                 <tr key={user.username} className="border-b border-surface-800/70 last:border-0 [content-visibility:auto] [contain-intrinsic-size:auto_2.25rem]">
                   <td className="break-words px-3 py-3 font-medium [overflow-wrap:anywhere]">{user.username}</td>
                   <td className="break-words px-3 py-3 text-slate-400 [overflow-wrap:anywhere]">{user.active_sessions}</td>
-                  <td className="break-words px-3 py-3 text-amber-300 [overflow-wrap:anywhere]">{user.policy_state}</td>
+                  <td className="break-words px-3 py-3 text-amber-400 [overflow-wrap:anywhere]">{user.policy_state}</td>
                   <td className="break-words px-3 py-3 text-right [overflow-wrap:anywhere]">
                     {user.policy_state === 'disabled'
-                      ? <button type="button" onClick={() => onRequestAction({ title: 'Enable LDAP user?', description: `Re-enable ${user.username} immediately.`, expected: `ENABLE ${user.username}`, confirmLabel: 'Enable user', action: async () => { await onAction(`/api/admin/users/${encodeURIComponent(user.username)}/enable`, { expected_fingerprint: fingerprint }, 'User enabled. No restart required.') } })} className="rounded border border-green-900/60 px-2 py-1 text-2xs text-green-300 transition-colors hover:bg-green-950/40">Enable</button>
-                      : <button type="button" onClick={() => onRequestAction({ title: 'Disable LDAP user?', description: `Revoke ${user.username}'s cookies and active tabs, then disable the user immediately.`, expected: `DISABLE ${user.username}`, confirmLabel: 'Disable user', destructive: true, action: async () => { await onAction(`/api/admin/users/${encodeURIComponent(user.username)}/disable`, { expected_fingerprint: fingerprint }, 'User disabled. No restart required.') } })} className="rounded border border-red-900/60 px-2 py-1 text-2xs text-red-300 transition-colors hover:bg-red-950/40">Disable</button>}
+                      ? <button type="button" onClick={() => onRequestAction({ title: 'Enable LDAP user?', description: `Re-enable ${user.username} immediately.`, expected: `ENABLE ${user.username}`, confirmLabel: 'Enable user', action: async () => { await onAction(`/api/admin/users/${encodeURIComponent(user.username)}/enable`, { expected_fingerprint: fingerprint }, 'User enabled. No restart required.') } })} className="rounded-md border border-green-900/60 px-2 py-1 text-xs text-green-400 transition-colors hover:bg-green-950/40">Enable</button>
+                      : <button type="button" onClick={() => onRequestAction({ title: 'Disable LDAP user?', description: `Revoke ${user.username}'s cookies and active tabs, then disable the user immediately.`, expected: `DISABLE ${user.username}`, confirmLabel: 'Disable user', destructive: true, action: async () => { await onAction(`/api/admin/users/${encodeURIComponent(user.username)}/disable`, { expected_fingerprint: fingerprint }, 'User disabled. No restart required.') } })} className="rounded-md bg-red-700 px-2 py-1 text-xs text-white transition-colors hover:bg-red-600">Disable</button>}
                   </td>
                 </tr>
               ))}
@@ -558,7 +564,7 @@ function UsersTable({ users, fingerprint, onAction, onRequestAction }: { users: 
 function ActivityInput({ value, kind }: { value: string; kind: string }) {
   const [expanded, setExpanded] = useState(false)
   if (kind === 'sensitive') {
-    return <span className="text-amber-300">Sensitive input redacted</span>
+    return <span className="text-amber-400">Sensitive input redacted</span>
   }
   if (!value) return <span>—</span>
   if (value.length <= ACTIVITY_INPUT_PREVIEW_LIMIT) {
@@ -623,16 +629,16 @@ function ActivityFiltersForm({ filters, onApply }: { filters: ActivityFilters; o
   return (
     <form onSubmit={submit} className="mb-4 flex flex-col gap-2 rounded-lg border border-surface-800 bg-surface-900 p-3 sm:flex-row sm:flex-wrap sm:items-end">
       <div>
-        <label htmlFor="activity-user" className="block text-2xs font-medium text-slate-400">User</label>
-        <input id="activity-user" name="username" type="search" value={username} onChange={event => setUsername(event.target.value)} onKeyDown={submitActivityFiltersOnEnter} autoComplete="off" spellCheck={false} enterKeyHint="search" placeholder="All users…" className="transition-colors mt-1 w-full rounded border border-surface-700 bg-surface-950 px-2.5 py-1.5 text-xs text-slate-200 outline-none placeholder:text-slate-700 focus:border-brand-500 sm:w-40" />
+        <label htmlFor="activity-user" className="block text-xs font-medium text-slate-300">User</label>
+        <input id="activity-user" name="username" type="search" value={username} onChange={event => setUsername(event.target.value)} onKeyDown={submitActivityFiltersOnEnter} autoComplete="off" spellCheck={false} enterKeyHint="search" placeholder="All users…" className="transition-colors mt-1 w-full rounded-md border border-surface-700 bg-surface-950 px-2.5 py-1.5 text-xs text-slate-200 outline-none placeholder:text-slate-400 focus:border-brand-500 sm:w-40" />
       </div>
       <div>
-        <label htmlFor="activity-input" className="block text-2xs font-medium text-slate-400">Search</label>
-        <input id="activity-input" name="input" type="search" value={input} onChange={event => setInput(event.target.value)} onKeyDown={submitActivityFiltersOnEnter} autoComplete="off" spellCheck={false} enterKeyHint="search" placeholder="Search all columns…" className="transition-colors mt-1 w-full rounded border border-surface-700 bg-surface-950 px-2.5 py-1.5 text-xs text-slate-200 outline-none placeholder:text-slate-700 focus:border-brand-500 sm:w-52" />
+        <label htmlFor="activity-input" className="block text-xs font-medium text-slate-300">Search</label>
+        <input id="activity-input" name="input" type="search" value={input} onChange={event => setInput(event.target.value)} onKeyDown={submitActivityFiltersOnEnter} autoComplete="off" spellCheck={false} enterKeyHint="search" placeholder="Search all columns…" className="transition-colors mt-1 w-full rounded-md border border-surface-700 bg-surface-950 px-2.5 py-1.5 text-xs text-slate-200 outline-none placeholder:text-slate-400 focus:border-brand-500 sm:w-52" />
       </div>
       <div>
-        <label htmlFor="activity-kind" className="block text-2xs font-medium text-slate-400">Type</label>
-        <select id="activity-kind" name="kind" value={kind} onChange={event => setKind(event.target.value)} className="transition-colors mt-1 rounded border border-surface-700 bg-surface-950 px-2.5 py-1.5 text-xs text-slate-200 outline-none focus:border-brand-500">
+        <label htmlFor="activity-kind" className="block text-xs font-medium text-slate-300">Type</label>
+        <select id="activity-kind" name="kind" value={kind} onChange={event => setKind(event.target.value)} className="transition-colors mt-1 w-full sm:w-44 rounded-md border border-surface-700 bg-surface-950 px-2.5 py-1.5 text-xs text-slate-200 outline-none focus:border-brand-500">
           <option value="">All activity</option>
           <option value="command">Commands</option>
           <option value="sensitive">Sensitive (redacted)</option>
@@ -648,20 +654,20 @@ function ActivityFiltersForm({ filters, onApply }: { filters: ActivityFilters; o
         </select>
       </div>
       <div>
-        <label htmlFor="activity-host" className="block text-2xs font-medium text-slate-400">Host</label>
-        <input id="activity-host" name="host" type="search" value={host} onChange={event => setHost(event.target.value)} onKeyDown={submitActivityFiltersOnEnter} autoComplete="off" spellCheck={false} enterKeyHint="search" placeholder="Any host…" className="transition-colors mt-1 w-full rounded border border-surface-700 bg-surface-950 px-2.5 py-1.5 text-xs text-slate-200 outline-none placeholder:text-slate-700 focus:border-brand-500 sm:w-44" />
+        <label htmlFor="activity-host" className="block text-xs font-medium text-slate-300">Host</label>
+        <input id="activity-host" name="host" type="search" value={host} onChange={event => setHost(event.target.value)} onKeyDown={submitActivityFiltersOnEnter} autoComplete="off" spellCheck={false} enterKeyHint="search" placeholder="Any host…" className="transition-colors mt-1 w-full rounded-md border border-surface-700 bg-surface-950 px-2.5 py-1.5 text-xs text-slate-200 outline-none placeholder:text-slate-400 focus:border-brand-500 sm:w-44" />
       </div>
       <div>
-        <label htmlFor="activity-since" className="block text-2xs font-medium text-slate-400">Since</label>
-        <input id="activity-since" name="since" type="date" value={since} onChange={event => setSince(event.target.value)} onKeyDown={submitActivityFiltersOnEnter} autoComplete="off" className="transition-colors mt-1 rounded border border-surface-700 bg-surface-950 px-2.5 py-1.5 text-xs text-slate-200 outline-none focus:border-brand-500" />
+        <label htmlFor="activity-since" className="block text-xs font-medium text-slate-300">Since</label>
+        <input id="activity-since" name="since" type="date" value={since} onChange={event => setSince(event.target.value)} onKeyDown={submitActivityFiltersOnEnter} autoComplete="off" className="transition-colors mt-1 rounded-md border border-surface-700 bg-surface-950 px-2.5 py-1.5 text-xs text-slate-200 outline-none focus:border-brand-500" />
       </div>
       <div>
-        <label htmlFor="activity-until" className="block text-2xs font-medium text-slate-400">Until</label>
-        <input id="activity-until" name="until" type="date" value={until} onChange={event => setUntil(event.target.value)} onKeyDown={submitActivityFiltersOnEnter} autoComplete="off" className="transition-colors mt-1 rounded border border-surface-700 bg-surface-950 px-2.5 py-1.5 text-xs text-slate-200 outline-none focus:border-brand-500" />
+        <label htmlFor="activity-until" className="block text-xs font-medium text-slate-300">Until</label>
+        <input id="activity-until" name="until" type="date" value={until} onChange={event => setUntil(event.target.value)} onKeyDown={submitActivityFiltersOnEnter} autoComplete="off" className="transition-colors mt-1 rounded-md border border-surface-700 bg-surface-950 px-2.5 py-1.5 text-xs text-slate-200 outline-none focus:border-brand-500" />
       </div>
       <div className="flex gap-2">
-        <button type="submit" className="rounded border border-brand-700/60 px-3 py-1.5 text-xs text-brand-300 transition-colors hover:bg-brand-950/40">Apply filters</button>
-        <button type="button" onClick={clear} className="rounded border border-surface-700 px-3 py-1.5 text-xs text-slate-400 transition-colors hover:bg-surface-800 hover:text-slate-200">Clear</button>
+        <button type="submit" className="rounded-md bg-brand-700 px-2 py-1 text-xs text-white transition-colors hover:bg-brand-600">Apply filters</button>
+        <button type="button" onClick={clear} className="rounded-md border border-surface-700 px-2 py-1 text-xs text-slate-400 transition-colors hover:bg-surface-800 hover:text-slate-200">Clear</button>
       </div>
     </form>
   )
@@ -787,10 +793,9 @@ function StatsPanel({ sessionTotal, users, activity, retention }: { sessionTotal
 
   return (
     <section aria-labelledby="stats-title">
-      <div className="mb-4">
-        <p className="mb-2 font-mono text-3xs font-semibold uppercase text-brand-400">Snapshot</p>
-        <h2 id="stats-title" className="text-balance text-xl font-semibold">Admin stats</h2>
-        <p className="mt-1 text-pretty text-sm leading-relaxed text-slate-400">Live counts from latest successful refresh. Request count reflects current loaded activity rows; session count includes server total.</p>
+      <div className="mb-3">
+        <h2 id="stats-title" className="text-balance text-base font-semibold">Stats</h2>
+        <p className="mt-1 text-pretty text-xs leading-relaxed text-slate-400">Live counts from latest successful refresh. Request count reflects current loaded activity rows; session count includes server total.</p>
       </div>
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {stats.map(stat => (
@@ -811,10 +816,10 @@ function RetentionPanel({ retention, onAction, onRequestAction }: { retention: R
   const ageLabel = days === 1 ? '1 day' : `${days} days`
   return (
     <section aria-labelledby="retention-title" className="max-w-xl">
-      <h2 id="retention-title" className="text-balance text-base font-semibold">Manual audit cleanup</h2>
+      <h2 id="retention-title" className="text-balance text-base font-semibold">Retention</h2>
       <p className="mt-1 text-pretty text-xs leading-relaxed text-slate-400">Remove completed terminal input older than selected age. Administrator action records stay.</p>
-      <label className="mt-5 block text-xs text-slate-400" htmlFor="retention-days">Delete input older than</label>
-      <input id="retention-days" name="older_than_days" type="number" inputMode="numeric" min={7} max={3650} value={days} onChange={event => setDays(Number(event.target.value))} autoComplete="off" className="transition-colors mt-1 w-32 rounded border border-surface-700 bg-surface-900 px-2 py-1.5 text-sm tabular-nums text-slate-200 outline-none focus:border-brand-500" />
+      <label className="mt-5 block text-xs font-medium text-slate-300" htmlFor="retention-days">Delete input older than</label>
+      <input id="retention-days" name="older_than_days" type="number" inputMode="numeric" min={7} max={3650} value={days} onChange={event => setDays(Number(event.target.value))} autoComplete="off" className="transition-colors mt-1 w-32 rounded-md border border-surface-700 bg-surface-950 px-2.5 py-2 text-sm tabular-nums text-slate-200 outline-none focus:border-brand-500" />
       <div className="mt-4 rounded border border-surface-800 bg-surface-900 p-3 text-xs text-slate-400">
         <dl className="grid gap-2 tabular-nums sm:grid-cols-3">
           <div><dt className="text-slate-400">Eligible rows</dt><dd className="text-slate-200">{retention?.eligible_count ?? '—'}</dd></div>
@@ -822,7 +827,7 @@ function RetentionPanel({ retention, onAction, onRequestAction }: { retention: R
           <div><dt className="text-slate-400">Admin records</dt><dd className="text-slate-200">Kept</dd></div>
         </dl>
       </div>
-      <button type="button" onClick={() => onRequestAction({ title: 'Delete terminal input?', description: `Delete terminal input older than ${ageLabel}. This cannot be undone. Administrator action records will remain.`, expected: 'PURGE', confirmLabel: 'Delete rows', destructive: true, action: async () => { await onAction('/api/admin/retention/purge', { older_than_days: days, confirmation: 'PURGE' }, `Deleted terminal input older than ${ageLabel}. Administrator action records remain.`) } })} className="mt-4 rounded border border-red-900/60 px-3 py-2 text-xs text-red-300 transition-colors hover:bg-red-950/40">Review deletion</button>
+      <button type="button" onClick={() => onRequestAction({ title: 'Delete terminal input?', description: `Delete terminal input older than ${ageLabel}. This cannot be undone. Administrator action records will remain.`, expected: 'PURGE', confirmLabel: 'Delete input', destructive: true, action: async () => { await onAction('/api/admin/retention/purge', { older_than_days: days, confirmation: 'PURGE' }, `Deleted terminal input older than ${ageLabel}. Administrator action records remain.`) } })} className="mt-4 rounded-md bg-red-700 px-2 py-1 text-xs text-white transition-colors hover:bg-red-600">Delete input…</button>
     </section>
   )
 }

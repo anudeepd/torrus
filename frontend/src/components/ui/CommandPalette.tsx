@@ -31,10 +31,10 @@ export default function CommandPalette({ tabs, activeTabId, canSplit, canBroadca
 
   const commands = useMemo(() => {
     const items = [
-      { id: 'new-terminal', label: 'New terminal tab', detail: 'Toolbar', icon: Plus, run: onAddTab },
+      { id: 'new-terminal', label: 'New tab', detail: 'toolbar', icon: Plus, run: onAddTab },
       ...(inSplitMode
-        ? [{ id: 'exit-split', label: 'Exit split mode', detail: 'Layout', icon: X, run: onExitSplit }]
-        : canSplit ? [{ id: 'split', label: 'Create split layout', detail: 'Layout', icon: Columns2, run: onOpenSplitPicker }] : []),
+        ? [{ id: 'exit-split', label: 'Exit split', detail: 'layout', icon: X, run: onExitSplit }]
+        : canSplit ? [{ id: 'split', label: 'Split', detail: 'layout', icon: Columns2, run: onOpenSplitPicker }] : []),
       ...tabs.map(tab => ({
         id: `tab-${tab.id}`,
         label: `Switch to ${tabDisplayName(tab, tabs)}`,
@@ -43,9 +43,9 @@ export default function CommandPalette({ tabs, activeTabId, canSplit, canBroadca
         run: () => onSelectTab(tab.id),
       })),
       ...(sftpTarget
-        ? [{ id: 'open-sftp', label: `Open SFTP for ${tabDisplayName(sftpTarget, tabs)}`, detail: 'Files', icon: Folder, run: () => onOpenSftpTab(sftpTarget.id) }]
+        ? [{ id: 'open-sftp', label: `Open SFTP for ${tabDisplayName(sftpTarget, tabs)}`, detail: 'files', icon: Folder, run: () => onOpenSftpTab(sftpTarget.id) }]
         : []),
-      ...(canBroadcast ? [{ id: 'broadcast', label: 'Manage broadcast input', detail: 'Terminals', icon: Radio, run: onOpenBroadcastPicker }] : []),
+      ...(canBroadcast ? [{ id: 'broadcast', label: 'Manage broadcast input', detail: 'terminals', icon: Radio, run: onOpenBroadcastPicker }] : []),
       { id: 'settings', label: 'Open settings', detail: `${modKey}+,`, icon: Settings, run: onOpenSettings },
     ]
     const normalized = query.trim().toLowerCase()
@@ -59,9 +59,9 @@ export default function CommandPalette({ tabs, activeTabId, canSplit, canBroadca
   }
 
   return (
-    <Dialog label="Command Palette" onClose={onClose} initialFocus={inputRef} align="top" scrimClassName="bg-black/65 backdrop-blur-[2px]" className="max-w-xl p-0">
-        <div className="border-b border-surface-700 px-4 py-3">
-          <h2 className="text-sm font-semibold text-slate-200 text-balance">Command Palette</h2>
+    <Dialog label="Command palette" onClose={onClose} initialFocus={inputRef} align="top" scrimClassName="bg-black/65 backdrop-blur-[2px]" className="max-w-xl p-0">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-surface-800">
+          <h2 className="text-sm font-semibold text-slate-200 text-balance">Command palette</h2>
         </div>
         <label className="m-4 mb-3 flex items-center gap-2 rounded-lg border border-surface-700 bg-surface-800 px-3 py-2.5 text-slate-400 focus-within:border-brand-500 focus-within:ring-2 focus-within:ring-brand-500">
           <Search aria-hidden="true" className="size-4 shrink-0" />
@@ -86,7 +86,7 @@ export default function CommandPalette({ tabs, activeTabId, canSplit, canBroadca
             const Icon = command.icon
             const active = command.id === `tab-${activeTabId}`
             return (
-              <button key={command.id} type="button" role="option" aria-selected={index === selectedIndex} onMouseEnter={() => setSelectedIndex(index)} onClick={() => run(command)} className={cn('flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-left text-sm transition-colors', index === selectedIndex ? 'bg-brand-600/25 text-slate-100' : 'text-slate-300 hover:bg-surface-800', active && 'border-l-2 border-brand-400')}>
+              <button key={command.id} type="button" role="option" aria-selected={index === selectedIndex} onMouseEnter={() => setSelectedIndex(index)} onClick={() => run(command)} className={cn('flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-left text-sm transition-colors', index === selectedIndex ? 'bg-brand-600/25 text-slate-100' : 'text-slate-300 hover:bg-surface-800', active && 'ring-1 ring-inset ring-brand-400')}>
                 <Icon aria-hidden="true" className="size-4 shrink-0 text-brand-400" />
                 <span className="min-w-0 flex-1 truncate">{command.label}</span>
                 <span className="max-w-[35%] truncate text-xs text-slate-400">{command.detail}</span>

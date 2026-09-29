@@ -9,6 +9,7 @@ import errno
 import logging
 import os
 import posixpath
+import re
 import shlex
 import stat
 import tempfile
@@ -324,9 +325,22 @@ class SFTPSink:
                 self._hold(offset, data)
                 return
             if offset > self._streamed:
-                await self._cond.wait_for(
-                    lambda: self._failure is not None or self._streamed >= offset
-                )
+                try:
+                    await asyncio.wait_for(
+                        self._cond.wait_for(
+                            lambda: self._failure is not None or self._streamed >= offset
+                        ),
+                        _SINK_GAP_WAIT_SECONDS,
+                    )
+                except asyncio.TimeoutError:
+                    # 503 is retryable, and the sink itself is still healthy: the
+                    # gap can be filled by any later request.
+                    raise UploadSinkError(
+                        "Waiting for an earlier part of the upload that has not "
+                        "arrived yet.",
+                        code="SINK_ERROR",
+                        status=503,
+                    ) from None
                 if self._failure is not None:
                     raise self._failure
             if offset < self._streamed:
@@ -936,6 +950,24 @@ class SFTPManager:
             return None
         return session.source_tab_id
 
+    @staticmethod
+    def _reap_stale_staging(session: SFTPSession, directory: str, attr: Any) -> None:
+        """Remove an abandoned upload staging file; never fails the listing."""
+        name = attr.filename
+        mtime = attr.st_mtime
+        if (
+            mtime is None
+            or not stat.S_ISREG(attr.st_mode or 0)
+            or not _STAGING_FILE_RE.match(name)
+            or time.time() - mtime < _STALE_STAGING_SECONDS
+        ):
+            return
+        try:
+            session.client.remove(posixpath.join(directory, name))
+            logger.info("removed abandoned upload staging file %s/%s", directory, name)
+        except Exception:
+            logger.debug("could not remove staging file %s/%s", directory, name, exc_info=True)
+
     def _list_directory_sync(self, session: SFTPSession, path: str) -> dict[str, Any]:
         resolved = _resolve_remote_path(session.cwd, path, session.home)
         try:
@@ -943,6 +975,7 @@ class SFTPManager:
             entries = []
             for attr in session.client.listdir_attr(resolved):
                 if is_staging_name(attr.filename):
+                    self._reap_stale_staging(session, resolved, attr)
                     continue
                 mode = attr.st_mode or 0
                 is_dir = stat.S_ISDIR(mode)
@@ -1300,6 +1333,18 @@ def _dedupe_arcname(arcname: str, taken: set[str]) -> str:
         index += 1
 
 
+# An upload the server no longer tracks (restart, lost SSH connection, killed
+# process) leaves its hidden staging file on the remote host, where nothing else
+# would ever remove it. A live session rewrites its file continuously and the
+# engine expires idle sessions after TORRUS_UPLOAD_SESSION_TTL, so a staging file
+# untouched for twice that (and never less than six hours, to tolerate clock skew
+# between this host and the remote one) belongs to nobody. Listing a directory
+# already reads every mtime, so it is where those files are reaped.
+_STALE_STAGING_SECONDS = max(
+    6 * 3600, 2 * int(os.getenv("TORRUS_UPLOAD_SESSION_TTL", "3600"))
+)
+_STAGING_FILE_RE = re.compile(r"^\..+\.upload-part-[0-9a-f]{32}$")
+
 # How much out-of-order upload data one sink may hold before it blocks the
 # request instead. The engine runs `concurrency` windows of its own chunk size at
 # once, so the budget follows those knobs rather than assuming their defaults,
@@ -1309,6 +1354,13 @@ _SINK_PENDING_MAX_BYTES = max(
     int(os.getenv("TORRUS_UPLOAD_CHUNK_BYTES", str(32 * 1024 * 1024)))
     * max(1, int(os.getenv("TORRUS_UPLOAD_CONCURRENCY", "4"))),
 )
+
+# How long a write may wait for the bytes below it once the reorder buffer is
+# full. It must stay under the client's idle timeout (120 s) so the client gets
+# an answer it can retry instead of aborting a request that is merely parked. A
+# window the client abandoned is normally re-sent within seconds; if nothing
+# fills the gap in this time, waiting longer would only hold the request open.
+_SINK_GAP_WAIT_SECONDS = 60.0
 
 # Bulk archives are spooled to disk past this size and each member is read in
 # bounded blocks, so a large tree cannot be assembled in memory.

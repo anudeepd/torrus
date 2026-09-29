@@ -71,7 +71,7 @@ export default function BroadcastPickerModal({ connectedTabs, initialIncluded, b
             <Radio className="size-4 text-amber-400" aria-hidden="true" />
             <h2 className="text-sm font-semibold text-slate-200 text-balance">Broadcast input</h2>
           </div>
-          <button type="button" onClick={onClose} aria-label="Close broadcast picker" className="text-slate-400 hover:text-slate-300 transition-colors">
+          <button type="button" onClick={onClose} aria-label="Close broadcast picker" className="rounded-md text-slate-400 hover:text-slate-300 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500">
             <X className="size-4" aria-hidden="true" />
           </button>
         </div>
@@ -127,7 +127,7 @@ export default function BroadcastPickerModal({ connectedTabs, initialIncluded, b
           <button
             onClick={handleApply}
             disabled={selectedIds.length < 2}
-            className="w-full px-3 py-2 rounded-md text-sm font-medium text-white bg-amber-500 hover:bg-amber-400 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            className="w-full px-3 py-2 rounded-md text-sm font-medium text-white bg-brand-700 hover:bg-brand-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
           >
             Start broadcast
           </button>
@@ -139,7 +139,7 @@ export default function BroadcastPickerModal({ connectedTabs, initialIncluded, b
                 exit={{ opacity: 0, y: -6, transition: exitTransition }}
                 transition={surfaceTransition}
                 onClick={onDisable}
-                className="w-full overflow-hidden px-3 py-2 rounded-md text-sm text-slate-400 bg-surface-800 hover:bg-surface-700 hover:text-red-400 transition-colors"
+                className="w-full overflow-hidden px-3 py-2 rounded-md text-sm text-slate-400 bg-surface-800 hover:bg-surface-700 hover:text-red-400 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
               >
                 Disable broadcast
               </m.button>
@@ -147,7 +147,7 @@ export default function BroadcastPickerModal({ connectedTabs, initialIncluded, b
           </AnimatePresence>
           <button
             onClick={onClose}
-            className="w-full px-3 py-2 rounded-md text-sm text-slate-400 hover:text-slate-300 transition-colors"
+            className="w-full px-3 py-2 rounded-md text-sm text-slate-400 bg-surface-800 hover:bg-surface-700 hover:text-slate-200 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
           >
             Cancel
           </button>

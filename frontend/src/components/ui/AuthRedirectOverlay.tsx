@@ -13,7 +13,7 @@ const COPY: Record<AuthOverlayMode, { title: string; message: string; action?: s
   expired: {
     title: 'Session expired',
     message: 'Your session has ended. Redirecting to sign in…',
-    action: 'Sign in now',
+    action: 'Sign in',
   },
   logout: {
     title: 'Signing out',
@@ -78,7 +78,7 @@ export default function AuthRedirectOverlay() {
             type="button"
             ref={actionRef}
             onClick={redirectToLdapLoginNow}
-            className="w-full rounded-md bg-brand-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-brand-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+            className="w-full rounded-md bg-brand-700 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-brand-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
           >
             {copy.action}
           </button>

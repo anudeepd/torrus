@@ -81,7 +81,7 @@ describe('SFTPBrowser', () => {
     expect(screen.getByRole('textbox', { name: 'Remote path' })).toBeInTheDocument()
   })
 
-  it('leaves Ctrl+L to the address bar on Windows and Linux browsers', () => {
+  it('claims Ctrl+L from the address bar on Windows and Linux browsers too', () => {
     const socket = createMockSocket()
     render(<SFTPBrowser tabId={tabId} sourceTabId="terminal-tab" socket={socket as unknown as Socket} />)
 
@@ -96,16 +96,11 @@ describe('SFTPBrowser', () => {
 
     const browser = screen.getByRole('listbox', { name: 'File browser' })
     browser.focus()
-    for (const userAgent of [
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151.0.0.0 Safari/537.36',
-      'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/151.0.0.0 Safari/537.36',
-    ]) {
-      setUserAgent(userAgent)
-      const event = createEvent.keyDown(window, { key: 'l', ctrlKey: true })
-      fireEvent(window, event)
-      expect(event.defaultPrevented).toBe(false)
-      expect(screen.queryByRole('textbox', { name: 'Remote path' })).not.toBeInTheDocument()
-    }
+    setUserAgent('Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/151.0.0.0 Safari/537.36')
+    const event = createEvent.keyDown(window, { key: 'l', ctrlKey: true })
+    fireEvent(window, event)
+    expect(event.defaultPrevented).toBe(true)
+    expect(screen.getByRole('textbox', { name: 'Remote path' })).toBeInTheDocument()
   })
 
   it('moves up from absolute top-level folders to filesystem root', () => {
@@ -198,7 +193,7 @@ describe('SFTPBrowser', () => {
     const socket = createMockSocket()
     render(<SFTPBrowser tabId={tabId} sourceTabId="terminal-tab" socket={socket as unknown as Socket} />)
 
-    fireEvent.click(screen.getByTitle('Create new folder'))
+    fireEvent.click(screen.getByTitle('New folder'))
     expect(screen.getByRole('dialog', { name: 'New folder' })).toBeInTheDocument()
 
     fireEvent.keyDown(window, { key: 'Escape' })
@@ -230,7 +225,7 @@ describe('SFTPBrowser', () => {
     })
 
     expect(screen.getByText('ROOT')).toBeInTheDocument()
-    expect(screen.getAllByRole('button', { name: 'Upload' })).toHaveLength(1)
+    expect(screen.getAllByRole('button', { name: 'Upload files' })).toHaveLength(1)
     expect(screen.getByText('permissions')).toBeInTheDocument()
     expect(screen.getByRole('option', { name: /app\.log.*owner 1000.*permissions 7640 rwSr-S--T/i })).toBeInTheDocument()
     expect(screen.getByText('1000')).toHaveAttribute('title', '1000:1001 (uid 1000, gid 1001)')
@@ -377,7 +372,7 @@ describe('SFTPBrowser', () => {
       })
     })
     expect(screen.getByRole('alert')).toHaveTextContent('Failed to delete item: Permission denied.')
-    expect(screen.getByRole('alert')).toHaveTextContent('ERROR')
+    expect(screen.getByRole('alert')).toHaveTextContent('Error')
     expect(screen.getByText('Failed to delete item: Permission denied.')).toHaveClass('break-words')
     expect(screen.getByRole('button', { name: 'Dismiss message' })).toHaveClass('max-xs:size-11')
 
@@ -721,7 +716,7 @@ describe('SFTPBrowser', () => {
     })
 
     fireEvent.click(screen.getByRole('option', { name: /app\.log/i }))
-    fireEvent.click(screen.getByRole('button', { name: 'Clear selection' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss selection' }))
     expect(screen.queryByText('1 selected')).not.toBeInTheDocument()
   })
 

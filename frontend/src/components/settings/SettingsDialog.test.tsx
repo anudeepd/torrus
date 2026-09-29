@@ -21,7 +21,7 @@ describe('SettingsDialog', () => {
     useSettingsStore.setState({ scrollbackLines: 100_000, fontSize: 20 })
     render(<SettingsDialog onClose={() => {}} />)
 
-    fireEvent.click(screen.getByTitle('Reset to defaults'))
+    fireEvent.click(screen.getByRole('button', { name: 'Reset to defaults' }))
 
     expect(useSettingsStore.getState().scrollbackLines).toBe(10_000)
     expect(useSettingsStore.getState().fontSize).toBe(16)

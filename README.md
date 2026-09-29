@@ -77,7 +77,7 @@ TORRUS_ALLOW_PRIVATE_HOSTS=true torrus serve
 | `TORRUS_MAX_SSH_SESSIONS` | `128` | Ceiling on live SSH sessions. Each one occupies a worker of the shared I/O pool, so the default matches it: the alternative is every terminal stalling at once. |
 | `TORRUS_BULK_ZIP_MAX_BYTES` | `2147483648` | Largest "download as zip" selection. Larger trees are refused before the archive starts streaming. |
 | `TORRUS_MAX_UPLOAD_BYTES` | `1099511627776` | Largest single upload. |
-| `TORRUS_UPLOAD_CHUNK_BYTES` | `33554432` | Upload window size. |
+| `TORRUS_UPLOAD_CHUNK_BYTES` | `33554432` | Upload window size. With LDAP auth it is capped at ldapgate's `proxy.max_body_size` (default 10 MB), which otherwise rejects larger windows with a 413. |
 | `TORRUS_UPLOAD_CONCURRENCY` | `4` | Upload windows in flight per file. |
 | `TORRUS_UPLOAD_SESSION_TTL` | `3600` | Seconds an interrupted upload stays resumable. |
 | `TORRUS_SFTP_INLINE_MAX_BYTES` | `5242880` | Largest file served inline rather than as a streaming download. |

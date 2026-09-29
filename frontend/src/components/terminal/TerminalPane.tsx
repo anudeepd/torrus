@@ -840,7 +840,7 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
             key="connecting"
             {...fade}
             transition={surfaceTransition}
-            className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-surface-950/80"
+            className="pointer-events-none absolute inset-0 z-rail flex items-center justify-center bg-surface-950/80"
             role="status"
             aria-live="polite"
           >
@@ -865,7 +865,7 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
           animate={{ opacity: 1, scale: 1, y: 0 }}
           exit={{ opacity: 0, scale: 0.85, y: -12, transition: { duration: 0.12, ease: 'easeIn' } }}
           transition={{ type: 'spring', stiffness: 520, damping: 26, mass: 0.6 }}
-          className="absolute right-3 top-3 z-20 flex items-center gap-1 rounded-xl border border-surface-600 bg-surface-900/95 px-2 py-1.5 shadow-2xl ring-1 ring-brand-500/30 backdrop-blur"
+          className="absolute right-3 top-3 z-20 flex items-center gap-1 rounded-xl border border-surface-700 bg-surface-900/95 px-2 py-1.5 shadow-2xl ring-1 ring-brand-500/30 backdrop-blur"
           role="search"
           aria-label="Find in terminal"
         >
@@ -890,18 +890,18 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
             type="text"
             autoComplete="off"
             spellCheck={false}
-            className="h-7 w-44 rounded bg-surface-950 px-2 text-xs text-slate-200 outline-none placeholder:text-slate-400 focus-visible:ring-2 focus-visible:ring-brand-500"
+            className="h-7 w-44 rounded-md border border-surface-700 bg-surface-900 px-2 text-xs font-mono text-slate-200 placeholder:text-slate-400 focus:outline-none focus:border-brand-500 focus-visible:ring-2 focus-visible:ring-brand-500"
           />
           <AnimatePresence initial={false}>
-            {findQuery && findResult === false && <m.span key="no-match" {...fade} transition={exitTransition} className="px-1 text-3xs text-amber-400">No match</m.span>}
+            {findQuery && findResult === false && <m.span key="no-match" {...fade} transition={exitTransition} className="px-1 text-xs text-amber-400">No match</m.span>}
           </AnimatePresence>
-          <button type="button" onClick={() => search('previous')} title="Previous match (Shift+Enter)" aria-label="Previous match" className="rounded p-1 text-slate-400 transition-colors hover:bg-surface-800 hover:text-slate-200">
+          <button type="button" onClick={() => search('previous')} title="Previous match (Shift+Enter)" aria-label="Previous match" className="rounded-md p-1 text-slate-400 transition-colors hover:bg-surface-800 hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500">
             <ChevronUp aria-hidden="true" className="size-3.5" />
           </button>
-          <button type="button" onClick={() => search('next')} title="Next match (Enter)" aria-label="Next match" className="rounded p-1 text-slate-400 transition-colors hover:bg-surface-800 hover:text-slate-200">
+          <button type="button" onClick={() => search('next')} title="Next match (Enter)" aria-label="Next match" className="rounded-md p-1 text-slate-400 transition-colors hover:bg-surface-800 hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500">
             <ChevronDown aria-hidden="true" className="size-3.5" />
           </button>
-          <button type="button" onClick={closeFind} title="Close find (Esc)" aria-label="Close find" className="rounded p-1 text-slate-400 transition-colors hover:bg-surface-800 hover:text-slate-200">
+          <button type="button" onClick={closeFind} title="Close find (Esc)" aria-label="Close find" className="rounded-md p-1 text-slate-400 transition-colors hover:bg-surface-800 hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500">
             <X aria-hidden="true" className="size-3.5" />
           </button>
         </m.div>
@@ -917,7 +917,7 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
             animate={{ opacity: 1 }}
             exit={{ opacity: 0, transition: exitTransition }}
             transition={surfaceTransition}
-            className="absolute inset-0 z-10"
+            className="absolute inset-0 z-rail"
           >
             <ConnectForm
               initialHost={tab?.host ?? undefined}

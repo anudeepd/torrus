@@ -109,11 +109,11 @@ function SlotPicker({ slotIndex, tabIds, tabs, onChange }: {
 }) {
   return (
     <div className="flex items-center gap-2">
-      <label htmlFor={`slot-${slotIndex}`} className="text-xs text-slate-400 w-12 flex-shrink-0">Slot {slotIndex + 1}</label>
+      <label htmlFor={`slot-${slotIndex}`} className="text-xs font-medium text-slate-400 w-12 flex-shrink-0">Slot {slotIndex + 1}</label>
       <select
         id={`slot-${slotIndex}`}
         name={`slot-${slotIndex + 1}`}
-        className="flex-1 bg-surface-800 border border-surface-600 rounded px-2 py-1 text-xs text-slate-200 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus:border-brand-500"
+        className="flex-1 bg-surface-900 border border-surface-700 rounded-md px-2 py-1 text-xs text-slate-200 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus:border-brand-500"
         value={tabIds[slotIndex] ?? ''}
         onChange={e => onChange(slotIndex, e.target.value)}
       >
@@ -158,7 +158,7 @@ export default function LayoutPickerModal({ tabs, onApply, onClose }: Props) {
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-surface-800">
           <h2 className="text-sm font-semibold text-slate-200 text-balance">Split layout</h2>
-          <button type="button" onClick={onClose} aria-label="Close split layout picker" className="text-slate-400 hover:text-slate-300 transition-colors">
+          <button type="button" onClick={onClose} aria-label="Close split layout picker" className="rounded-md text-slate-400 hover:text-slate-300 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500">
             <X className="size-4" aria-hidden="true" />
           </button>
         </div>
@@ -229,14 +229,14 @@ export default function LayoutPickerModal({ tabs, onApply, onClose }: Props) {
         <div className="flex gap-2 px-5 pb-5">
           <button
             onClick={onClose}
-            className="flex-1 px-3 py-2 rounded-md text-sm text-slate-400 bg-surface-800 hover:bg-surface-700 transition-colors"
+            className="flex-1 px-3 py-2 rounded-md text-sm text-slate-400 bg-surface-800 hover:bg-surface-700 hover:text-slate-200 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
           >
             Cancel
           </button>
           <button
             onClick={handleApply}
             disabled={!allFilled}
-            className="flex-1 px-3 py-2 rounded-md text-sm font-medium text-white bg-brand-700 hover:bg-brand-600 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            className="flex-1 px-3 py-2 rounded-md text-sm font-medium text-white bg-brand-700 hover:bg-brand-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
           >
             Apply layout
           </button>

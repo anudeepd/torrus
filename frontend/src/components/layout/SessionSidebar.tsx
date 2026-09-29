@@ -93,14 +93,14 @@ function EditModal({ server, onSave, onClose }: EditModalProps) {
     onClose()
   }
 
-  const inputCls = 'w-full bg-surface-950 border border-surface-700 rounded-md px-3 py-2 text-sm font-mono text-slate-200 placeholder-slate-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus:border-brand-500 transition-colors'
+  const inputCls = 'w-full bg-surface-900 border border-surface-700 rounded-md px-3 py-2 text-sm font-mono text-slate-200 placeholder-slate-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus:border-brand-500 transition-colors'
   const labelCls = 'text-xs text-slate-400 font-medium'
 
   return (
-    <Dialog label="Edit Session" onClose={onClose} className="w-80 gap-4 p-6">
+    <Dialog label="Edit session" onClose={onClose} className="w-80 gap-4">
         <div className="flex items-center gap-2">
           <Pencil className="size-4 text-brand-400" aria-hidden="true" />
-          <h2 className="text-sm font-semibold text-slate-200 text-balance">Edit Session</h2>
+          <h2 className="text-sm font-semibold text-slate-200 text-balance">Edit session</h2>
         </div>
 
         <form onSubmit={handleSubmit} className="flex flex-col gap-3">
@@ -172,13 +172,13 @@ function EditModal({ server, onSave, onClose }: EditModalProps) {
             <button
               type="button"
               onClick={onClose}
-              className="flex-1 px-3 py-2 rounded-md text-sm text-slate-400 bg-surface-800 hover:bg-surface-700 hover:text-slate-200 transition-colors"
+              className="flex-1 px-3 py-2 rounded-md text-sm text-slate-400 bg-surface-800 hover:bg-surface-700 hover:text-slate-200 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
             >
               Cancel
             </button>
             <button
               type="submit"
-              className="flex-1 px-3 py-2 rounded-md text-sm font-medium text-white bg-brand-700 hover:bg-brand-600 transition-colors"
+              className="flex-1 px-3 py-2 rounded-md text-sm font-medium text-white bg-brand-700 hover:bg-brand-600 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
             >
               Save
             </button>
@@ -218,14 +218,14 @@ function DeleteSessionDialog({ server, onCancel, onConfirm }: DeleteSessionDialo
             ref={cancelRef}
             type="button"
             onClick={onCancel}
-            className="flex-1 rounded-md bg-surface-800 px-3 py-2 text-sm text-slate-400 transition-colors hover:bg-surface-700 hover:text-slate-200"
+            className="flex-1 rounded-md bg-surface-800 px-3 py-2 text-sm text-slate-400 transition-colors hover:bg-surface-700 hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
           >
             Cancel
           </button>
           <button
             type="button"
             onClick={onConfirm}
-            className="flex-1 rounded-md bg-red-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-red-500"
+            className="flex-1 rounded-md bg-red-700 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-red-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
           >
             Delete
           </button>
@@ -426,10 +426,10 @@ export default function SessionSidebar({ isOpen, compact, onToggle, onLoadSessio
               onKeyDown={event => handleMenuKeyDown(event, contextMenuRef.current, () => setContextMenu(null))} className="fixed z-menu bg-surface-800 border border-surface-700 rounded-lg shadow-xl py-1 min-w-40"
               style={{ left: contextMenu.x, top: contextMenu.y }}
             >
-              <button type="button" role="menuitem" className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-300 hover:bg-surface-700 transition-colors" onClick={() => { setContextMenu(null); onLoadSession(server) }}><LogIn className="size-3" aria-hidden="true" /> Open</button>
-              <button type="button" role="menuitem" className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-300 hover:bg-surface-700 transition-colors" onClick={() => { setContextMenu(null); setEditingServer(server) }}><Pencil className="size-3" aria-hidden="true" /> Edit</button>
+              <button type="button" role="menuitem" className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-300 hover:bg-surface-700 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-500" onClick={() => { setContextMenu(null); onLoadSession(server) }}><LogIn className="size-3" aria-hidden="true" /> Open</button>
+              <button type="button" role="menuitem" className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-300 hover:bg-surface-700 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-500" onClick={() => { setContextMenu(null); setEditingServer(server) }}><Pencil className="size-3" aria-hidden="true" /> Edit</button>
               <div className="my-1 border-t border-surface-700" />
-              <button type="button" role="menuitem" className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-red-400 hover:bg-surface-700 transition-colors" onClick={() => { setContextMenu(null); setPendingDelete(server) }}><Trash2 className="size-3" aria-hidden="true" /> Delete</button>
+              <button type="button" role="menuitem" className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-red-400 hover:bg-surface-700 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-500" onClick={() => { setContextMenu(null); setPendingDelete(server) }}><Trash2 className="size-3" aria-hidden="true" /> Delete</button>
             </m.div>
           )
         })()}
@@ -458,7 +458,7 @@ export default function SessionSidebar({ isOpen, compact, onToggle, onLoadSessio
             initial={{ x: -16, opacity: 0 }}
             animate={{ x: 0, opacity: 1 }}
             transition={surfaceTransition}
-            className="flex flex-col"
+            className="flex min-h-0 flex-1 flex-col"
             style={{ width: sidebarWidth }}
           >
             <SidebarInner onToggle={onToggle} servers={servers} selectedId={selectedId} setSelectedId={setSelectedId} selected={selected} isActive={isActive} handleOpen={handleOpen} handleDelete={handleDelete} handleExport={handleExport} handleImport={handleImport} setEditingServer={setEditingServer} setImportError={setImportError} importError={importError} importSuccess={importSuccess} fileInputRef={fileInputRef} setContextMenu={setContextMenu} onLoadSession={onLoadSession} />
@@ -471,7 +471,7 @@ export default function SessionSidebar({ isOpen, compact, onToggle, onLoadSessio
             aria-label="Show sessions"
             className="w-8 h-9 flex-shrink-0 flex items-center justify-center text-slate-400 hover:text-slate-300 hover:bg-surface-800 transition-colors border-b border-surface-800"
           >
-            <PanelLeftOpen className="size-4" aria-hidden="true" />
+            <PanelLeftOpen className="size-3.5" aria-hidden="true" />
           </button>
         )}
       </div>
@@ -501,10 +501,10 @@ export default function SessionSidebar({ isOpen, compact, onToggle, onLoadSessio
             onKeyDown={event => handleMenuKeyDown(event, contextMenuRef.current, () => setContextMenu(null))} className="fixed z-menu bg-surface-800 border border-surface-700 rounded-lg shadow-xl py-1 min-w-40"
             style={{ left: contextMenu.x, top: contextMenu.y }}
           >
-            <button type="button" role="menuitem" className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-300 hover:bg-surface-700 transition-colors" onClick={() => { setContextMenu(null); onLoadSession(server) }}><LogIn className="size-3" aria-hidden="true" /> Open</button>
-            <button type="button" role="menuitem" className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-300 hover:bg-surface-700 transition-colors" onClick={() => { setContextMenu(null); setEditingServer(server) }}><Pencil className="size-3" aria-hidden="true" /> Edit</button>
+            <button type="button" role="menuitem" className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-300 hover:bg-surface-700 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-500" onClick={() => { setContextMenu(null); onLoadSession(server) }}><LogIn className="size-3" aria-hidden="true" /> Open</button>
+            <button type="button" role="menuitem" className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-300 hover:bg-surface-700 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-500" onClick={() => { setContextMenu(null); setEditingServer(server) }}><Pencil className="size-3" aria-hidden="true" /> Edit</button>
             <div className="my-1 border-t border-surface-700" />
-            <button type="button" role="menuitem" className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-red-400 hover:bg-surface-700 transition-colors" onClick={() => { setContextMenu(null); setPendingDelete(server) }}><Trash2 className="size-3" aria-hidden="true" /> Delete</button>
+            <button type="button" role="menuitem" className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-red-400 hover:bg-surface-700 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-500" onClick={() => { setContextMenu(null); setPendingDelete(server) }}><Trash2 className="size-3" aria-hidden="true" /> Delete</button>
           </m.div>
         )
       })()}
@@ -546,13 +546,13 @@ function SidebarInner({ onToggle, servers, selectedId, setSelectedId, selected, 
     <nav aria-label="Saved sessions" className="flex-1 min-w-0 flex flex-col bg-surface-900 select-none">
       {/* Header */}
       <div className="px-3 py-2 border-b border-surface-800 flex items-center gap-2">
-        <h2 className="text-xs font-semibold text-slate-400 uppercase flex-1 text-balance">Sessions</h2>
+        <h2 className="text-xs font-semibold text-slate-400 flex-1 text-balance">Sessions</h2>
         <button
           type="button"
           onClick={onToggle}
           title="Hide sessions"
           aria-label="Hide sessions"
-          className="flex size-6 flex-shrink-0 items-center justify-center rounded text-slate-400 transition-colors hover:bg-surface-800 hover:text-slate-200"
+          className="flex size-6 flex-shrink-0 items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-surface-800 hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
         >
           <PanelLeftClose className="size-3.5" aria-hidden="true" />
         </button>
@@ -614,21 +614,21 @@ function SidebarInner({ onToggle, servers, selectedId, setSelectedId, selected, 
       {/* Action buttons */}
       <div className="flex flex-col gap-2 px-3 py-3 border-t border-surface-800">
         <div className="flex gap-1.5">
-          <button type="button" onClick={handleOpen} disabled={!selected} className={cn('flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 rounded text-xs font-medium transition-colors', selected ? 'bg-brand-700 hover:bg-brand-600 text-white' : 'bg-surface-800 text-slate-600 cursor-not-allowed')}>
+          <button type="button" onClick={handleOpen} disabled={!selected} className="flex-1 flex items-center justify-center gap-1.5 px-2 py-1 rounded-md text-xs font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 bg-brand-700 hover:bg-brand-600 text-white">
             <LogIn className="size-3" aria-hidden="true" /> Open
           </button>
-          <button type="button" onClick={() => { if (selected) setEditingServer(selected) }} disabled={!selected} aria-label="Edit session" className={cn('flex items-center justify-center px-2 py-1.5 rounded text-xs transition-colors', selected ? 'bg-surface-800 hover:bg-surface-700 text-slate-400 hover:text-slate-200' : 'bg-surface-800 text-slate-700 cursor-not-allowed')} title="Edit session">
+          <button type="button" onClick={() => { if (selected) setEditingServer(selected) }} disabled={!selected} aria-label="Edit session" className="flex items-center justify-center px-2 py-1 rounded-md text-xs transition-colors disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 bg-surface-800 hover:bg-surface-700 text-slate-400 hover:text-slate-200" title="Edit session">
             <Pencil className="size-3.5" aria-hidden="true" />
           </button>
-          <button type="button" onClick={handleDelete} disabled={!selected} aria-label="Delete session" className={cn('flex items-center justify-center px-2 py-1.5 rounded text-xs transition-colors', selected ? 'bg-surface-800 hover:bg-red-900/40 text-slate-400 hover:text-red-400' : 'bg-surface-800 text-slate-700 cursor-not-allowed')} title="Delete session">
+          <button type="button" onClick={handleDelete} disabled={!selected} aria-label="Delete session" className="flex items-center justify-center px-2 py-1 rounded-md text-xs transition-colors disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 bg-surface-800 hover:bg-red-900/40 text-slate-400 hover:text-red-400" title="Delete session">
             <Trash2 className="size-3.5" aria-hidden="true" />
           </button>
         </div>
         <div className="flex gap-1.5">
-          <button type="button" onClick={handleExport} disabled={servers.length === 0} className={cn('flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 rounded text-xs font-medium border transition-colors', servers.length > 0 ? 'border-surface-700 text-slate-400 hover:text-slate-200 hover:border-surface-600 hover:bg-surface-800' : 'border-surface-800 text-slate-700 cursor-not-allowed')}>
+          <button type="button" onClick={handleExport} disabled={servers.length === 0} className="flex-1 flex items-center justify-center gap-1.5 px-2 py-1 rounded-md text-xs font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 border border-surface-700 text-slate-400 hover:text-slate-200 hover:border-surface-600 hover:bg-surface-800">
             <Download className="size-3" aria-hidden="true" /> Export
           </button>
-          <button type="button" onClick={() => { setImportError(''); fileInputRef.current?.click() }} className="flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 rounded text-xs font-medium border border-surface-700 text-slate-400 hover:text-slate-200 hover:border-surface-600 hover:bg-surface-800 transition-colors">
+          <button type="button" onClick={() => { setImportError(''); fileInputRef.current?.click() }} className="flex-1 flex items-center justify-center gap-1.5 px-2 py-1 rounded-md text-xs font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 border border-surface-700 text-slate-400 hover:text-slate-200 hover:border-surface-600 hover:bg-surface-800">
             <Upload className="size-3" aria-hidden="true" /> Import
           </button>
           <input ref={fileInputRef} type="file" accept=".json" name="sessions-file" aria-label="Import sessions file" autoComplete="off" className="hidden" onChange={handleImport} />

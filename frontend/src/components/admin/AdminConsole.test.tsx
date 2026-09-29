@@ -104,7 +104,7 @@ describe('AdminConsole', () => {
     await renderAdmin()
 
     expect(screen.getByRole('main')).toHaveClass('overflow-y-auto')
-    fireEvent.click(screen.getByRole('tab', { name: 'activity' }))
+    fireEvent.click(screen.getByRole('tab', { name: 'Submitted input' }))
 
     await waitFor(() => expect(screen.getByText(/Show full input/)).toBeInTheDocument())
     const multilineEvent = screen.getByText((content) =>
@@ -140,7 +140,7 @@ describe('AdminConsole', () => {
     expect(screen.getByRole('banner')).toHaveClass('sticky', 'top-0', 'z-30')
 
     expectFixedTable('Owner-bound active SSH sessions')
-    fireEvent.click(screen.getByRole('button', { name: 'Expand Session inventory vertically' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Expand Sessions vertically' }))
     expect(screen.getByRole('table', { name: 'Owner-bound active SSH sessions' }).parentElement).toHaveClass('max-h-[calc(100dvh-11rem)]')
     fireEvent.click(screen.getByRole('button', { name: 'Users & policy' }))
     expectFixedTable('LDAP users and policy state')
@@ -156,7 +156,7 @@ describe('AdminConsole', () => {
     await renderAdmin()
 
     fireEvent.click(screen.getByRole('button', { name: 'Stats' }))
-    expect(screen.getByRole('heading', { name: 'Admin stats' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Stats' })).toBeInTheDocument()
     expect(screen.getByText('Active users')).toBeInTheDocument()
     expect(screen.getByText('Configured users')).toBeInTheDocument()
     expect(screen.getByText('Requests loaded')).toBeInTheDocument()
@@ -228,13 +228,13 @@ describe('AdminConsole', () => {
   it('uses internal purge confirmation and HTTP-safe idempotency keys', async () => {
     const { fetchMock } = await renderAdmin()
 
-    fireEvent.click(screen.getByRole('tab', { name: 'retention' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Review deletion' }))
+    fireEvent.click(screen.getByRole('tab', { name: 'Retention' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Delete input…' }))
     expect(screen.getByRole('alertdialog')).toBeInTheDocument()
     expect(screen.getByText(/This cannot be undone/)).toBeInTheDocument()
 
     fireEvent.change(screen.getByLabelText('Type PURGE to confirm'), { target: { value: 'PURGE' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Delete rows' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Delete input' }))
 
     await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Deleted terminal input older than 30 days'))
     const postCall = fetchMock.mock.calls.find(([, init]) => init?.method === 'POST')
@@ -260,7 +260,7 @@ describe('AdminConsole', () => {
     })).reverse()
     await renderAdmin(events)
 
-    fireEvent.click(screen.getByRole('tab', { name: 'activity' }))
+    fireEvent.click(screen.getByRole('tab', { name: 'Submitted input' }))
     expect(await screen.findByText('command · 3 lines')).toBeInTheDocument()
     const block = screen.getByText((content) =>
       content.includes('SELECT a,') && content.includes('WHERE x > 1;'),
@@ -286,7 +286,7 @@ describe('AdminConsole', () => {
       { ...base, event_id: 4, occurred_at: '2026-08-02T00:00:00.000Z', session_id: 'session-2', tab_id: 'tab-1', input: 'other' },
     ])
 
-    fireEvent.click(screen.getByRole('tab', { name: 'activity' }))
+    fireEvent.click(screen.getByRole('tab', { name: 'Submitted input' }))
     await screen.findByText('Sensitive input redacted')
     expect(screen.queryByText(/command · \d+ lines/)).not.toBeInTheDocument()
     expect(screen.getByText('head')).toBeInTheDocument()

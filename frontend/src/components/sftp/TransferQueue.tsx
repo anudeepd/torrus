@@ -17,7 +17,7 @@ export default function TransferQueue({ transfers, onDismiss, onRetry }: Transfe
 
   return (
     <div
-      className="pointer-events-none absolute bottom-4 right-4 z-menu flex max-h-[calc(100%-2rem)] w-[min(360px,calc(100vw-2rem))] flex-col gap-2 overflow-y-auto overscroll-contain"
+      className="pointer-events-none absolute bottom-4 right-4 z-menu flex max-h-[calc(100%-2rem)] w-80 max-w-[calc(100vw-2rem)] flex-col gap-2 overflow-y-auto overscroll-contain"
     >
       <AnimatePresence initial={false}>
         {[...transfers].reverse().map(item => (
@@ -32,18 +32,18 @@ export default function TransferQueue({ transfers, onDismiss, onRetry }: Transfe
           >
             <div className="flex items-center gap-2 px-3 pt-2.5 text-xs">
               {item.direction === 'upload'
-                ? <Upload aria-hidden="true" className="size-3.5 flex-shrink-0 text-slate-400" />
-                : <Download aria-hidden="true" className="size-3.5 flex-shrink-0 text-slate-400" />}
+                ? <Upload aria-hidden="true" className="size-3.5 shrink-0 text-slate-400" />
+                : <Download aria-hidden="true" className="size-3.5 shrink-0 text-slate-400" />}
               <span className="min-w-0 flex-1 truncate font-mono text-slate-200">{item.name}</span>
-              {item.status === 'done' && <Check aria-hidden="true" className="size-3.5 flex-shrink-0 text-brand-400" />}
-              {item.status === 'error' && <XCircle aria-hidden="true" className="size-3.5 flex-shrink-0 text-red-400" />}
+              {item.status === 'done' && <Check aria-hidden="true" className="size-3.5 shrink-0 text-brand-400" />}
+              {item.status === 'error' && <XCircle aria-hidden="true" className="size-3.5 shrink-0 text-red-400" />}
               {item.status === 'error' && item.direction === 'upload' && (
                 <button
                   type="button"
                   onClick={() => onRetry(item.id)}
-                  className="flex size-7 flex-shrink-0 items-center justify-center text-slate-400 transition-colors hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+                  className="flex size-8 shrink-0 items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-surface-800 hover:text-slate-200 motion-press focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
                   aria-label={`Retry ${item.name}`}
-                  title="Retry upload"
+                  title={`Retry ${item.name}`}
                 >
                   <RotateCcw aria-hidden="true" className="size-3.5" />
                 </button>
@@ -52,8 +52,9 @@ export default function TransferQueue({ transfers, onDismiss, onRetry }: Transfe
                 <button
                   type="button"
                   onClick={() => onDismiss(item.id)}
-                  className="flex size-7 flex-shrink-0 items-center justify-center text-slate-400 transition-colors hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+                  className="flex size-8 shrink-0 items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-surface-800 hover:text-slate-200 motion-press focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
                   aria-label={`Dismiss ${item.name}`}
+                  title={`Dismiss ${item.name}`}
                 >
                   <X aria-hidden="true" className="size-3.5" />
                 </button>
@@ -63,7 +64,7 @@ export default function TransferQueue({ transfers, onDismiss, onRetry }: Transfe
               <m.div
                 className={cn('h-full', {
                   'animate-pulse bg-brand-500 motion-reduce:animate-none': item.status === 'active',
-                  'bg-brand-500': item.status === 'done',
+                  'bg-brand-400': item.status === 'done',
                   'bg-red-400': item.status === 'error',
                   'bg-slate-500': item.status === 'queued',
                 })}
@@ -73,7 +74,7 @@ export default function TransferQueue({ transfers, onDismiss, onRetry }: Transfe
             </div>
             <div className="mt-1 flex justify-between px-3 pb-2.5 font-mono text-2xs tabular-nums text-slate-400">
               <span className="min-w-0 truncate">{item.error ?? `${formatBytes(item.bytes)} / ${formatBytes(item.total)}`}</span>
-              <span className="ml-2 flex-shrink-0">
+              <span className="ml-2 shrink-0">
                 {item.status === 'active' && item.speed ? `${formatSpeed(item.speed)} · ` : ''}
                 {item.progress}%
               </span>

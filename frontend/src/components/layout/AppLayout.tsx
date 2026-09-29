@@ -24,6 +24,7 @@ import { BREAKPOINTS, below } from '@/lib/breakpoints'
 import type { PaneNode } from '@/store/layoutStore'
 import type { SavedServer, Tab } from '@/types'
 import { AnimatePresence } from 'motion/react'
+import { PaneFallback } from '@/components/ui/PaneFallback'
 import * as m from 'motion/react-m'
 import { exitTransition, fade, surfaceTransition } from '@/motion/tokens'
 
@@ -551,7 +552,7 @@ export default function AppLayout({ navigateToAdmin = () => window.location.assi
             <m.div key="empty-state" {...fade} transition={exitTransition} className="flex h-full flex-col items-center justify-center gap-4 text-slate-400">
               <Logo size="lg" showText={false} className="opacity-40" />
               <p className="max-w-sm px-6 text-center text-sm leading-relaxed text-pretty">Open a terminal tab or select a saved session from the sidebar</p>
-              <Button variant="primary" size="sm" onClick={handleAddTab}>New connection</Button>
+              <Button variant="primary" size="sm" onClick={handleAddTab}>New tab</Button>
             </m.div>
           ) : layoutRoot && activeTabInLayout ? (
             <m.div key="split-layout" {...fade} transition={exitTransition} className="absolute inset-0">
@@ -656,7 +657,3 @@ export default function AppLayout({ navigateToAdmin = () => window.location.assi
   )
 }
 
-/** Shown while a lazily loaded pane's chunk arrives. */
-function PaneFallback() {
-  return <div className="flex h-full items-center justify-center text-xs text-slate-400">Loading…</div>
-}

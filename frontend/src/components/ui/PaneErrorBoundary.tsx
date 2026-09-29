@@ -1,5 +1,6 @@
 import { Component, type ReactNode } from 'react'
 import { AlertTriangle } from 'lucide-react'
+import Button from './Button'
 
 interface PaneErrorBoundaryProps {
   children: ReactNode
@@ -45,14 +46,8 @@ export function PaneErrorFallback({ message }: { message: string }) {
   return (
     <div role="alert" className="flex h-full w-full flex-col items-center justify-center gap-3 bg-surface-950">
       <AlertTriangle aria-hidden="true" className="size-8 text-red-400" />
-      <p className="text-sm text-slate-300 text-pretty">{message}</p>
-      <button
-        type="button"
-        onClick={() => window.location.reload()}
-        className="rounded bg-surface-700 px-3 py-1 text-xs text-slate-200 transition-colors hover:bg-surface-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
-      >
-        Reload
-      </button>
+      <p className="text-sm text-slate-400 text-pretty">{message}</p>
+      <Button variant="secondary" size="sm" onClick={() => window.location.reload()}>Reload</Button>
     </div>
   )
 }
