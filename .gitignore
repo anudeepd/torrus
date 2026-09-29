@@ -29,6 +29,9 @@ Thumbs.db
 frontend/node_modules/
 frontend/dist/
 frontend/test-results/
+# `npm run build` is `tsc && vite build`, so tsc's incremental state lands next
+# to the config and reappears after every build.
+*.tsbuildinfo
 /node_modules/
 
 # Project specific
