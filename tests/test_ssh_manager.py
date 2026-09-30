@@ -712,3 +712,152 @@ def test_a_closed_send_window_is_retried_instead_of_killing_the_session():
     closed.closed = True
     with pytest.raises(ConnectionError):
         _blocking_send_all(closed, b"payload")
+
+
+def _streaming_session(buffered: bytes = b"", offset: int | None = None):
+    """A live session whose replay buffer holds ``buffered`` ending at ``offset``."""
+    from torrus.ssh_manager import SSHSession
+
+    session = SSHSession(
+        session_id="sess1",
+        tab_id="tab1",
+        client=MagicMock(),
+        channel=MagicMock(closed=False),
+        host="example.com",
+        port=22,
+        username="alice",
+    )
+    session.output_buffer.extend(buffered)
+    session.output_offset = len(buffered) if offset is None else offset
+    return session
+
+
+class TestOutputStreamResume:
+    """A browser that reconnects gets the bytes it missed, never the buffer twice."""
+
+    @pytest.mark.asyncio
+    async def test_each_chunk_is_numbered_by_where_it_ends_in_the_stream(self, mock_sio):
+        from torrus.ssh_manager import SSHManager
+
+        manager = SSHManager(mock_sio)
+        session = _streaming_session()
+        chunks = [b"hello ", b"wor", b"ld"]
+
+        def recv(_size):
+            chunk = chunks.pop(0)
+            if not chunks:
+                session.channel.closed = True
+            return chunk
+
+        session.channel.recv.side_effect = recv
+        try:
+            await manager._read_loop(session)
+        finally:
+            await manager.stop_background_tasks()
+
+        sent = [
+            call.args[1]
+            for call in mock_sio.emit.await_args_list
+            if call.args[0] == "ssh:output"
+        ]
+        assert [(p["data"], p["offset"]) for p in sent] == [
+            (b"hello ", 6),
+            (b"wor", 9),
+            (b"ld", 11),
+        ]
+        assert {p["stream"] for p in sent} == {session.session_instance_id}
+        assert session.output_offset == 11
+        assert bytes(session.output_buffer) == b"hello world"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("resume_at", "stream_matches", "sent", "reset", "status"),
+        [
+            # Nothing drawn yet (a fresh page): the whole buffer, as before.
+            (None, True, b"abcdef", False, "active"),
+            # The buffer covers offsets 94..100. Inside it, only what was missed.
+            (97, True, b"def", False, "resumed"),
+            (94, True, b"abcdef", False, "resumed"),
+            (100, True, None, False, "resumed"),
+            # Missed bytes that already fell out of the buffer: rebuild from a reset.
+            (93, True, b"abcdef", True, "active"),
+            # A position beyond the stream, or from another SSH session, is not ours.
+            (101, True, b"abcdef", True, "active"),
+            (97, False, b"abcdef", True, "active"),
+        ],
+    )
+    async def test_restore_sends_only_what_the_browser_missed(
+        self, mock_sio, resume_at, stream_matches, sent, reset, status
+    ):
+        from torrus.ssh_manager import SSHManager
+
+        manager = SSHManager(mock_sio)
+        session = _streaming_session(b"abcdef", offset=100)
+        manager._sessions[("sess1", "tab1")] = session
+        resume = None
+        if resume_at is not None:
+            stream = session.session_instance_id if stream_matches else "another-session"
+            resume = (stream, resume_at)
+
+        try:
+            result = await manager.restore_session(
+                "sid-1", "sess1", "tab1", resume=resume
+            )
+        finally:
+            await manager.stop_background_tasks()
+
+        assert result == status
+        mock_sio.enter_room.assert_awaited_once_with("sid-1", "session:sess1:tab1")
+        if sent is None:
+            mock_sio.emit.assert_not_awaited()
+            return
+        event, payload = mock_sio.emit.await_args.args
+        assert event == "ssh:output"
+        assert mock_sio.emit.await_args.kwargs == {"to": "sid-1"}
+        assert payload["data"] == sent
+        assert payload["offset"] == 100
+        assert payload["stream"] == session.session_instance_id
+        assert payload.get("reset", False) is reset
+
+    @pytest.mark.asyncio
+    async def test_a_chunk_read_while_a_browser_joins_reaches_it_exactly_once(
+        self, mock_sio
+    ):
+        """The join is visible before it returns; without the lock the chunk arrives
+        live *and* inside the replay snapshot taken right after."""
+        from torrus.ssh_manager import SSHManager
+
+        members: set[str] = set()
+        received: list[bytes] = []
+
+        async def enter_room(sid, _room):
+            members.add(sid)
+            await asyncio.sleep(0.05)
+
+        async def emit(event, payload=None, to=None, room=None):
+            delivered_to_new = to == "sid-new" or ("sid-new" in members and room)
+            if event == "ssh:output" and delivered_to_new:
+                received.append(payload["data"])
+
+        mock_sio.enter_room = AsyncMock(side_effect=enter_room)
+        mock_sio.emit = AsyncMock(side_effect=emit)
+        manager = SSHManager(mock_sio)
+        session = _streaming_session(b"before")
+        manager._sessions[("sess1", "tab1")] = session
+
+        def recv(_size):
+            session.channel.closed = True
+            return b"-live"
+
+        session.channel.recv.side_effect = recv
+        try:
+            restoring = asyncio.create_task(
+                manager.restore_session("sid-new", "sess1", "tab1")
+            )
+            await asyncio.sleep(0)  # restore is now inside enter_room
+            reading = asyncio.create_task(manager._read_loop(session))
+            await asyncio.gather(restoring, reading)
+        finally:
+            await manager.stop_background_tasks()
+
+        assert b"".join(received) == b"before-live"

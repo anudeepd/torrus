@@ -1956,7 +1956,7 @@ async def on_connect(sid, environ):
 
 
 @sio.on("disconnect")
-async def on_disconnect(sid):
+async def on_disconnect(sid, reason=None):
     await ssh_manager.unmap_sid(sid)
     async with _auth_lock:
         _authenticated_sids.discard(sid)
@@ -1970,7 +1970,10 @@ async def on_disconnect(sid):
 
     _sid_client_ips.pop(sid, None)
     _admin_sids.discard(sid)
-    logger.info("Client disconnected: %s", sid)
+    # ``reason`` ("ping timeout", "transport close", "transport error", ...) is
+    # what separates a browser that left from a link that dropped mid-session;
+    # the latter makes the client re-register and replay its output buffer.
+    logger.info("Client disconnected: %s (%s)", sid, reason or "no reason given")
 
 
 # ---------------------------------------------------------------------------
@@ -2072,6 +2075,17 @@ async def _http_owner(request: Request) -> str | None:
     return await _verify_ldap_socket_session(_http_environ(request))
 
 
+def _resume_position(data: dict) -> tuple[str, int] | None:
+    """The ``(stream, offset)`` a browser reports its terminal has drawn, if sane."""
+    resume = data.get("resume")
+    if not isinstance(resume, dict):
+        return None
+    stream, offset = resume.get("stream"), resume.get("offset")
+    if not isinstance(stream, str) or isinstance(offset, bool) or not isinstance(offset, int):
+        return None
+    return (stream, offset) if offset >= 0 else None
+
+
 @sio.on("session:register")
 async def on_session_register(sid, data):
     session_id = data.get("session_id", "")
@@ -2081,8 +2095,18 @@ async def on_session_register(sid, data):
     if not await _require_auth(sid, tab_id):
         return
 
-    status = await ssh_manager.restore_session(sid, session_id, tab_id)
-    await sio.emit("session:restored", {"tab_id": tab_id, "status": status}, to=sid)
+    status = await ssh_manager.restore_session(
+        sid, session_id, tab_id, resume=_resume_position(data)
+    )
+    # "resumed" is the server's own refinement of "active": the browser only
+    # needs to know the session is attached.
+    wire_status = "active" if status == "resumed" else status
+    await sio.emit(
+        "session:restored", {"tab_id": tab_id, "status": wire_status}, to=sid
+    )
+    # A redraw exists to repair a screen rebuilt from a partial replay. When the
+    # browser resumed without losing a byte there is nothing to repair, and
+    # SIGWINCH would make readline echo the whole input line a second time.
     if status == "active":
         await ssh_manager.force_redraw(session_id, tab_id)
 

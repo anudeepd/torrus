@@ -17,6 +17,10 @@ import { AnimatePresence } from 'motion/react'
 import * as m from 'motion/react-m'
 import { anchoredSurface, exitTransition, fade, surfaceSpring, surfaceTransition } from '@/motion/tokens'
 
+/** The browser's double-click window; a `dblclick` cannot arrive later than this
+ *  after the second press, so anything inside it belongs to one click sequence. */
+const DOUBLE_CLICK_MS = 500
+
 /**
  * Everything the bar can ask the shell to do. They stay owned by AppLayout
  * because most of them emit socket events or open dialogs; grouping them keeps
@@ -238,6 +242,23 @@ export default function TabBar({ actions, inSplitMode, compactSidebar = false, s
     setContextMenu(null)
   }, [tabs])
 
+  // Double-click renames a tab, but a quick tab *switch* produces a double-click
+  // too: the first press activates the tab and the second arrives as `dblclick`,
+  // which dropped the tab straight into rename mode with its whole name selected
+  // — the "tab name highlights at random" report. Remember which tab the current
+  // click sequence activated, and read a double-click that follows that
+  // activation as a switch. A deliberate double-click on the tab that was already
+  // active still opens the field, name selected.
+  const switchedTabRef = useRef<{ id: string; at: number } | null>(null)
+  const recordTabSwitch = useCallback((id: string) => {
+    if (activeTabId !== id) switchedTabRef.current = { id, at: Date.now() }
+  }, [activeTabId])
+  const startRenameFromDoubleClick = useCallback((tab: Tab) => {
+    const switched = switchedTabRef.current
+    if (switched && switched.id === tab.id && Date.now() - switched.at < DOUBLE_CLICK_MS) return
+    startEditing(tab)
+  }, [startEditing])
+
   const confirmEdit = useCallback(() => {
     if (editingTabId) {
       renameTab(editingTabId, editValue)
@@ -260,7 +281,7 @@ export default function TabBar({ actions, inSplitMode, compactSidebar = false, s
 
   return (
     <>
-    <div className={cn('flex-shrink-0 bg-surface-900 border-b border-surface-800', compactSidebar ? 'grid h-[92px] grid-cols-[40px_minmax(0,1fr)_40px] grid-rows-[46px_46px]' : 'h-[46px] flex items-center')}>
+    <div className={cn('flex-shrink-0 select-none bg-surface-900 border-b border-surface-800', compactSidebar ? 'grid h-[92px] grid-cols-[40px_minmax(0,1fr)_40px] grid-rows-[46px_46px]' : 'h-[46px] flex items-center')}>
       {compactSidebar && (
         <button
           type="button"
@@ -408,10 +429,10 @@ export default function TabBar({ actions, inSplitMode, compactSidebar = false, s
                   data-tab-id={tab.id}
                   title={getTabTitle(tab, tabDisplayName(tab, tabs))}
                   className="flex h-full min-w-0 flex-1 items-center gap-1.5 pl-3 text-left"
-                  onClick={() => onSetActiveTab(tab.id)}
+                  onClick={() => { recordTabSwitch(tab.id); onSetActiveTab(tab.id) }}
                   onDoubleClick={(e) => {
                     e.stopPropagation()
-                    startEditing(tab)
+                    startRenameFromDoubleClick(tab)
                   }}
                 >
                   <StatusDot status={tab.status} />

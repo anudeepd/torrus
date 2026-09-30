@@ -5,6 +5,7 @@ import { useTerminalStore } from '@/store/terminalStore'
 import type { SFTPEntry, SFTPGroup, SFTPUser } from '@/types'
 import { SpeedTracker, UploadClient, UploadState, uploadFile } from '@/lib/upload-engine'
 import { uuid } from '@/utils/uuid'
+import { sessionRegisterPayload } from '@/lib/terminalStream'
 
 // Keep inline Socket.IO downloads below server memory/message limits. Larger
 // files automatically use streaming HTTP; users do not need to choose a path.
@@ -299,7 +300,7 @@ export function useSFTP(tabId: string, sourceTabId: string | undefined, socket: 
         setTabConnection(newSourceTabId, sftpTab.host, sftpTab.port ?? 22, sftpTab.username)
       }
       setSourceTab(tabId, newSourceTabId)
-      socket.emit('session:register', { session_id: sessionId, tab_id: newSourceTabId })
+      socket.emit('session:register', sessionRegisterPayload(sessionId, newSourceTabId))
       setActiveTab(newSourceTabId)
       return
     }

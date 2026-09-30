@@ -8,13 +8,16 @@ export class MockTerminal {
   rows = 24
   textarea: HTMLTextAreaElement | null = null
   modes = { bracketedPasteMode: false }
+  unicode = { activeVersion: '6' }
   options: Record<string, unknown> = {}
   lastKeyEvent: KeyboardEvent | null = null
   selection = false
   buffer = { active: { viewportY: 0, baseY: 0, cursorY: 0 } }
   scrollToBottom = vi.fn()
+  reset = vi.fn()
   private _dataHandler: ((data: string) => void) | null = null
   private _keyHandler: ((event: KeyboardEvent) => boolean) | null = null
+  private _wheelHandler: ((event: WheelEvent) => boolean) | null = null
   constructor(options: Record<string, unknown> = {}) {
     this.options = options
     this.textarea = document.createElement('textarea')
@@ -36,7 +39,13 @@ export class MockTerminal {
   attachCustomKeyEventHandler(handler: (event: KeyboardEvent) => boolean) {
     this._keyHandler = handler
   }
-  attachCustomWheelEventHandler() {}
+  attachCustomWheelEventHandler(handler: (event: WheelEvent) => boolean) {
+    this._wheelHandler = handler
+  }
+
+  simulateWheel() {
+    return this._wheelHandler?.(new WheelEvent('wheel', { cancelable: true }))
+  }
 
   onData(handler: (data: string) => void) {
     this._dataHandler = handler
@@ -71,6 +80,8 @@ export class MockFitAddon {
 
 export class MockWebLinksAddon {}
 
+export class MockUnicode11Addon {}
+
 export class MockSearchAddon {
   findNext = vi.fn(() => true)
   findPrevious = vi.fn(() => true)
@@ -95,4 +106,8 @@ vi.mock('@xterm/addon-web-links', () => ({
 
 vi.mock('@xterm/addon-search', () => ({
   SearchAddon: MockSearchAddon,
+}))
+
+vi.mock('@xterm/addon-unicode11', () => ({
+  Unicode11Addon: MockUnicode11Addon,
 }))

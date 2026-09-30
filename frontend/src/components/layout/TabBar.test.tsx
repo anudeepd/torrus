@@ -142,6 +142,46 @@ describe('TabBar', () => {
     expect(screen.getByDisplayValue('First')).toBe(field)
   })
 
+  it('treats the double-click of a quick tab switch as a switch, not a rename', () => {
+    const setActiveTab = vi.fn()
+    useTerminalStore.setState({
+      tabs: [
+        { id: 'tab-1', type: 'terminal', host: null, port: null, username: null, label: 'First', status: 'disconnected', sessionKey: 'session-1:tab-1' },
+        { id: 'tab-2', type: 'terminal', host: null, port: null, username: null, label: 'Second', status: 'disconnected', sessionKey: 'session-1:tab-2' },
+      ],
+      activeTabId: 'tab-1',
+    })
+
+    render(<TabBar actions={{ ...noopActions, setActiveTab }} inSplitMode={false} />)
+
+    // Clicking an inactive tab and then landing a double-click on it is what a
+    // quick switch looks like. It must not drop the tab into rename mode with the
+    // name selected.
+    const second = screen.getByRole('tab', { name: /second/i })
+    fireEvent.click(second)
+    fireEvent.doubleClick(second)
+
+    expect(setActiveTab).toHaveBeenCalledWith('tab-2')
+    expect(screen.queryByDisplayValue('Second')).not.toBeInTheDocument()
+  })
+
+  it('still offers the rename field when the tab was already active', () => {
+    useTerminalStore.setState({
+      tabs: [
+        { id: 'tab-1', type: 'terminal', host: null, port: null, username: null, label: 'First', status: 'disconnected', sessionKey: 'session-1:tab-1' },
+      ],
+      activeTabId: 'tab-1',
+    })
+
+    render(<TabBar actions={noopActions} inSplitMode={false} />)
+
+    fireEvent.doubleClick(screen.getByRole('tab', { name: /first/i }))
+
+    const field = screen.getByDisplayValue('First') as HTMLInputElement
+    // The name is preselected so the rename can be typed over straight away.
+    expect([field.selectionStart, field.selectionEnd]).toEqual([0, 'First'.length])
+  })
+
   it('returns focus to the tab when its context menu is dismissed with Escape', () => {
     useTerminalStore.setState({
       tabs: [

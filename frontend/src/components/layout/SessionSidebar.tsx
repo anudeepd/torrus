@@ -596,7 +596,7 @@ function SidebarInner({ onToggle, servers, selectedId, setSelectedId, selected, 
               }}
               className={cn(
                 'group flex w-full flex-col px-3 py-2 text-left cursor-pointer transition-colors border-l-2',
-                '[content-visibility:auto] [contain-intrinsic-size:auto_2.25rem]',
+                '[content-visibility:auto] [contain-intrinsic-size:auto_2.125rem]',
                 selectedId === server.id ? 'bg-surface-800 border-l-brand-500' : 'border-l-transparent hover:bg-surface-800/50'
               )}
             >

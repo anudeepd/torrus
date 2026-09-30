@@ -1,5 +1,86 @@
 # Changelog
 
+## [0.2.56] - 2026-10-01
+
+### Fixed
+
+- **Scrollbars were unstyled in Firefox and Waterfox, and the terminal's differed in Chromium.**
+  The app-wide bar was asked for only with `::-webkit-scrollbar`; Firefox and Waterfox ignore
+  those rules, so every scroll region (sidebar tree, query log, column picker, admin tables,
+  dialogs) fell back to the platform bar — measured in Waterfox 6.7.4 (rv:153.0) beside the
+  terminal's, whose `.xterm-viewport` did set the standard properties: **14px white next to
+  8px dark**. Waterfox also cannot be told apart from Chromium in CSS, because it answers
+  `CSS.supports('selector(::-webkit-scrollbar)')` with true while rendering nothing from the
+  rules, so an `@supports` guard is not an option; and Chromium cannot simply be given the
+  standard properties, since Blink prefers them over the custom rules (that is why the
+  terminal rendered 12px native next to the app's 8px custom bars). `utils/scrollbarFallback.ts`
+  now probes before the first paint — a throwaway scroll container styled with
+  `::-webkit-scrollbar { width: 4px }` — and marks the document
+  `html[data-scrollbars='standard']` only when its gutter does not become 4px. That attribute
+  carries the fallback in `index.css`, and the `.xterm-viewport` rule no longer sets the
+  standard properties unconditionally, so Chromium gets its custom 8px terminal bar back while
+  Firefox and Waterfox get thin dark bars everywhere.
+
+- **Lists that reserve row heights were taller than their contents, so rows moved under
+  the pointer.** `content-visibility: auto` needs `contain-intrinsic-size` to describe the
+  *content box* of a row it has not rendered yet, padding excluded — every use here passed
+  the whole row height instead. The SFTP listing reserved 36px for a 24px content box, so
+  200 files were laid out 44px tall until each row had been scrolled past and settled at its
+  real 32px: the list opened at **8124px** for a **6432px** listing, the scrollbar thumb read
+  8.8% instead of 11.1%, and the height collapsed in steps (8124 → 7884 → … → 6432) as rows
+  rendered. Scrolling to the middle of the track landed on `file_122` of 200 instead of
+  `file_100`, and a click during that collapse selected the wrong row. The intrinsic size is
+  now the row's content box, per breakpoint (`1.5rem` desktop, `2.25rem` under `xs` where
+  rows grow to `min-h-11`); the sidebar list, 2px too tall per unrendered row, now says
+  `2.125rem` for its 34px content box. Both lists report a constant scrollHeight now, and the
+  thumb matches the content. The admin tables' rows also carried the pair, where the
+  properties do nothing at all: containment does not apply to internal table boxes, so a
+  `<tr>` keeps its natural height and the reserved size is never used (measured: 100 rows at
+  `auto 2.25rem` laid out at their real 26px). Those four are gone; the activity table's
+  budget has to come from paging, not from this.
+
+- **A double-click that followed a tab switch opened the rename field with the name
+  selected.** The rename gesture is a double-click on a tab, but a quick switch produces one
+  too: the first press activates the tab and the second arrives as `dblclick`, so switching
+  tabs by clicking twice dropped the tab into rename mode with its whole name highlighted —
+  the "tab name highlights at random" report. The bar now remembers which tab the current
+  click sequence activated and reads a double-click that follows that activation as a switch.
+  A deliberate double-click on the tab that was already active still opens the field with the
+  name selected.
+
+- **App chrome text could be selected.** A drag that started in a gap and crossed the
+  workspace painted the empty-state sentence blue, and control captions elsewhere behaved the
+  same way, because only a few containers opted out. Controls (`button`, `label`, `th`,
+  `summary`, tabs, options, menu items) are now `user-select: none` in the base layer, the tab
+  bar and the empty state opt out as regions, and text fields are re-enabled explicitly since
+  `user-select` is inherited. Terminal output, file listings, dialog text and table data stay
+  selectable.
+
+- **A pasted line containing emoji or symbols was drawn garbled.** xterm.js sized
+  cells with its Unicode 6 tables, where emoji and symbols such as ✅ ❌ ⚡ ⭐ 🚀 take
+  one cell, while the remote side (readline, zsh, tmux, through libc's `wcwidth`)
+  gives them two. Every cursor move the remote made then landed in the wrong cell:
+  glyphs overlapped, the cursor drifted away from the text (four rows below it under
+  tmux) and the next edit redrew the line on top of itself, although the shell's buffer
+  was intact and the command still ran. The longer the pasted line, the more of these
+  characters it holds, so a big paste is where it showed. The terminal now uses the
+  Unicode 11 tables (`@xterm/addon-unicode11`). Emoji added after Unicode 11 (2018)
+  still measure one cell.
+
+- **A socket that dropped mid-session garbled the terminal on reconnect.** Every
+  tab re-registered when the socket came back, and the server answered by replaying
+  its last 10 KB of output into a terminal that already held it, drawing that slice a
+  second time on top of whatever was there. Under a big paste, where megabytes of echo
+  are in flight, the browser is also far behind by then, and the replay landed mid-line.
+  Output is now numbered by its position in the session's stream: the browser reports
+  where it got to and the server sends only the bytes it missed. When more was missed
+  than the server keeps, the browser clears and rebuilds the screen from the buffer,
+  as a page reload does, and the session is asked to repaint. Rebuilding the screen
+  collapses the scroll area, which xterm.js read as the reader scrolling to the top and
+  then stopped following output for good; the terminal now stays at the bottom until a
+  scroll says otherwise. `Client disconnected` also logs the reason the socket closed
+  (`ping timeout`, `transport close`, …), which is what tells this apart from a closed tab.
+
 ## [0.2.55] - 2026-09-29
 
 ### Fixed

@@ -19,6 +19,7 @@ import CommandPalette from '@/components/ui/CommandPalette'
 import PendingCloseDialog from './PendingCloseDialog'
 import { AUTH_LOGOUT_EVENT, AUTH_REDIRECT_EVENT, redirectToLdapLogin } from '@/utils/authRedirect'
 import { tabDisplayName } from '@/lib/tabName'
+import { sessionRegisterPayload } from '@/lib/terminalStream'
 import { PaneErrorBoundary, PaneErrorFallback } from '@/components/ui/PaneErrorBoundary'
 import { BREAKPOINTS, below } from '@/lib/breakpoints'
 import type { PaneNode } from '@/store/layoutStore'
@@ -237,11 +238,11 @@ export default function AppLayout({ navigateToAdmin = () => window.location.assi
       restoreRetries.delete(tabId)
     }
     const register = (tabId: string, sid: string) => {
-      socket.emit('session:register', { session_id: sid, tab_id: tabId })
+      socket.emit('session:register', sessionRegisterPayload(sid, tabId))
       clearRestoreRetry(tabId)
       restoreRetries.set(tabId, window.setTimeout(() => {
         restoreRetries.delete(tabId)
-        if (socket.connected) socket.emit('session:register', { session_id: sid, tab_id: tabId })
+        if (socket.connected) socket.emit('session:register', sessionRegisterPayload(sid, tabId))
       }, SESSION_RESTORE_RETRY_MS))
     }
     const onConnect = () => {
@@ -270,7 +271,7 @@ export default function AppLayout({ navigateToAdmin = () => window.location.assi
 
   const handleAddTab = useCallback(() => {
     const tabId = addTab()
-    socket.emit('session:register', { session_id: sessionId, tab_id: tabId })
+    socket.emit('session:register', sessionRegisterPayload(sessionId, tabId))
   }, [addTab, socket, sessionId])
 
   // Closing the active tab's pane must keep a layout tab active, otherwise the
@@ -346,7 +347,7 @@ export default function AppLayout({ navigateToAdmin = () => window.location.assi
     const sourceTab = useTerminalStore.getState().tabs.find(t => t.id === sourceTabId)
     if (!sourceTab || sourceTab.status !== 'connected' || !sourceTab.host || !sourceTab.username) return
     const newTabId = addTab()
-    socket.emit('session:register', { session_id: sessionId, tab_id: newTabId })
+    socket.emit('session:register', sessionRegisterPayload(sessionId, newTabId))
     const store = useTerminalStore.getState()
     store.setTabConnection(newTabId, sourceTab.host, sourceTab.port ?? 22, sourceTab.username)
     const baseName = sourceTab.label ?? `${sourceTab.username}@${sourceTab.host}`
@@ -361,7 +362,7 @@ export default function AppLayout({ navigateToAdmin = () => window.location.assi
     const sourceTab = useTerminalStore.getState().tabs.find(t => t.id === sourceTabId)
     if (!sourceTab || sourceTab.status !== 'connected') return
     const tabId = addSftpTab(sourceTabId)
-    socket.emit('session:register', { session_id: sessionId, tab_id: sourceTabId })
+    socket.emit('session:register', sessionRegisterPayload(sessionId, sourceTabId))
     setActiveTab(tabId)
   }, [addSftpTab, socket, sessionId, setActiveTab])
 
@@ -386,7 +387,7 @@ export default function AppLayout({ navigateToAdmin = () => window.location.assi
     const sourceTab = useTerminalStore.getState().tabs.find(t => t.id === sourceTabId)
     if (!sourceTab || !sourceTab.host || !sourceTab.username) return
     const newTabId = addTab()
-    socket.emit('session:register', { session_id: sessionId, tab_id: newTabId })
+    socket.emit('session:register', sessionRegisterPayload(sessionId, newTabId))
     const store = useTerminalStore.getState()
     store.setTabConnection(newTabId, sourceTab.host, sourceTab.port ?? 22, sourceTab.username)
     if (sourceTab.label) store.renameTab(newTabId, sourceTab.label)
@@ -394,7 +395,7 @@ export default function AppLayout({ navigateToAdmin = () => window.location.assi
 
   const handleLoadSession = useCallback((server: SavedServer) => {
     const tabId = addTab()
-    socket.emit('session:register', { session_id: sessionId, tab_id: tabId })
+    socket.emit('session:register', sessionRegisterPayload(sessionId, tabId))
     const store = useTerminalStore.getState()
     store.setTabConnection(tabId, server.host, server.port, server.username)
     store.renameTab(tabId, server.name)
@@ -549,7 +550,7 @@ export default function AppLayout({ navigateToAdmin = () => window.location.assi
               the incoming one mounts. */}
           <AnimatePresence initial={false} mode="wait">
           {tabs.length === 0 ? (
-            <m.div key="empty-state" {...fade} transition={exitTransition} className="flex h-full flex-col items-center justify-center gap-4 text-slate-400">
+            <m.div key="empty-state" {...fade} transition={exitTransition} className="flex h-full select-none flex-col items-center justify-center gap-4 text-slate-400">
               <Logo size="lg" showText={false} className="opacity-40" />
               <p className="max-w-sm px-6 text-center text-sm leading-relaxed text-pretty">Open a terminal tab or select a saved session from the sidebar</p>
               <Button variant="primary" size="sm" onClick={handleAddTab}>New tab</Button>

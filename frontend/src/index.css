@@ -2,6 +2,29 @@
 @tailwind components;
 @tailwind utilities;
 
+@layer base {
+  /* Controls and app chrome are not content: a drag that starts in a gap, or a
+     double-click on a control's caption, must not paint the surrounding buttons
+     and tab strip. Real content stays selectable — the terminal, file listings,
+     dialog text and table data — and `input`/`textarea` are re-enabled because
+     `user-select` is inherited and Safari drops caret selection inside a `none`
+     ancestor. */
+  button,
+  summary,
+  label,
+  th,
+  [role='tab'],
+  [role='option'],
+  [role='menuitem'] {
+    user-select: none;
+  }
+  input,
+  textarea,
+  [contenteditable='true'] {
+    user-select: text;
+  }
+}
+
 .torrus-connect-container {
   container-type: inline-size;
 }
@@ -134,6 +157,21 @@
   ::-webkit-scrollbar-thumb:hover {
     background: theme(colors.surface.600);
   }
+  /* Firefox, and Waterfox even more so, ignore the four rules above. Which engine
+     that is cannot be asked in CSS — Waterfox answers
+     `selector(::-webkit-scrollbar)` with true and still renders nothing from
+     them — so `utils/scrollbarFallback.ts` probes for it before the first paint
+     and marks the document instead. Chromium never matches the attribute and
+     keeps the rules above. */
+  html[data-scrollbars='standard'] {
+    scrollbar-width: thin;
+    scrollbar-color: theme(colors.surface.700) theme(colors.surface.900);
+  }
+  /* The terminal keeps its lighter thumb; only the colours live here, since
+     `scrollbar-width` is inherited from the rule above. */
+  html[data-scrollbars='standard'] .xterm-viewport {
+    scrollbar-color: theme(colors.surface.500) theme(colors.surface.900);
+  }
 }
 
 
@@ -146,8 +184,6 @@
 .xterm-viewport {
   background-color: theme(colors.surface.950);
   overflow-y: auto !important;
-  scrollbar-width: thin;
-  scrollbar-color: theme(colors.surface.500) theme(colors.surface.900);
 }
 
 .xterm-viewport::-webkit-scrollbar {

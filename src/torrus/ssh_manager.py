@@ -156,6 +156,16 @@ class SSHSession:
     control_available: asyncio.Event = field(default_factory=asyncio.Event)
     queue_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     output_buffer: bytearray = field(default_factory=bytearray)
+    # Bytes of shell output produced so far. ``output_buffer`` holds the last
+    # ``len(output_buffer)`` of them, so it covers offsets
+    # ``output_offset - len(output_buffer)`` .. ``output_offset``. Together with
+    # ``session_instance_id`` this names any position in the stream, which is what
+    # lets a reconnecting browser ask for exactly the bytes it missed.
+    output_offset: int = 0
+    # Appending a chunk and emitting it, and joining a room and reading the
+    # buffer, are each atomic under this lock: a browser that joins mid-read
+    # would otherwise get the same chunk live and again in its replay.
+    output_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     # Probed at connection time; SFTP identity is scoped to the SSH transport.
     is_root: bool = False
     # Recomputed during teardown: close the client only when no remaining
@@ -474,8 +484,19 @@ class SSHManager:
         session_id: str,
         tab_id: str,
         owner_ldap_username: str | None = None,
+        resume: tuple[str, int] | None = None,
     ) -> str:
-        """Re-attach only when the authenticated owner matches the session."""
+        """Re-attach only when the authenticated owner matches the session.
+
+        ``resume`` is the ``(stream, offset)`` the browser's terminal has already
+        drawn. When the server still holds every byte after it, only those bytes
+        are sent and the result is ``"resumed"``: replaying the whole buffer into
+        a terminal that has it would draw the last 10 KB twice. When it does not
+        (the browser missed more than the buffer keeps, or it belongs to another
+        SSH session), the buffer is sent flagged ``reset`` so the browser clears
+        its terminal first, the same state a page reload starts from. Without
+        ``resume`` the browser has nothing drawn and gets the buffer as is.
+        """
         key = (session_id, tab_id)
         async with self._lock:
             session = self._sessions.get(key)
@@ -494,18 +515,31 @@ class SSHManager:
             self._sid_map.setdefault(sid, set()).add(key)
 
         room = _room(session_id, tab_id)
-        await self.sio.enter_room(sid, room)
+        resumed = False
+        async with session.output_lock:
+            await self.sio.enter_room(sid, room)
+            buffered = bytes(session.output_buffer)
+            buffer_start = session.output_offset - len(buffered)
+            payload: dict[str, object] = {
+                "tab_id": tab_id,
+                "offset": session.output_offset,
+                "stream": session.session_instance_id,
+            }
+            if resume is None:
+                payload["data"] = _sanitize_replay_buffer(buffered)
+            elif (
+                resume[0] == session.session_instance_id
+                and buffer_start <= resume[1] <= session.output_offset
+            ):
+                resumed = True
+                payload["data"] = buffered[resume[1] - buffer_start :]
+            else:
+                payload["data"] = _sanitize_replay_buffer(buffered)
+                payload["reset"] = True
+            if payload["data"]:
+                await self.sio.emit("ssh:output", payload, to=sid)
 
-        if session.output_buffer:
-            replay = _sanitize_replay_buffer(bytes(session.output_buffer))
-            if replay:
-                await self.sio.emit(
-                    "ssh:output",
-                    {"tab_id": tab_id, "data": replay},
-                    to=sid,
-                )
-
-        return "active"
+        return "resumed" if resumed else "active"
 
     async def force_redraw(
         self,
@@ -1090,11 +1124,6 @@ class SSHManager:
 
             if data:
                 session.last_activity = time.time()
-                session.output_buffer.extend(data)
-                if len(session.output_buffer) > OUTPUT_BUFFER_MAX:
-                    del session.output_buffer[
-                        : len(session.output_buffer) - OUTPUT_BUFFER_MAX
-                    ]
                 if self._on_output is not None:
                     try:
                         await self._on_output(
@@ -1106,11 +1135,23 @@ class SSHManager:
                             session.session_id,
                             session.tab_id,
                         )
-                await self.sio.emit(
-                    "ssh:output",
-                    {"tab_id": session.tab_id, "data": data},
-                    room=room,
-                )
+                async with session.output_lock:
+                    session.output_buffer.extend(data)
+                    if len(session.output_buffer) > OUTPUT_BUFFER_MAX:
+                        del session.output_buffer[
+                            : len(session.output_buffer) - OUTPUT_BUFFER_MAX
+                        ]
+                    session.output_offset += len(data)
+                    await self.sio.emit(
+                        "ssh:output",
+                        {
+                            "tab_id": session.tab_id,
+                            "data": data,
+                            "offset": session.output_offset,
+                            "stream": session.session_instance_id,
+                        },
+                        room=room,
+                    )
         session.input_closed.set()
         session.input_space_available.set()
 

@@ -1212,7 +1212,7 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
                       entries: contextEntries,
                     })
                   }}
-                  className={cn('grid min-h-8 cursor-default grid-cols-[20px_24px_minmax(0,1fr)_96px_104px_112px_144px] items-center gap-2 px-2 py-1 font-mono text-xs transition-colors [contain-intrinsic-size:auto_2.25rem] [content-visibility:auto] max-xs:min-h-11 max-xs:grid-cols-[20px_24px_minmax(0,1fr)]', {
+                  className={cn('grid min-h-8 cursor-default grid-cols-[20px_24px_minmax(0,1fr)_96px_104px_112px_144px] items-center gap-2 px-2 py-1 font-mono text-xs transition-colors [contain-intrinsic-size:auto_1.5rem] [content-visibility:auto] max-xs:[contain-intrinsic-size:auto_2.25rem] max-xs:min-h-11 max-xs:grid-cols-[20px_24px_minmax(0,1fr)]', {
                     'bg-brand-600/25 hover:bg-brand-600/30': selected,
                     'hover:bg-surface-800': !selected,
                   })}

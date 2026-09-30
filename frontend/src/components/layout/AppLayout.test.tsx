@@ -64,6 +64,7 @@ async function renderAppLayout({
 
 describe('AppLayout LDAP auth handling', () => {
   afterEach(() => {
+    vi.useRealTimers()
     vi.clearAllMocks()
     vi.doUnmock('@/hooks/useSocket')
     vi.doUnmock('@/utils/authRedirect')
@@ -353,6 +354,67 @@ describe('AppLayout LDAP auth handling', () => {
     expect(socket.emit).toHaveBeenNthCalledWith(2, 'session:register', {
       session_id: 'test-session',
       tab_id: 'terminal-tab',
+    })
+  })
+
+  describe('after the socket reconnects', () => {
+    // renderAppLayout() calls vi.resetModules(), so AppLayout holds its own copy of
+    // terminalStream; a static import would record positions on a different copy.
+    const loadTerminalStream = () => import('@/lib/terminalStream')
+
+    const seedTerminal = () => {
+      useTerminalStore.setState({
+        sessionId: 'test-session',
+        tabs: [{
+          id: 'terminal-tab',
+          type: 'terminal',
+          host: 'localhost',
+          port: 22,
+          username: 'alice',
+          label: null,
+          status: 'connected',
+          sessionKey: 'test-session:terminal-tab',
+        }],
+        activeTabId: 'terminal-tab',
+      })
+    }
+
+    it('reports how far each terminal got so the server sends only what it missed', async () => {
+      seedTerminal()
+      const { socket } = await renderAppLayout()
+      const { recordStreamPosition } = await loadTerminalStream()
+      recordStreamPosition('terminal-tab', { stream: 'shell-1', offset: 4096 })
+      socket._trigger('session:restored', { tab_id: 'terminal-tab', status: 'active' })
+      socket.emit.mockClear()
+
+      act(() => {
+        socket._trigger('connect')
+      })
+
+      expect(socket.emit).toHaveBeenCalledWith('session:register', {
+        session_id: 'test-session',
+        tab_id: 'terminal-tab',
+        resume: { stream: 'shell-1', offset: 4096 },
+      })
+    })
+
+    it('asks again from wherever the terminal has got when a restore answer is lost', async () => {
+      seedTerminal()
+      const { socket } = await renderAppLayout()
+      const { recordStreamPosition } = await loadTerminalStream()
+      recordStreamPosition('terminal-tab', { stream: 'shell-1', offset: 100 })
+      socket._trigger('session:restored', { tab_id: 'terminal-tab', status: 'active' })
+      socket.emit.mockClear()
+      vi.useFakeTimers()
+
+      act(() => {
+        socket._trigger('connect')
+        // The first answer's output arrives; only the restore event is lost.
+        recordStreamPosition('terminal-tab', { stream: 'shell-1', offset: 160 })
+        vi.advanceTimersByTime(3_000)
+      })
+
+      expect(socket.emit.mock.calls.map(([, payload]) => payload.resume.offset)).toEqual([100, 160])
     })
   })
 })

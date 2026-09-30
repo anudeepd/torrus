@@ -14,6 +14,8 @@ import ConnectForm from './ConnectForm'
 import { useTerminalStore } from '@/store/terminalStore'
 import { useSettingsStore } from '@/store/settingsStore'
 import { useBroadcastStore } from '@/store/broadcastStore'
+import { enableUnicode11 } from '@/lib/terminalUnicode'
+import { forgetStreamPosition, recordStreamPosition, streamPosition } from '@/lib/terminalStream'
 
 interface TerminalPaneProps {
   tabId: string
@@ -103,6 +105,20 @@ interface CachedTerminal {
   container: HTMLDivElement
 }
 
+/**
+ * One chunk of shell output. The server numbers chunks by where they end in the
+ * session's stream (`stream` names the SSH session, `offset` the position after
+ * this chunk). `reset` marks a replay sent to a browser the server could not
+ * resume: its terminal is cleared first, as a page reload would start.
+ */
+interface SshOutputEvent {
+  tab_id: string
+  data: unknown
+  offset?: number
+  stream?: string
+  reset?: boolean
+}
+
 // Module-level cache: terminal buffer must survive remounts when exiting split mode.
 const terminalCache = new Map<string, CachedTerminal>()
 // Pending dispose timeouts — cleared on remount to prevent disposing reused terminals
@@ -154,6 +170,10 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
   const sensitiveOutputTailRef = useRef('')
   const suppressInputRef = useRef(false)
   const suppressInputTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Set while a screen rebuilt from a replay is catching up: clearing the buffer
+  // collapses the scroll area, and growing it back can leave xterm believing the
+  // user scrolled away, after which it stops following output for good.
+  const followBottomRef = useRef(false)
 
   const noteSensitivePrompt = useCallback((output: string) => {
     const visible = stripTerminalFormatting(output)
@@ -436,6 +456,8 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
           macOptionClickForcesSelection: true,
           rightClickSelectsWord: true,
           allowTransparency: false,
+          // Required by `term.unicode`, which enableUnicode11 uses below.
+          allowProposedApi: true,
           theme: {
             background:          '#020617',
             foreground:          '#e2e8f0',
@@ -473,10 +495,12 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
         term.loadAddon(fitAddon)
         term.loadAddon(searchAddon)
         term.loadAddon(webLinksAddon)
+        enableUnicode11(term)
 
         installCustomKeyHandler(term)
         term.attachCustomWheelEventHandler((e) => {
           e.stopPropagation()
+          followBottomRef.current = false   // the user took over scrolling
           return true
         })
 
@@ -485,6 +509,7 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
 
         termRef.current = term
         fitRef.current = fitAddon
+        forgetStreamPosition(tabId)
         terminalCache.set(tabId, { term, fitAddon, searchAddon, container: termContainer })
 
         const currentTab = useTerminalStore.getState().tabs.find(t => t.id === tabId)
@@ -560,6 +585,7 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
           if (cached) {
             cached.term.dispose()
             terminalCache.delete(tabId)
+            forgetStreamPosition(tabId)
           }
         }
         pendingDisposeTimeouts.delete(tabId)
@@ -658,7 +684,7 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
 
   // SSH output → terminal
   useEffect(() => {
-    const onOutput = ({ tab_id, data }: { tab_id: string; data: unknown }) => {
+    const onOutput = ({ tab_id, data, offset, stream, reset }: SshOutputEvent) => {
       if (tab_id !== tabId || !termRef.current) return
       if (useTerminalStore.getState().tabs.find(tab => tab.id === tabId)?.status === 'connecting') {
         setTabStatus(tabId, 'connected')
@@ -682,22 +708,50 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
         // become a scrollback-clear command. Write the complete sequence.
         return pendingPrefix ? combined : undefined
       }
+
+      let bytes: Uint8Array | null = null
+      let text: string | null = null
       if (ArrayBuffer.isView(data)) {
-        const bytes = new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
-        const output = new TextDecoder().decode(bytes)
-        noteSensitivePrompt(output)
-        termRef.current.write(stripCtrlLClear(output) ?? bytes)
+        bytes = new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
       } else if (data instanceof ArrayBuffer) {
-        const bytes = new Uint8Array(data)
-        const output = new TextDecoder().decode(bytes)
-        noteSensitivePrompt(output)
-        termRef.current.write(stripCtrlLClear(output) ?? bytes)
+        bytes = new Uint8Array(data)
       } else if (typeof data === 'string') {
-        noteSensitivePrompt(data)
-        termRef.current.write(stripCtrlLClear(data) ?? data)
+        text = data
       } else {
         console.warn('Received unexpected data type from ssh:output:', typeof data)
+        return
       }
+
+      const position = typeof offset === 'number' && typeof stream === 'string' ? { stream, offset } : null
+      if (reset) {
+        termRef.current.reset()
+        suppressNextScrollbackClearRef.current = false
+        pendingScrollbackClearPrefixRef.current = ''
+        followBottomRef.current = true
+      } else if (position && bytes) {
+        // A re-registration can be answered twice, and a chunk can be sent live
+        // and again in a replay; whatever this terminal already drew is skipped.
+        const drawn = streamPosition(tabId)
+        if (drawn?.stream === position.stream) {
+          if (position.offset <= drawn.offset) return
+          const overlap = drawn.offset - (position.offset - bytes.byteLength)
+          if (overlap > 0) bytes = bytes.subarray(overlap)
+        }
+      }
+
+      if (bytes) {
+        const output = new TextDecoder().decode(bytes)
+        noteSensitivePrompt(output)
+        termRef.current.write(stripCtrlLClear(output) ?? bytes)
+      } else if (text !== null) {
+        noteSensitivePrompt(text)
+        termRef.current.write(stripCtrlLClear(text) ?? text)
+      }
+      const term = termRef.current
+      if (followBottomRef.current && term.buffer.active.viewportY < term.buffer.active.baseY) {
+        term.scrollToBottom()
+      }
+      if (position) recordStreamPosition(tabId, position)
     }
     socket.on('ssh:output', onOutput)
     return () => { socket.off('ssh:output', onOutput) }

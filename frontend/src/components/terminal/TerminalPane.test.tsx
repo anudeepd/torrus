@@ -7,6 +7,7 @@ import { useBroadcastStore } from '@/store/broadcastStore'
 import { createMockSocket } from '@/test/mocks/socket'
 import { mockSearchAddonInstances, mockTerminalInstances, clearMockTerminalInstances } from '@/test/mocks/xterm'
 import { mockResizeObserverInstances } from '@/test/setup'
+import { streamPosition } from '@/lib/terminalStream'
 import TerminalPane from './TerminalPane'
 const originalUserAgent = navigator.userAgent
 
@@ -198,6 +199,122 @@ describe('TerminalPane', () => {
       'ssh:input',
       expect.not.objectContaining({ sensitive: true }),
     )
+  })
+
+  describe('numbered output', () => {
+    const encode = (text: string) => new TextEncoder().encode(text)
+    const drawn = (term: (typeof mockTerminalInstances)[number]) =>
+      term.write.mock.calls
+        .map(([chunk]) => (typeof chunk === 'string' ? chunk : new TextDecoder().decode(chunk)))
+        .join('')
+
+    async function renderConnected(tabId: string) {
+      act(() => {
+        seedStores(tabId, 'connected')
+      })
+      const socket = createMockSocket()
+      render(
+        <TerminalPane
+          tabId={tabId}
+          isActive={true}
+          focused={true}
+          socket={socket as unknown as Socket}
+        />,
+      )
+      await waitFor(() => {
+        expect(mockTerminalInstances.length).toBeGreaterThan(0)
+      })
+      return { socket, term: mockTerminalInstances[mockTerminalInstances.length - 1] }
+    }
+
+    it('clears the terminal before drawing a replay the server could not resume', async () => {
+      const tabId = 'tab-reset'
+      const { socket, term } = await renderConnected(tabId)
+
+      act(() => {
+        socket._trigger('ssh:output', { tab_id: tabId, data: encode('old'), offset: 3, stream: 's1' })
+        socket._trigger('ssh:output', {
+          tab_id: tabId, data: encode('replay'), offset: 9000, stream: 's1', reset: true,
+        })
+      })
+
+      const [oldDraw, replayDraw] = term.write.mock.invocationCallOrder
+      expect(term.reset).toHaveBeenCalledTimes(1)
+      expect(term.reset.mock.invocationCallOrder[0]).toBeGreaterThan(oldDraw)
+      expect(term.reset.mock.invocationCallOrder[0]).toBeLessThan(replayDraw)
+      expect(streamPosition(tabId)).toEqual({ stream: 's1', offset: 9000 })
+    })
+
+    it('draws each byte of the stream once however the chunks arrive', async () => {
+      const tabId = 'tab-dedupe'
+      const { socket, term } = await renderConnected(tabId)
+
+      act(() => {
+        socket._trigger('ssh:output', { tab_id: tabId, data: encode('hello'), offset: 5, stream: 's1' })
+        // The same chunk again, as when a re-registration is answered twice.
+        socket._trigger('ssh:output', { tab_id: tabId, data: encode('hello'), offset: 5, stream: 's1' })
+        // A replay that starts inside what is already on screen.
+        socket._trigger('ssh:output', { tab_id: tabId, data: encode('lo world'), offset: 11, stream: 's1' })
+      })
+
+      expect(drawn(term)).toBe('hello world')
+      expect(streamPosition(tabId)).toEqual({ stream: 's1', offset: 11 })
+      expect(term.reset).not.toHaveBeenCalled()
+    })
+
+    it('does not mistake a new SSH session in the same tab for output it already drew', async () => {
+      const tabId = 'tab-new-session'
+      const { socket, term } = await renderConnected(tabId)
+
+      act(() => {
+        socket._trigger('ssh:output', { tab_id: tabId, data: encode('first'), offset: 900, stream: 's1' })
+        socket._trigger('ssh:output', { tab_id: tabId, data: encode('second'), offset: 6, stream: 's2' })
+      })
+
+      expect(drawn(term)).toBe('firstsecond')
+      expect(streamPosition(tabId)).toEqual({ stream: 's2', offset: 6 })
+    })
+
+    it('keeps a screen rebuilt from a replay at the bottom until the user scrolls', async () => {
+      const tabId = 'tab-follow'
+      const { socket, term } = await renderConnected(tabId)
+
+      act(() => {
+        socket._trigger('ssh:output', {
+          tab_id: tabId, data: encode('rebuilt'), offset: 100, stream: 's1', reset: true,
+        })
+      })
+      term.scrollToBottom.mockClear()
+
+      // Rebuilding the screen collapsed and regrew the scroll area, leaving the
+      // viewport behind while output continues.
+      term.buffer.active.baseY = 500
+      term.buffer.active.viewportY = 0
+      act(() => {
+        socket._trigger('ssh:output', { tab_id: tabId, data: encode('more'), offset: 104, stream: 's1' })
+      })
+      expect(term.scrollToBottom).toHaveBeenCalledTimes(1)
+
+      // A wheel scroll means the user is reading history: leave the viewport alone.
+      act(() => {
+        term.simulateWheel()
+        socket._trigger('ssh:output', { tab_id: tabId, data: encode('more'), offset: 108, stream: 's1' })
+      })
+      expect(term.scrollToBottom).toHaveBeenCalledTimes(1)
+    })
+
+    it('does not move the viewport for a terminal that never rebuilt its screen', async () => {
+      const tabId = 'tab-nofollow'
+      const { socket, term } = await renderConnected(tabId)
+
+      term.buffer.active.baseY = 500
+      term.buffer.active.viewportY = 0
+      act(() => {
+        socket._trigger('ssh:output', { tab_id: tabId, data: encode('live'), offset: 40, stream: 's1' })
+      })
+
+      expect(term.scrollToBottom).not.toHaveBeenCalled()
+    })
   })
 
   it('keeps restore probe replies quiet before re-enabling user input', async () => {

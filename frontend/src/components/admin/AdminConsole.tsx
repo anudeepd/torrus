@@ -383,6 +383,15 @@ export default function AdminConsole({ onClose }: { onClose?: () => void }) {
 
 type Action = (path: string, body: Record<string, unknown>, message: string) => Promise<boolean>
 type RequestAction = (request: AdminConfirmationRequest) => void
+/**
+ * Scrollable/expandable frame around an admin table.
+ *
+ * Note for the rows inside: `content-visibility` and `contain-intrinsic-size` do
+ * nothing on a `<tr>` — containment does not apply to internal table boxes, so the
+ * browser keeps every row at its natural height and the intrinsic size is never
+ * used (measured in Chromium: 100 rows at `auto 2.25rem` laid out at their real
+ * 26px, no placeholder). Cheap rows there have to come from paging, not from this.
+ */
 function AdminTableViewport({ label, children }: { label: string; children: ReactNode }) {
   const [expanded, setExpanded] = useState(false)
   const action = expanded ? 'Collapse' : 'Expand'
@@ -429,7 +438,7 @@ function SessionsTable({ sessions, total, selected, onSelect, onAction, onReques
             {sessions.length === 0
               ? <tr><td colSpan={5} className="px-3 py-12 text-center text-pretty text-slate-400">No active sessions</td></tr>
               : sessions.map(session => (
-                <tr key={session.session_instance_id} className={`border-b border-surface-800/70 last:border-0 [content-visibility:auto] [contain-intrinsic-size:auto_2.25rem] ${selected?.session_instance_id === session.session_instance_id ? 'bg-brand-500/5' : ''}`}>
+                <tr key={session.session_instance_id} className={`border-b border-surface-800/70 last:border-0 ${selected?.session_instance_id === session.session_instance_id ? 'bg-brand-500/5' : ''}`}>
                   <td className="break-words px-3 py-3 [overflow-wrap:anywhere]">
                     <div className="flex flex-wrap items-center gap-2 font-medium text-slate-200">
                       <span aria-hidden="true" className="size-1.5 shrink-0 rounded-full bg-green-400" />
@@ -543,7 +552,7 @@ function UsersTable({ users, fingerprint, onAction, onRequestAction }: { users: 
             {users.length === 0
               ? <tr><td colSpan={4} className="px-3 py-12 text-center text-pretty text-slate-400">No configured users observed. Add an LDAP username above to grant access.</td></tr>
               : users.map(user => (
-                <tr key={user.username} className="border-b border-surface-800/70 last:border-0 [content-visibility:auto] [contain-intrinsic-size:auto_2.25rem]">
+                <tr key={user.username} className="border-b border-surface-800/70 last:border-0">
                   <td className="break-words px-3 py-3 font-medium [overflow-wrap:anywhere]">{user.username}</td>
                   <td className="break-words px-3 py-3 text-slate-400 [overflow-wrap:anywhere]">{user.active_sessions}</td>
                   <td className="break-words px-3 py-3 text-amber-400 [overflow-wrap:anywhere]">{user.policy_state}</td>
@@ -710,7 +719,7 @@ function groupActivityEvents(events: ActivityEvent[]): ActivityGroup[] {
 
 function renderActivityEventRow(event: ActivityEvent) {
   return (
-    <tr key={event.event_id} className="border-b border-surface-800/70 last:border-0 [content-visibility:auto] [contain-intrinsic-size:auto_2.25rem]">
+    <tr key={event.event_id} className="border-b border-surface-800/70 last:border-0">
       <td className="break-words px-3 py-3 text-slate-400 [overflow-wrap:anywhere]">{ACTIVITY_DATE_TIME.format(new Date(event.occurred_at))}</td>
       <td className="break-words px-3 py-3 [overflow-wrap:anywhere]">{event.ldap_username}</td>
       <td className="break-words px-3 py-3 [overflow-wrap:anywhere]">{event.ssh_host || '—'}:{event.ssh_port || '—'} <span className="break-words text-slate-400 [overflow-wrap:anywhere]">({event.ssh_username || '—'})</span></td>
@@ -728,7 +737,7 @@ function renderActivityGroupRow(group: ActivityGroup) {
   const ended = ordered[ordered.length - 1]
   const lead = group.lead
   return (
-    <tr key={`group-${lead.event_id}`} className="border-b border-surface-800/70 last:border-0 [content-visibility:auto] [contain-intrinsic-size:auto_2.25rem]">
+    <tr key={`group-${lead.event_id}`} className="border-b border-surface-800/70 last:border-0">
       <td className="break-words px-3 py-3 text-slate-400 [overflow-wrap:anywhere]">
         {ACTIVITY_DATE_TIME.format(new Date(started.occurred_at))}
         <span className="block text-3xs text-slate-400">through {ACTIVITY_TIME.format(new Date(ended.occurred_at))}</span>

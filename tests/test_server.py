@@ -252,6 +252,76 @@ class TestValidIdChecks:
             mock_restore.assert_not_called()
 
 
+class TestSessionRegisterResume:
+    """A reconnecting browser says how much output it has drawn; the server resumes it."""
+
+    @pytest.mark.parametrize(
+        ("resume", "expected"),
+        [
+            ({"stream": "s1", "offset": 0}, ("s1", 0)),
+            ({"stream": "s1", "offset": 4096}, ("s1", 4096)),
+            (None, None),
+            ("s1:4096", None),
+            ({"stream": "s1"}, None),
+            ({"offset": 5}, None),
+            ({"stream": 7, "offset": 5}, None),
+            ({"stream": "s1", "offset": -1}, None),
+            ({"stream": "s1", "offset": True}, None),
+            ({"stream": "s1", "offset": "5"}, None),
+            ({"stream": "s1", "offset": 1.5}, None),
+        ],
+    )
+    def test_resume_position_needs_a_stream_and_a_non_negative_integer_offset(
+        self, resume, expected
+    ):
+        from torrus.server import _resume_position
+
+        data = {} if resume is None else {"resume": resume}
+        assert _resume_position(data) == expected
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("status", "wire_status", "redraws"),
+        [
+            # Nothing was lost: SIGWINCH would only make readline echo the line twice.
+            ("resumed", "active", False),
+            # The screen was rebuilt from a partial replay: the program must repaint it.
+            ("active", "active", True),
+            ("dead", "dead", False),
+        ],
+    )
+    async def test_register_forwards_the_position_and_redraws_only_a_rebuilt_screen(
+        self, status, wire_status, redraws
+    ):
+        import torrus.server as server_module
+
+        sio_mock = MagicMock()
+        sio_mock.emit = AsyncMock()
+        manager = MagicMock()
+        manager.restore_session = AsyncMock(return_value=status)
+        manager.force_redraw = AsyncMock()
+
+        with patch("torrus.server.sio", sio_mock), patch.object(
+            server_module, "ssh_manager", manager
+        ):
+            await server_module.on_session_register(
+                "sid-1",
+                {
+                    "session_id": "sess1",
+                    "tab_id": "tab1",
+                    "resume": {"stream": "s1", "offset": 10},
+                },
+            )
+
+        manager.restore_session.assert_awaited_once_with(
+            "sid-1", "sess1", "tab1", resume=("s1", 10)
+        )
+        sio_mock.emit.assert_awaited_once_with(
+            "session:restored", {"tab_id": "tab1", "status": wire_status}, to="sid-1"
+        )
+        assert manager.force_redraw.await_count == (1 if redraws else 0)
+
+
 class TestLdapAuthGating:
     """When LDAP is enabled, only authenticated sids may perform SSH actions."""
 
@@ -384,9 +454,8 @@ class TestLdapAuthGating:
                 "auth-sid", {"session_id": "sess1", "tab_id": "tab1"}
             )
 
-        ssh_manager.restore_session.assert_awaited_once_with(
-            "auth-sid", "sess1", "tab1"
-        )
+        ssh_manager.restore_session.assert_awaited_once()
+        assert ssh_manager.restore_session.await_args.args == ("auth-sid", "sess1", "tab1")
         ssh_manager.force_redraw.assert_awaited_once_with("sess1", "tab1")
         assert server_module._authenticated_users["auth-sid"] == "alice"
 
