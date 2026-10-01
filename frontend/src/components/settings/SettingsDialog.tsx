@@ -1,3 +1,4 @@
+import { useRef } from 'react'
 import Dialog from '@/components/ui/Dialog'
 import { Settings, RotateCcw } from 'lucide-react'
 import { useSettingsStore } from '@/store/settingsStore'
@@ -15,9 +16,13 @@ export default function SettingsDialog({ onClose }: SettingsDialogProps) {
   const fontSize = useSettingsStore(s => s.fontSize)
   const update = useSettingsStore(s => s.update)
   const reset = useSettingsStore(s => s.reset)
+  // The dialog's first focusable element is "Reset to defaults" — the header
+  // action. Opening on that (Ctrl+;) put the focus ring on a control that
+  // wipes the settings on Enter, so the first setting takes the focus instead.
+  const scrollbackRef = useRef<HTMLSelectElement>(null)
 
   return (
-    <Dialog label="Terminal settings" onClose={onClose} className="w-80 gap-4">
+    <Dialog label="Terminal settings" onClose={onClose} className="w-80 gap-4" initialFocus={scrollbackRef}>
         <div className="-mx-5 -mt-5 flex items-center justify-between border-b border-surface-800 px-5 py-4">
           <div className="flex items-center gap-2">
             <Settings aria-hidden="true" className="size-4 text-brand-400" />
@@ -39,6 +44,7 @@ export default function SettingsDialog({ onClose }: SettingsDialogProps) {
             <label htmlFor="settings-scrollback" className="text-xs font-medium text-slate-400">Scrollback lines</label>
             <p id="settings-scrollback-help" className="text-pretty text-xs text-slate-400">Number of lines kept in terminal history</p>
             <select
+              ref={scrollbackRef}
               id="settings-scrollback"
               name="scrollback-lines"
               autoComplete="off"

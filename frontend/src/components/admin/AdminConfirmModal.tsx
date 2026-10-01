@@ -72,7 +72,7 @@ export default function AdminConfirmModal({ request, onClose }: AdminConfirmModa
               autoComplete="off"
               spellCheck={false}
               disabled={submitting}
-              className="mt-2 w-full rounded-md border border-surface-700 bg-surface-950 px-3 py-2 text-sm text-slate-200 outline-none transition-colors placeholder:text-slate-400 focus:border-brand-500 disabled:opacity-50"
+              className="mt-2 w-full rounded-md border border-surface-700 bg-surface-950 px-3 py-2 text-sm text-slate-200 outline-none transition-colors placeholder:text-slate-400 focus:border-brand-500 focus-visible:ring-2 focus-visible:ring-brand-500 disabled:opacity-50"
               placeholder={request.expected}
             />
           </div>

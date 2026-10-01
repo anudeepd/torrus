@@ -21,6 +21,12 @@ import { anchoredSurface, exitTransition, fade, surfaceSpring, surfaceTransition
  *  after the second press, so anything inside it belongs to one click sequence. */
 const DOUBLE_CLICK_MS = 500
 
+// Keys that only modify another interaction — Shift for horizontal scrolling,
+// Ctrl for zoom. Chromium reveals a focused element's :focus-visible ring as
+// soon as any key is pressed, so these must not count as "the user is on the
+// keyboard". Every other key does.
+const MODIFIER_KEY_NAMES: Record<string, true> = { Shift: true, Control: true, Alt: true, Meta: true }
+
 /**
  * Everything the bar can ask the shell to do. They stay owned by AppLayout
  * because most of them emit socket events or open dialogs; grouping them keeps
@@ -179,6 +185,15 @@ export default function TabBar({ actions, inSplitMode, compactSidebar = false, s
   const contextMenuRef = useRef<HTMLDivElement>(null)
   const tabRefs = useRef<Record<string, HTMLButtonElement | null>>({})
   const tabListRef = useRef<HTMLDivElement>(null)
+  // Tab whose focus came from a mouse press, and the tab id a pending press is
+  // for. Chromium focuses the pressed button and then treats the next key press
+  // as keyboard interaction, so a clicked tab lit its focus ring the moment the
+  // user held Shift — the standard gesture for scrolling horizontally. The ring
+  // is suppressed while focus is pointer-originated; keyboard focus still rings
+  // the tab, which otherwise fell back to Chromium's `outline: auto` (computed
+  // `rgb(16, 16, 16)`, all but invisible on this surface).
+  const [pointerFocusedTabId, setPointerFocusedTabId] = useState<string | null>(null)
+  const pointerPressRef = useRef<string | null>(null)
 
   useLayoutEffect(() => {
     const tab = activeTabId ? tabRefs.current[activeTabId]?.parentElement : null
@@ -289,7 +304,7 @@ export default function TabBar({ actions, inSplitMode, compactSidebar = false, s
           title={sidebarOpen ? 'Hide sessions' : 'Show sessions'}
           aria-label={sidebarOpen ? 'Hide sessions' : 'Show sessions'}
           aria-expanded={sidebarOpen}
-          className="col-start-1 row-start-1 h-[46px] w-10 flex-shrink-0 flex items-center justify-center text-slate-400 transition-colors hover:bg-surface-800 hover:text-slate-200"
+          className="col-start-1 row-start-1 h-[46px] w-10 flex-shrink-0 flex items-center justify-center text-slate-400 transition-colors hover:bg-surface-800 hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
         >
           <Menu className="size-4" />
         </button>
@@ -300,7 +315,7 @@ export default function TabBar({ actions, inSplitMode, compactSidebar = false, s
       </div>
 
       {compactSidebar && (
-        <button type="button" onClick={actions.openCommandPalette} title="Open command palette" aria-label="Open command palette" className="col-start-3 row-start-1 flex h-[46px] w-10 justify-self-end items-center justify-center text-slate-400 transition-colors hover:bg-surface-800 hover:text-slate-200">
+        <button type="button" onClick={actions.openCommandPalette} title="Open command palette" aria-label="Open command palette" className="col-start-3 row-start-1 flex h-[46px] w-10 justify-self-end items-center justify-center text-slate-400 transition-colors hover:bg-surface-800 hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500">
           <Command className="size-4" />
         </button>
       )}
@@ -311,7 +326,7 @@ export default function TabBar({ actions, inSplitMode, compactSidebar = false, s
         onClick={actions.addTab}
         title="New tab"
         aria-label="New tab"
-        className={cn('h-10 flex-shrink-0 w-10 flex items-center justify-center text-slate-400 hover:text-slate-300 hover:bg-surface-800 transition-colors border-r border-surface-800', compactSidebar && 'col-start-1 row-start-2 self-center')}
+        className={cn('h-10 flex-shrink-0 w-10 flex items-center justify-center text-slate-400 hover:text-slate-300 hover:bg-surface-800 transition-colors border-r border-surface-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500', compactSidebar && 'col-start-1 row-start-2 self-center')}
       >
         <Plus className="size-4" aria-hidden="true" />
       </button>
@@ -327,6 +342,9 @@ export default function TabBar({ actions, inSplitMode, compactSidebar = false, s
             // The rename field lives inside this tablist; its own arrow keys
             // move the caret, so the strip must not claim them while it's open.
             if (editingTabId && event.target === editInputRef.current) return
+            // Any real key press means the user is on the keyboard: restore the
+            // ring. Modifiers alone do not (see MODIFIER_KEY_NAMES).
+            if (!MODIFIER_KEY_NAMES[event.key]) setPointerFocusedTabId(null)
             // WCAG 2.5.7: reordering is also available without dragging.
             if (event.altKey && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
               const focusedId = (document.activeElement as HTMLElement | null)?.dataset.tabId ?? null
@@ -428,11 +446,25 @@ export default function TabBar({ actions, inSplitMode, compactSidebar = false, s
                   tabIndex={activeTabId === tab.id ? 0 : -1}
                   data-tab-id={tab.id}
                   title={getTabTitle(tab, tabDisplayName(tab, tabs))}
-                  className="flex h-full min-w-0 flex-1 items-center gap-1.5 pl-3 text-left"
+                  className={cn(
+                    'flex h-full min-w-0 flex-1 items-center gap-1.5 pl-3 text-left focus:outline-none',
+                    pointerFocusedTabId !== tab.id && 'focus-visible:ring-2 focus-visible:ring-brand-500',
+                  )}
                   onClick={() => { recordTabSwitch(tab.id); onSetActiveTab(tab.id) }}
                   onDoubleClick={(e) => {
                     e.stopPropagation()
                     startRenameFromDoubleClick(tab)
+                  }}
+                  onMouseDown={(event) => {
+                    if (event.button === 0) pointerPressRef.current = tab.id
+                  }}
+                  onFocus={() => {
+                    setPointerFocusedTabId(pointerPressRef.current === tab.id ? tab.id : null)
+                    pointerPressRef.current = null
+                  }}
+                  onBlur={() => {
+                    if (pointerPressRef.current === tab.id) pointerPressRef.current = null
+                    setPointerFocusedTabId(null)
                   }}
                 >
                   <StatusDot status={tab.status} />
@@ -466,7 +498,7 @@ export default function TabBar({ actions, inSplitMode, compactSidebar = false, s
           onClick={actions.exitSplit}
           title="Exit split"
           aria-label="Exit split"
-          className="h-10 flex-shrink-0 flex items-center justify-center gap-1.5 px-3 text-xs text-brand-400 bg-brand-500/10 hover:bg-brand-500/20 transition-colors border-l border-surface-800 max-wide:w-10 max-wide:px-0"
+          className="h-10 flex-shrink-0 flex items-center justify-center gap-1.5 px-3 text-xs text-brand-400 bg-brand-500/10 hover:bg-brand-500/20 transition-colors border-l border-surface-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 max-wide:w-10 max-wide:px-0"
         >
           <X className="size-3.5" aria-hidden="true" />
           <span className="max-wide:hidden">Exit split</span>
@@ -477,7 +509,7 @@ export default function TabBar({ actions, inSplitMode, compactSidebar = false, s
           onClick={actions.openSplitPicker}
           title="Split"
           aria-label="Split"
-          className="h-10 flex-shrink-0 flex items-center justify-center gap-1.5 px-3 text-xs text-slate-400 hover:text-slate-300 hover:bg-surface-800 transition-colors border-l border-surface-800 max-wide:w-10 max-wide:px-0"
+          className="h-10 flex-shrink-0 flex items-center justify-center gap-1.5 px-3 text-xs text-slate-400 hover:text-slate-300 hover:bg-surface-800 transition-colors border-l border-surface-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 max-wide:w-10 max-wide:px-0"
         >
           <Columns2 className="size-3.5" aria-hidden="true" />
           <span className="max-wide:hidden">Split</span>
@@ -489,7 +521,7 @@ export default function TabBar({ actions, inSplitMode, compactSidebar = false, s
           title={broadcastEnabled ? 'Broadcast active — click to manage' : 'Broadcast input to multiple terminals'}
           aria-label={broadcastEnabled ? 'Manage broadcast' : 'Broadcast input to multiple terminals'}
           className={cn(
-            'h-10 flex-shrink-0 flex items-center justify-center gap-1.5 px-3 text-xs border-l border-surface-800 transition-colors max-wide:w-10 max-wide:px-0',
+            'h-10 flex-shrink-0 flex items-center justify-center gap-1.5 px-3 text-xs border-l border-surface-800 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 max-wide:w-10 max-wide:px-0',
             broadcastEnabled
               ? 'text-amber-400 bg-amber-400/10 hover:bg-amber-400/20'
               : 'text-slate-400 hover:text-slate-300 hover:bg-surface-800'
@@ -504,7 +536,7 @@ export default function TabBar({ actions, inSplitMode, compactSidebar = false, s
           onClick={actions.closeAllTabs}
           title="Close all tabs"
           aria-label="Close all tabs"
-          className="h-10 flex-shrink-0 flex items-center justify-center gap-1 px-3 text-xs text-slate-400 hover:text-red-400 hover:bg-surface-800 transition-colors border-l border-surface-800 max-wide:w-10 max-wide:px-0"
+          className="h-10 flex-shrink-0 flex items-center justify-center gap-1 px-3 text-xs text-slate-400 hover:text-red-400 hover:bg-surface-800 transition-colors border-l border-surface-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 max-wide:w-10 max-wide:px-0"
         >
           <PanelLeftClose className="size-3.5" aria-hidden="true" />
           <span className="max-wide:hidden">Close All</span>
@@ -514,7 +546,7 @@ export default function TabBar({ actions, inSplitMode, compactSidebar = false, s
         onClick={actions.openSettings}
         title={`Settings (${modKey}+,)`}
         aria-label={`Settings (${modKey}+,)`}
-        className="h-10 flex-shrink-0 w-10 flex items-center justify-center text-slate-400 hover:text-slate-300 hover:bg-surface-800 transition-colors border-l border-surface-800"
+        className="h-10 flex-shrink-0 w-10 flex items-center justify-center text-slate-400 hover:text-slate-300 hover:bg-surface-800 transition-colors border-l border-surface-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
       >
         <Settings className="size-3.5" aria-hidden="true" />
       </button>}
@@ -523,7 +555,7 @@ export default function TabBar({ actions, inSplitMode, compactSidebar = false, s
           onClick={actions.openAdmin}
           title="Admin console"
           aria-label="Admin console"
-          className="h-10 flex-shrink-0 w-10 flex items-center justify-center text-slate-400 hover:text-brand-300 hover:bg-surface-800 transition-colors border-l border-surface-800"
+          className="h-10 flex-shrink-0 w-10 flex items-center justify-center text-slate-400 hover:text-brand-300 hover:bg-surface-800 transition-colors border-l border-surface-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
         >
           <Shield className="size-3.5" aria-hidden="true" />
         </button>
@@ -533,7 +565,7 @@ export default function TabBar({ actions, inSplitMode, compactSidebar = false, s
           onClick={submitLogout}
           title="Logout"
           aria-label="Logout"
-          className="h-10 flex-shrink-0 w-10 flex items-center justify-center text-red-500 hover:text-red-400 hover:bg-surface-800 transition-colors border-l border-surface-800"
+          className="h-10 flex-shrink-0 w-10 flex items-center justify-center text-red-500 hover:text-red-400 hover:bg-surface-800 transition-colors border-l border-surface-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
         >
           <LogOut className="size-3.5" aria-hidden="true" />
         </button>
@@ -637,7 +669,7 @@ export default function TabBar({ actions, inSplitMode, compactSidebar = false, s
             <div className="my-1 border-t border-surface-700" />
             <button
               type="button"
-              role="menuitem" className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-red-400 hover:bg-surface-700 transition-colors"
+              role="menuitem" className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-red-400 hover:bg-surface-700 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-500"
               onClick={() => { setContextMenu(null); actions.closeTab(tab.id) }}
             >
               <X className="size-3" />

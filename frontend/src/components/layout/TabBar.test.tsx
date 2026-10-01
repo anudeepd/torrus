@@ -88,6 +88,40 @@ describe('TabBar', () => {
     expect(tabIds()).toEqual(['tab-1', 'tab-2', 'tab-3'])
   })
 
+  it('rings a tab for keyboard focus but not for the mouse press that keeps focus', () => {
+    useTerminalStore.setState({
+      tabs: [{ id: 'tab-1', type: 'terminal', host: null, port: null, username: null, label: 'One', status: 'disconnected', sessionKey: 'session-1:tab-1' }],
+      activeTabId: 'tab-1',
+    })
+
+    render(
+      <TabBar
+        actions={noopActions}
+        inSplitMode={false}
+      />,
+    )
+
+    const tab = screen.getByRole('tab', { name: /one/i })
+
+    // A primary press leaves the tab focused, and Chromium reveals a focused
+    // element's :focus-visible on the next key press — so Shift, held to scroll
+    // horizontally, used to ring a tab the user only clicked.
+    fireEvent.mouseDown(tab, { button: 0 })
+    act(() => tab.focus())
+    expect(tab.className).not.toContain('focus-visible:ring-2')
+    fireEvent.keyDown(tab, { key: 'Shift' })
+    expect(tab.className).not.toContain('focus-visible:ring-2')
+
+    // Any real key press means the user is on the keyboard: the ring returns.
+    fireEvent.keyDown(tab, { key: 'ArrowRight' })
+    expect(tab.className).toContain('focus-visible:ring-2')
+
+    // A later keyboard focus rings the tab from the start.
+    act(() => tab.blur())
+    act(() => tab.focus())
+    expect(tab.className).toContain('focus-visible:ring-2')
+  })
+
   it('scrolls a clipped active tab, including its close button, fully into view', () => {
     const frame = vi.spyOn(window, 'requestAnimationFrame').mockImplementation(callback => {
       callback(0)

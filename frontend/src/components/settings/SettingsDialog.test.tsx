@@ -17,6 +17,14 @@ describe('SettingsDialog', () => {
     expect(useSettingsStore.getState().scrollbackLines).toBe(50_000)
   })
 
+  it('opens with the focus on the first setting, not the reset control', async () => {
+    render(<SettingsDialog onClose={() => {}} />)
+
+    const scrollback = screen.getByLabelText('Scrollback lines')
+    await vi.waitFor(() => expect(scrollback).toHaveFocus())
+    expect(screen.getByRole('button', { name: 'Reset to defaults' })).not.toHaveFocus()
+  })
+
   it('restores the defaults from the reset control', () => {
     useSettingsStore.setState({ scrollbackLines: 100_000, fontSize: 20 })
     render(<SettingsDialog onClose={() => {}} />)

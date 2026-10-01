@@ -250,6 +250,9 @@ export default function SessionSidebar({ isOpen, compact, onToggle, onLoadSessio
   const [editingServer, setEditingServer] = useState<SavedServer | null>(null)
   const [importError, setImportError] = useState('')
   const [importSuccess, setImportSuccess] = useState(false)
+  // True while the resize handle is dragged: the rail must follow the pointer
+  // instead of tweening towards it.
+  const [isResizing, setIsResizing] = useState(false)
   const contextMenuRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const resizeStartRef = useRef<{ x: number; width: number } | null>(null)
@@ -305,6 +308,7 @@ export default function SessionSidebar({ isOpen, compact, onToggle, onLoadSessio
 
   const handleResizeMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault()
+    setIsResizing(true)
     resizeStartRef.current = { x: e.clientX, width: sidebarWidth }
     const onMove = (event: MouseEvent) => {
       if (!resizeStartRef.current) return
@@ -312,6 +316,7 @@ export default function SessionSidebar({ isOpen, compact, onToggle, onLoadSessio
     }
     const onUp = () => {
       resizeStartRef.current = null
+      setIsResizing(false)
       document.removeEventListener('mousemove', onMove)
       document.removeEventListener('mouseup', onUp)
     }
@@ -444,22 +449,26 @@ export default function SessionSidebar({ isOpen, compact, onToggle, onLoadSessio
     )
   }
 
-  // ── Desktop — the rail swaps its width instantly (animating `width`
-  // re-laid-out the whole shell every frame) and the panel inside it slides and
-  // fades on the compositor instead. ─────────────────────────────────────────
+  // ── Desktop — the rail eases its width between the collapsed rail and the
+  // panel, and the panel inside slides and fades as it arrives. A rail that
+  // snapped read as a glitch; the tween is skipped while the resize handle is
+  // dragged so the edge tracks the pointer. The handle sits in the wrapper, not
+  // the rail: the rail clips its children (`overflow-hidden` keeps the panel
+  // from spilling while the width moves) and the handle straddles its border. ─
   return (
     <>
-      <div
-        className="flex-shrink-0 overflow-hidden flex flex-col bg-surface-900 border-r border-surface-800 select-none relative"
-        style={{ width: isOpen ? sidebarWidth : 32 }}
+      <m.div
+        initial={false}
+        animate={{ width: isOpen ? sidebarWidth : 32 }}
+        transition={isResizing ? { duration: 0 } : spatialTransition}
+        className="flex-shrink-0 flex flex-col bg-surface-900 border-r border-surface-800 select-none relative"
       >
         {isOpen ? (
           <m.div
             initial={{ x: -16, opacity: 0 }}
             animate={{ x: 0, opacity: 1 }}
             transition={surfaceTransition}
-            className="flex min-h-0 flex-1 flex-col"
-            style={{ width: sidebarWidth }}
+            className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
           >
             <SidebarInner onToggle={onToggle} servers={servers} selectedId={selectedId} setSelectedId={setSelectedId} selected={selected} isActive={isActive} handleOpen={handleOpen} handleDelete={handleDelete} handleExport={handleExport} handleImport={handleImport} setEditingServer={setEditingServer} setImportError={setImportError} importError={importError} importSuccess={importSuccess} fileInputRef={fileInputRef} setContextMenu={setContextMenu} onLoadSession={onLoadSession} />
           </m.div>
@@ -469,27 +478,27 @@ export default function SessionSidebar({ isOpen, compact, onToggle, onLoadSessio
             onClick={onToggle}
             title="Show sessions"
             aria-label="Show sessions"
-            className="w-8 h-9 flex-shrink-0 flex items-center justify-center text-slate-400 hover:text-slate-300 hover:bg-surface-800 transition-colors border-b border-surface-800"
+            className="w-8 h-9 flex-shrink-0 flex items-center justify-center text-slate-400 hover:text-slate-300 hover:bg-surface-800 transition-colors border-b border-surface-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
           >
             <PanelLeftOpen className="size-3.5" aria-hidden="true" />
           </button>
         )}
-      </div>
-      {!isOpen && <div
-        onMouseDown={handleResizeMouseDown}
-        onKeyDown={handleResizeKeyDown}
-        title="Resize sessions sidebar"
-        role="separator"
-        aria-label="Resize sessions sidebar"
-        aria-orientation="vertical"
-        aria-valuenow={sidebarWidth}
-        aria-valuemin={MIN_SIDEBAR_WIDTH}
-        aria-valuemax={MAX_SIDEBAR_WIDTH}
-        tabIndex={0}
-        className="group absolute inset-y-0 right-0 z-rail w-2 translate-x-1/2 cursor-col-resize focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
-      >
-        <div className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-transparent transition-colors group-hover:bg-brand-500" />
-      </div>}
+        {isOpen && <div
+          onMouseDown={handleResizeMouseDown}
+          onKeyDown={handleResizeKeyDown}
+          title="Resize sessions sidebar"
+          role="separator"
+          aria-label="Resize sessions sidebar"
+          aria-orientation="vertical"
+          aria-valuenow={sidebarWidth}
+          aria-valuemin={MIN_SIDEBAR_WIDTH}
+          aria-valuemax={MAX_SIDEBAR_WIDTH}
+          tabIndex={0}
+          className="group absolute inset-y-0 right-0 z-rail w-2 translate-x-1/2 cursor-col-resize focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+        >
+          <div className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-transparent transition-colors group-hover:bg-brand-500" />
+        </div>}
+      </m.div>
       <AnimatePresence>
       {contextMenu && (() => {
         const server = servers.find(s => s.id === contextMenu.serverId)

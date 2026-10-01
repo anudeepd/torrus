@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.2.57] - 2026-10-01
+
+### Fixed
+
+- **App chrome had no visible focus ring.** Buttons, links, inputs and selects across the admin
+  console, the confirm modal, the tab bar, the session sidebar and the settings dialog fell back to
+  Chromium's `outline: auto`, which is drawn in `rgb(16, 16, 16)` — all but invisible on these dark
+  surfaces. They now ring with the app's 2px brand ring on `:focus-visible`, with `outline: none` so
+  the two cannot stack. The admin tables' headers also carry `font-medium` instead of the browser's
+  bold.
+- **A tab that was clicked lit its focus ring the moment Shift was pressed.** Chromium focuses the
+  pressed button and then treats any key press as keyboard interaction, so holding Shift — the
+  standard gesture for scrolling horizontally — rang a tab the user had only clicked. The ring is
+  suppressed while focus is pointer-originated (Shift, Ctrl, Alt and Meta do not clear it; every
+  other key does), and keyboard focus still rings the tab.
+- **The settings dialog opened with the focus on "Reset to defaults".** `Ctrl+;` put the focus ring
+  on the header action, so a stray Enter wiped the settings; the first setting (scrollback lines)
+  now takes the focus instead.
+- **The sessions rail snapped instead of easing.** Collapsing or expanding it swapped the width in a
+  single frame, which read as a glitch next to the panel that slides and fades inside it. The rail
+  now tweens its width between the 32px strip and the panel, and skips the tween while the resize
+  handle is dragged so the edge tracks the pointer; the handle moved into the wrapper, because the
+  rail clips its children while the width moves.
+
 ## [0.2.56] - 2026-10-01
 
 ### Fixed
