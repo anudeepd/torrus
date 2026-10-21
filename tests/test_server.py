@@ -66,6 +66,9 @@ class TestServerConfig:
                 }
             ],
         )
+        monkeypatch.setattr(
+            server_module.audit_store, "list_sftp_events", lambda **_kwargs: []
+        )
 
         result = await server_module.admin_activity(request)
 
@@ -1234,10 +1237,11 @@ class TestSocketDisconnect:
 class TestAdminUserRevocation:
     @pytest.mark.asyncio
     async def test_disable_is_feature_disabled_without_user_revocation(
-        self, monkeypatch
+        self, monkeypatch, tmp_path
     ):
         import torrus.server as server_module
 
+        monkeypatch.setenv("TORRUS_AUDIT_DB", str(tmp_path / "audit.db"))
         monkeypatch.setattr(
             server_module,
             "_admin_actor",
@@ -1252,8 +1256,12 @@ class TestAdminUserRevocation:
         assert "bob" not in server_module._PENDING_DISABLED_USERS
 
     @pytest.mark.asyncio
-    async def test_disable_revokes_cookies_and_closes_owner_tabs(self, monkeypatch):
+    async def test_disable_revokes_cookies_and_closes_owner_tabs(
+        self, monkeypatch, tmp_path
+    ):
         import torrus.server as server_module
+
+        monkeypatch.setenv("TORRUS_AUDIT_DB", str(tmp_path / "audit.db"))
 
         class RevocationManager:
             def revoke_user_sessions(self, username):

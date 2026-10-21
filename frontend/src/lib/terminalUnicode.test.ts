@@ -1,6 +1,20 @@
-import { describe, expect, it } from 'vitest'
-import { Terminal } from '@xterm/xterm'
+import { beforeAll, describe, expect, it, vi } from 'vitest'
 import { enableUnicode11 } from './terminalUnicode'
+
+let Terminal: typeof import('@xterm/xterm').Terminal
+
+beforeAll(async () => {
+  // Importing xterm probes canvas support. jsdom logs a not-implemented warning
+  // for that probe; this test only exercises the terminal buffer, not rendering.
+  const getContext = vi.spyOn(HTMLCanvasElement.prototype, 'getContext')
+  getContext.mockReturnValue(null as never)
+  try {
+    const xterm = await import('@xterm/xterm')
+    Terminal = xterm.Terminal
+  } finally {
+    getContext.mockRestore()
+  }
+})
 
 /** Column the cursor reaches after `text` is written to an empty terminal. */
 async function cursorColumnAfter(text: string): Promise<number> {

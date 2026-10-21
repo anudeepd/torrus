@@ -89,6 +89,8 @@ interface ContextMenuState {
   tabId: string
   x: number
   y: number
+  openedByPointer: boolean
+  keyboardInteracted: boolean
 }
 
 interface SaveDialogState {
@@ -364,7 +366,13 @@ export default function TabBar({ actions, inSplitMode, compactSidebar = false, s
               if (!anchor) return
               event.preventDefault()
               const rect = anchor.getBoundingClientRect()
-              setContextMenu({ tabId: activeTabId, x: rect.left, y: rect.bottom })
+              setContextMenu({
+                tabId: activeTabId,
+                x: rect.left,
+                y: rect.bottom,
+                openedByPointer: false,
+                keyboardInteracted: false,
+              })
               return
             }
             if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
@@ -407,7 +415,13 @@ export default function TabBar({ actions, inSplitMode, compactSidebar = false, s
               }}
               onContextMenu={(e) => {
                 e.preventDefault()
-                setContextMenu({ tabId: tab.id, x: e.clientX, y: e.clientY })
+                setContextMenu({
+                  tabId: tab.id,
+                  x: e.clientX,
+                  y: e.clientY,
+                  openedByPointer: e.button === 2,
+                  keyboardInteracted: false,
+                })
               }}
               className={cn(
                 'relative group h-10 flex flex-shrink-0 select-none items-center min-w-32 max-w-48 border-r border-surface-800 whitespace-nowrap transition-colors text-xs font-mono max-xs:min-w-28 max-xs:max-w-36',
@@ -578,6 +592,11 @@ export default function TabBar({ actions, inSplitMode, compactSidebar = false, s
         const tab = tabs.find(t => t.id === contextMenu.tabId)
         if (!tab) return null
         const tabIndex = tabs.findIndex(candidate => candidate.id === tab.id)
+        const menuItemClass = cn(
+          'w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-300 hover:bg-surface-700 transition-colors focus:outline-none',
+          (!contextMenu.openedByPointer || contextMenu.keyboardInteracted) &&
+            'focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-500',
+        )
         return (
           <m.div
             {...anchoredSurface}
@@ -585,16 +604,21 @@ export default function TabBar({ actions, inSplitMode, compactSidebar = false, s
             ref={contextMenuRef}
             role="menu"
             aria-label="Tab actions"
-            onKeyDown={event => handleMenuKeyDown(event, contextMenuRef.current, () => {
-              setContextMenu(null)
-              tabRefs.current[contextMenu.tabId]?.focus()
-            })}
+            onKeyDown={event => {
+              if (contextMenu.openedByPointer && !contextMenu.keyboardInteracted && !MODIFIER_KEY_NAMES[event.key]) {
+                setContextMenu(current => current ? { ...current, keyboardInteracted: true } : current)
+              }
+              handleMenuKeyDown(event, contextMenuRef.current, () => {
+                setContextMenu(null)
+                tabRefs.current[contextMenu.tabId]?.focus()
+              })
+            }}
             className="fixed z-menu bg-surface-800 border border-surface-700 rounded-lg shadow-xl py-1 min-w-40"
             style={{ left: contextMenu.x, top: contextMenu.y }}
           >
             <button
               type="button"
-              role="menuitem" className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-300 hover:bg-surface-700 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-500"
+              role="menuitem" className={menuItemClass}
               onClick={() => startEditing(tab)}
             >
               <Pencil className="size-3" aria-hidden="true" />
@@ -603,7 +627,7 @@ export default function TabBar({ actions, inSplitMode, compactSidebar = false, s
             {tabIndex > 0 && (
               <button
                 type="button"
-                role="menuitem" className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-300 hover:bg-surface-700 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-500"
+                role="menuitem" className={menuItemClass}
                 onClick={() => { setContextMenu(null); moveTab(tab.id, tabs[tabIndex - 1].id) }}
               >
                 <ChevronLeft className="size-3" />
@@ -613,7 +637,7 @@ export default function TabBar({ actions, inSplitMode, compactSidebar = false, s
             {tabIndex >= 0 && tabIndex < tabs.length - 1 && (
               <button
                 type="button"
-                role="menuitem" className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-300 hover:bg-surface-700 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-500"
+                role="menuitem" className={menuItemClass}
                 onClick={() => { setContextMenu(null); moveTab(tab.id, tabs[tabIndex + 1].id) }}
               >
                 <ChevronRight className="size-3" />
@@ -624,7 +648,7 @@ export default function TabBar({ actions, inSplitMode, compactSidebar = false, s
               <>
               <button
                 type="button"
-                role="menuitem" className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-300 hover:bg-surface-700 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-500"
+                role="menuitem" className={menuItemClass}
                 onClick={() => { setContextMenu(null); actions.openSftpTab(tab.id) }}
               >
                 <Folder className="size-3" />
@@ -632,7 +656,7 @@ export default function TabBar({ actions, inSplitMode, compactSidebar = false, s
               </button>
               <button
                 type="button"
-                role="menuitem" className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-300 hover:bg-surface-700 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-500"
+                role="menuitem" className={menuItemClass}
                 onClick={() => { setContextMenu(null); actions.cloneTab(tab.id) }}
               >
                 <GitFork className="size-3" />
@@ -643,7 +667,7 @@ export default function TabBar({ actions, inSplitMode, compactSidebar = false, s
             {tab.host && tab.username && (
               <button
                 type="button"
-                role="menuitem" className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-300 hover:bg-surface-700 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-500"
+                role="menuitem" className={menuItemClass}
                 onClick={() => { setContextMenu(null); actions.duplicateTab(tab.id) }}
               >
                 <Copy className="size-3" aria-hidden="true" />
@@ -669,7 +693,7 @@ export default function TabBar({ actions, inSplitMode, compactSidebar = false, s
             <div className="my-1 border-t border-surface-700" />
             <button
               type="button"
-              role="menuitem" className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-red-400 hover:bg-surface-700 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-500"
+              role="menuitem" className={cn(menuItemClass, 'text-red-400')}
               onClick={() => { setContextMenu(null); actions.closeTab(tab.id) }}
             >
               <X className="size-3" />

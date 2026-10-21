@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.2.58] - 2026-10-21
+
+### Fixed
+
+- **Uploads could fail with HTTP 413 even for a 1 MB file.** When a reverse proxy rejects an
+  upload window, Torrus now halves the window and retries it, then replans the remaining file at
+  that smaller size down to 64 KiB. Upload requests remain same-origin, so this also works when
+  Torrus is hosted over plain HTTP.
+- **Live SSH sessions could be cleaned up while still attached, and detached sessions could lose
+  part of their four-hour recovery window.** Cleanup now retains sessions mapped to a live socket,
+  starts the recovery window when the last socket disconnects, refreshes it on reattach, and uses
+  monotonic time so wall-clock changes cannot expire sessions early. Detached sessions are still
+  reaped after four hours.
+- **A pointer-opened tab context menu showed a focus ring before keyboard use.** The ring now stays
+  hidden until the user interacts with the menu by keyboard; keyboard-opened menus keep their ring.
+
+### Changed
+
+- Clarify in the README how to remove a writable Bash `TMOUT`, what to do when it is readonly, and
+  why `bash && unset TMOUT` does not unset it in the child shell.
+- Replace tag-triggered publishing with a manually dispatched release workflow. Each run checks
+  the code, builds and smoke-tests distributions, and stores the wheel and source archive; GitHub
+  Release and PyPI publishing happen only when explicitly enabled. See `RELEASING.md`.
+
 ## [0.2.57] - 2026-10-01
 
 ### Fixed

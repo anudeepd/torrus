@@ -12,6 +12,8 @@ import { sessionRegisterPayload } from '@/lib/terminalStream'
 const LARGE_UPLOAD_THRESHOLD = 5 * 1024 * 1024
 /** Files uploaded at the same time; each file's chunks are pipelined inside the engine. */
 const MAX_CONCURRENT_UPLOADS = 2
+// Retry proxy body-size rejections down to a conservative request size.
+const MIN_UPLOAD_CHUNK_BYTES = 64 * 1024
 const LISTING_TIMEOUT_MS = 15_000
 
 interface ListingPayload {
@@ -538,6 +540,7 @@ export function useSFTP(tabId: string, sourceTabId: string | undefined, socket: 
         file,
         destDir: parentPath(remotePath),
         session: pending.session,
+        minChunkBytes: MIN_UPLOAD_CHUNK_BYTES,
         callbacks: {
           onSession: session => {
             pending.session = session

@@ -138,6 +138,9 @@ class SSHSession:
     generation: int = 1
     created_at: float = field(default_factory=time.time)
     last_activity: float = field(default_factory=time.time)
+    # Wall-clock time is exposed to the admin UI; use monotonic time for
+    # elapsed retention so an NTP/clock correction cannot expire sessions early.
+    last_activity_monotonic: float = field(default_factory=time.monotonic)
     cols: int = 220
     rows: int = 50
     read_task: asyncio.Task | None = None
@@ -171,6 +174,10 @@ class SSHSession:
     # Recomputed during teardown: close the client only when no remaining
     # session still shares its transport.
     owns_client: bool = True
+
+    def mark_activity(self) -> None:
+        self.last_activity = time.time()
+        self.last_activity_monotonic = time.monotonic()
 
 
 class SSHManager:
@@ -512,6 +519,10 @@ class SSHManager:
                 and session.owner_ldap_username != effective_owner
             ):
                 return "forbidden"
+            # Reattaching a session is activity for retention purposes. Without
+            # this, a reconnect just before the cleanup sweep could be closed
+            # immediately using the timestamp from before the disconnect.
+            session.mark_activity()
             self._sid_map.setdefault(sid, set()).add(key)
 
         room = _room(session_id, tab_id)
@@ -650,7 +661,7 @@ class SSHManager:
                     )
                 if closed_wait in done or session.input_closed.is_set():
                     return "unknown"
-        session.last_activity = time.time()
+        session.mark_activity()
         return "queued"
 
     async def interrupt(
@@ -1088,8 +1099,16 @@ class SSHManager:
 
     async def unmap_sid(self, sid: str) -> None:
         """Called on socket disconnect — does NOT destroy the SSH session."""
-        self._sid_owners.pop(sid, None)
-        keys = self._sid_map.pop(sid, set())
+        async with self._lock:
+            self._sid_owners.pop(sid, None)
+            keys = self._sid_map.pop(sid, set())
+            mapped_keys = {key for mapped in self._sid_map.values() for key in mapped}
+            for key in keys - mapped_keys:
+                session = self._sessions.get(key)
+                if session is not None:
+                    # Start the recovery grace period when the last socket
+                    # detaches, even if the terminal had been idle beforehand.
+                    session.mark_activity()
         for session_id, tab_id in keys:
             try:
                 await self.sio.leave_room(sid, _room(session_id, tab_id))
@@ -1123,7 +1142,7 @@ class SSHManager:
                 break
 
             if data:
-                session.last_activity = time.time()
+                session.mark_activity()
                 if self._on_output is not None:
                     try:
                         await self._on_output(
@@ -1224,7 +1243,7 @@ class SSHManager:
                 await loop.run_in_executor(
                     self._ssh_executor, _blocking_send_all, session.channel, payload
                 )
-                session.last_activity = time.time()
+                session.mark_activity()
                 if request is not None and not request.completion.done():
                     request.completion.set_result("sent")
             except asyncio.CancelledError:
@@ -1352,13 +1371,19 @@ class SSHManager:
     async def _cleanup_loop(self) -> None:
         while True:
             await asyncio.sleep(CLEANUP_INTERVAL)
-            now = time.time()
+            now = time.monotonic()
             async with self._lock:
+                mapped_keys = {
+                    key for mapped in self._sid_map.values() for key in mapped
+                }
                 to_remove = [
                     key
                     for key, session in self._sessions.items()
                     if session.channel.closed
-                    or (now - session.last_activity) > IDLE_TIMEOUT
+                    or (
+                        key not in mapped_keys
+                        and (now - session.last_activity_monotonic) > IDLE_TIMEOUT
+                    )
                 ]
                 sessions = [self._pop_session_locked(key) for key in to_remove]
             for session in sessions:

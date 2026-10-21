@@ -131,6 +131,157 @@ class TestSessionLifecycle:
     """Session registration, restore, and teardown."""
 
     @pytest.mark.asyncio
+    async def test_restore_refreshes_idle_retention_deadline(self, mock_sio):
+        from torrus.ssh_manager import SSHManager, SSHSession
+
+        manager = SSHManager(mock_sio)
+        session = SSHSession(
+            session_id="sess1",
+            tab_id="tab1",
+            client=MagicMock(),
+            channel=MagicMock(closed=False),
+            host="example.com",
+            port=22,
+            username="user",
+            last_activity=1,
+        )
+        manager._sessions[("sess1", "tab1")] = session
+
+        with (
+            patch("torrus.ssh_manager.time.time", return_value=1234),
+            patch("torrus.ssh_manager.time.monotonic", return_value=5678),
+        ):
+            assert await manager.restore_session("sid-1", "sess1", "tab1") == "active"
+
+        assert session.last_activity == 1234
+        assert session.last_activity_monotonic == 5678
+        assert ("sess1", "tab1") in manager._sid_map["sid-1"]
+
+    @pytest.mark.asyncio
+    async def test_cleanup_keeps_idle_session_attached_to_live_socket(self, mock_sio):
+        from torrus.ssh_manager import IDLE_TIMEOUT, SSHManager, SSHSession
+
+        manager = SSHManager(mock_sio)
+        key = ("sess1", "tab1")
+        manager._sessions[key] = SSHSession(
+            session_id=key[0],
+            tab_id=key[1],
+            client=MagicMock(),
+            channel=MagicMock(closed=False),
+            host="example.com",
+            port=22,
+            username="user",
+            last_activity=1,
+            last_activity_monotonic=1,
+        )
+        manager._sid_map["sid-1"] = {key}
+        sleep = AsyncMock(side_effect=[None, asyncio.CancelledError()])
+
+        with (
+            patch("torrus.ssh_manager.time.time", return_value=IDLE_TIMEOUT + 2),
+            patch("torrus.ssh_manager.time.monotonic", return_value=IDLE_TIMEOUT + 2),
+            patch("torrus.ssh_manager.asyncio.sleep", sleep),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await manager._cleanup_loop()
+
+        assert key in manager._sessions
+
+    @pytest.mark.asyncio
+    async def test_cleanup_ignores_forward_wall_clock_jump(self, mock_sio):
+        from torrus.ssh_manager import IDLE_TIMEOUT, SSHManager, SSHSession
+
+        manager = SSHManager(mock_sio)
+        key = ("sess1", "tab1")
+        manager._sessions[key] = SSHSession(
+            session_id=key[0],
+            tab_id=key[1],
+            client=MagicMock(),
+            channel=MagicMock(closed=False),
+            host="example.com",
+            port=22,
+            username="user",
+            last_activity=1,
+            last_activity_monotonic=1,
+        )
+        sleep = AsyncMock(side_effect=[None, asyncio.CancelledError()])
+
+        with (
+            patch("torrus.ssh_manager.time.time", return_value=IDLE_TIMEOUT * 10),
+            patch("torrus.ssh_manager.time.monotonic", return_value=2),
+            patch("torrus.ssh_manager.asyncio.sleep", sleep),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await manager._cleanup_loop()
+
+        assert key in manager._sessions
+
+    @pytest.mark.asyncio
+    async def test_cleanup_reaps_detached_session_after_four_monotonic_hours(
+        self, mock_sio
+    ):
+        from torrus.ssh_manager import IDLE_TIMEOUT, SSHManager, SSHSession
+
+        on_tab_disconnect = AsyncMock()
+        manager = SSHManager(mock_sio, on_tab_disconnect=on_tab_disconnect)
+        key = ("sess1", "tab1")
+        manager._sessions[key] = SSHSession(
+            session_id=key[0],
+            tab_id=key[1],
+            client=MagicMock(),
+            channel=MagicMock(closed=False),
+            host="example.com",
+            port=22,
+            username="user",
+            last_activity=1,
+            last_activity_monotonic=1,
+        )
+        sleep = AsyncMock(side_effect=[None, asyncio.CancelledError()])
+
+        with (
+            patch("torrus.ssh_manager.time.time", return_value=2),
+            patch(
+                "torrus.ssh_manager.time.monotonic",
+                return_value=IDLE_TIMEOUT + 2,
+            ),
+            patch("torrus.ssh_manager.asyncio.sleep", sleep),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await manager._cleanup_loop()
+
+        assert key not in manager._sessions
+        on_tab_disconnect.assert_awaited_once_with("sess1", "tab1")
+
+    @pytest.mark.asyncio
+    async def test_unmap_starts_detached_retention_window(self, mock_sio):
+        from torrus.ssh_manager import SSHManager, SSHSession
+
+        manager = SSHManager(mock_sio)
+        key = ("sess1", "tab1")
+        session = SSHSession(
+            session_id=key[0],
+            tab_id=key[1],
+            client=MagicMock(),
+            channel=MagicMock(closed=False),
+            host="example.com",
+            port=22,
+            username="user",
+            last_activity=1,
+        )
+        manager._sessions[key] = session
+        manager._sid_map["sid-1"] = {key}
+
+        with (
+            patch("torrus.ssh_manager.time.time", return_value=2345),
+            patch("torrus.ssh_manager.time.monotonic", return_value=6789),
+        ):
+            await manager.unmap_sid("sid-1")
+
+        assert session.last_activity == 2345
+        assert session.last_activity_monotonic == 6789
+        assert key in manager._sessions
+
+    @pytest.mark.asyncio
     async def test_unmap_sid_leaves_rooms(self, mock_sio, mock_paramiko_client):
         from torrus.ssh_manager import SSHManager
 
@@ -154,6 +305,9 @@ class TestSessionLifecycle:
 
             await manager.unmap_sid("sid-1")
             assert "sid-1" not in manager._sid_map
+            assert key in manager._sessions
+            assert await manager.restore_session("sid-2", "sess1", "tab1") == "active"
+            assert key in manager._sid_map["sid-2"]
             mock_sio.leave_room.assert_awaited()
         finally:
             await _cleanup_manager(manager)

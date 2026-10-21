@@ -639,16 +639,24 @@ describe('SFTPBrowser', () => {
 
     Object.defineProperty(URL, 'createObjectURL', { value: vi.fn(() => 'blob:zip'), writable: true })
     Object.defineProperty(URL, 'revokeObjectURL', { value: vi.fn(), writable: true })
-    await act(async () => {
-      pending[0]!({
-        ok: true,
-        status: 200,
-        headers: new Headers({ 'Content-Disposition': "attachment; filename*=UTF-8''logs.zip" }),
-        blob: async () => new Blob(['zip']),
-      } as unknown as Response)
-    })
+    // jsdom cannot navigate to the blob URL as a browser would. Keep the
+    // download request observable without invoking its unimplemented navigation.
+    const anchorClick = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    try {
+      await act(async () => {
+        pending[0]!({
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'Content-Disposition': "attachment; filename*=UTF-8''logs.zip" }),
+          blob: async () => new Blob(['zip']),
+        } as unknown as Response)
+      })
 
-    expect(screen.queryByText('Zipping 2 files…')).not.toBeInTheDocument()
+      expect(anchorClick).toHaveBeenCalledOnce()
+      expect(screen.queryByText('Zipping 2 files…')).not.toBeInTheDocument()
+    } finally {
+      anchorClick.mockRestore()
+    }
   })
 
   it('selects files with row and select-all checkboxes', () => {

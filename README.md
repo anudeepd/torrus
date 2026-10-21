@@ -32,6 +32,15 @@ torrus serve
 ```
 
 Opens the terminal in your browser. Connect to any SSH server from there.
+Torrus passes terminal input to the remote shell as entered. Bash's `TMOUT`
+causes an interactive shell to exit after the configured idle time at its prompt.
+If it is writable, run `unset TMOUT` in that shell. If Bash says it is readonly,
+the setting is enforced by the shell startup configuration or host policy and
+cannot be removed from that shell. Where host policy permits, a child shell may
+be used by entering `bash` and then running `unset TMOUT` at the new prompt; this
+only affects that child, and exiting it returns to the original shell with its
+timeout. `bash && unset TMOUT` is different: it waits for the child to exit, then
+runs `unset` in the original shell.
 
 Options:
 
@@ -98,6 +107,12 @@ torrus serve --ldap-config /path/to/ldapgate.yaml
 ```
 
 When LDAP is enabled, a logout button and (for configured admins) an admin console button appear in the top-right corner of the tab bar.
+LDAPGate logout and browser/socket disconnects do not immediately terminate
+remote SSH sessions. Sessions attached to a live browser socket remain available
+while idle; detached sessions are reaped after four hours to allow time to reconnect.
+Explicitly close a terminal tab to end its remote session. For plain HTTP
+deployments with LDAPGate, configure `proxy.secure_cookies: false`; secure-cookie
+mode requires HTTPS.
 
 Set `TORRUS_ADMIN_USERS` to a comma-separated list of LDAP usernames allowed to use the console:
 
@@ -119,11 +134,10 @@ proxy:
 ```
 
 Torrus caps the window at that limit on startup and logs a warning naming the
-setting to raise, so an upload does not fail — it just shifts less data per
-request. Raise both together, or lower both to 16 MiB if you would rather retry
-smaller windows on a flaky link. Any reverse proxy in front of ldapgate needs a
-limit at least as large (`client_max_body_size 32m` on nginx, whose default is
-1 MB).
+setting to raise. If another reverse proxy rejects a chunk with HTTP 413, the
+browser halves the request and retries, down to 64 KiB. Larger body limits still
+improve throughput by reducing the number of requests. Raise both together, or
+lower both to 16 MiB if you would rather retry smaller windows on a flaky link.
 
 ### Terminal input audit
 
@@ -172,6 +186,8 @@ cd torrus
 uv sync
 make dev
 ```
+
+See [RELEASING.md](RELEASING.md) for the CI and release workflow.
 
 ## License
 

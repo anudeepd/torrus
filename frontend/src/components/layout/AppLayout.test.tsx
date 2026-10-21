@@ -137,7 +137,7 @@ describe('AppLayout LDAP auth handling', () => {
       activeTabId: 'tab-1',
     })
 
-    await renderAppLayout()
+    const { socket } = await renderAppLayout()
 
     act(() => {
       window.dispatchEvent(new Event(AUTH_REDIRECT_EVENT))
@@ -147,6 +147,7 @@ describe('AppLayout LDAP auth handling', () => {
 
     expect(allowed).toBe(true)
     expect(event.defaultPrevented).toBe(false)
+    expect(socket.emit).not.toHaveBeenCalledWith('ssh:disconnect', expect.anything())
   })
 
   it('does not show the active-session unload warning when opening admin', async () => {

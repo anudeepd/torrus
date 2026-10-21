@@ -1,41 +1,220 @@
 name: release
 
 on:
-  push:
-    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Create a GitHub Release and publish to PyPI after checks pass
+        type: boolean
+        required: true
+        default: false
+
+permissions:
+  contents: read
 
 jobs:
-  publish:
-    name: build and publish to PyPI
+  backend:
+    name: backend (python ${{ matrix.python }})
     runs-on: ubuntu-latest
-    environment: pypi
-    permissions:
-      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.11", "3.12"]
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
-      - name: Tag must equal the package version
-        run: |
-          python - <<'PY'
-          import os, tomllib
-          from pathlib import Path
+        with:
+          python-version: ${{ matrix.python }}
+      - run: uv sync --extra test --extra ldap
+      - name: Lint
+        run: uv run ruff check src/ tests/
+      - name: Tests
+        run: uv run pytest -q
 
-          version = tomllib.loads(Path("pyproject.toml").read_text())["project"]["version"]
-          tag = os.environ["GITHUB_REF_NAME"].lstrip("v")
-          if tag != version:
-              raise SystemExit(f"tag {tag!r} does not match pyproject version {version!r}")
-          PY
-      - name: Build the frontend so the wheel is not stale
-        run: |
-          npm ci
-          npm run build
+  frontend:
+    name: frontend and bundle freshness
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
         working-directory: frontend
-      - name: The rebuilt bundle is the committed one
+      - name: Unit tests
+        run: npm run test
+        working-directory: frontend
+      - name: Type-check and build
+        run: npm run build
+        working-directory: frontend
+      - name: The committed bundle matches frontend/src
         run: |
           if ! git diff --quiet -- src/torrus/static; then
             echo "::error::src/torrus/static is stale — run 'make build' and commit the result"
             git --no-pager diff --stat -- src/torrus/static
             exit 1
           fi
-      - run: uv build
+
+  build-dist:
+    name: build and smoke-test distributions
+    needs: [backend, frontend]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - name: Build wheel and source distribution
+        run: uv build
+      - name: Install the wheel in a clean environment
+        run: |
+          uv venv --python 3.12 /tmp/torrus-smoke
+          uv pip install --python /tmp/torrus-smoke/bin/python dist/*.whl
+          /tmp/torrus-smoke/bin/python - <<'PY'
+          from importlib.resources import files
+          from pathlib import Path
+
+          import torrus.server  # noqa: F401
+
+          static = Path(str(files("torrus").joinpath("static")))
+          assert (static / "index.html").is_file()
+          assert (static / "manifest.webmanifest").is_file()
+          assert (static / "assets").is_dir()
+          print("Installed wheel smoke test passed:", static)
+          PY
+          /tmp/torrus-smoke/bin/torrus --help
+      - name: Check distribution files
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          files = list(Path("dist").glob("*"))
+          assert any(path.suffix == ".whl" for path in files), "wheel missing"
+          assert any(path.name.endswith(".tar.gz") for path in files), "sdist missing"
+          print("Built:", *(path.name for path in files), sep="\n  ")
+          PY
+      - uses: actions/upload-artifact@v7
+        with:
+          name: torrus-dist
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 30
+
+  validate-release:
+    name: validate release version and tag
+    if: ${{ inputs.publish }}
+    needs: build-dist
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - name: Require the main branch and synchronized versions
+        id: version
+        run: |
+          if [[ "$GITHUB_REF_TYPE" != "branch" || "$GITHUB_REF_NAME" != "main" ]]; then
+            echo "::error::Publishing must be dispatched from the main branch."
+            exit 1
+          fi
+          python - <<'PY'
+          import json
+          import os
+          import re
+          import tomllib
+          from pathlib import Path
+
+          version = tomllib.loads(Path("pyproject.toml").read_text())["project"]["version"]
+          if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.+!_-]*", version):
+              raise SystemExit(f"unsafe package version for a release tag: {version!r}")
+
+          init_match = re.search(
+              r'^__version__ = [\"\']([^\"\']+)[\"\']$',
+              Path("src/torrus/__init__.py").read_text(),
+              re.MULTILINE,
+          )
+          lock = tomllib.loads(Path("uv.lock").read_text())
+          lock_version = next(
+              (item["version"] for item in lock["package"] if item["name"] == "torrus"),
+              None,
+          )
+          frontend = json.loads(Path("frontend/package.json").read_text())["version"]
+          package_lock = json.loads(Path("frontend/package-lock.json").read_text())
+          npm_lock = package_lock["packages"][""]["version"]
+          versions = {
+              "src/torrus/__init__.py": init_match.group(1) if init_match else None,
+              "uv.lock": lock_version,
+              "frontend/package.json": frontend,
+              "frontend/package-lock.json": npm_lock,
+          }
+          mismatches = {name: value for name, value in versions.items() if value != version}
+          if mismatches:
+              raise SystemExit(f"package version {version!r} is not synchronized: {mismatches}")
+
+          tag = f"v{version}"
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
+              output.write(f"version={version}\n")
+              output.write(f"tag={tag}\n")
+          print(f"All package versions match {version}; release tag will be {tag}.")
+          PY
+      - name: Ensure the tag has not already been used
+        env:
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          matching_refs="$(gh api "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/$RELEASE_TAG" --jq '.[].ref')"
+          while IFS= read -r ref; do
+            if [[ "$ref" == "refs/tags/$RELEASE_TAG" ]]; then
+              echo "::error::Tag $RELEASE_TAG already exists. Bump the package version before publishing."
+              exit 1
+            fi
+          done <<< "$matching_refs"
+
+  github-release:
+    name: create GitHub Release
+    if: ${{ inputs.publish }}
+    needs: [build-dist, validate-release]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: torrus-dist
+          path: dist
+      - name: Create release and attach distributions
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.validate-release.outputs.tag }}
+        run: >-
+          gh release create "$RELEASE_TAG" dist/*
+          --repo "$GITHUB_REPOSITORY"
+          --target "$GITHUB_SHA"
+          --title "Torrus $RELEASE_TAG"
+          --generate-notes
+
+  pypi-publish:
+    name: publish to PyPI with trusted publishing
+    if: ${{ inputs.publish }}
+    needs: [build-dist, validate-release]
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/torrus
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: torrus-dist
+          path: dist
       - uses: pypa/gh-action-pypi-publish@release/v1

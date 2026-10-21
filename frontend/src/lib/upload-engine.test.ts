@@ -225,6 +225,9 @@ describe("UploadClient", () => {
     const put = client.put("abc", 7, blobOf(1));
     const xhr = FakeXHR.all[0]!;
     expect(xhr.url).toBe("/_upload/abc?session_id=session-b&tab_id=tab-a&offset=7");
+    const resolvedUrl = new URL(xhr.url, window.location.href);
+    expect(resolvedUrl.protocol).toBe("http:");
+    expect(resolvedUrl.origin).toBe(window.location.origin);
     xhr.finish(200, { ranges: [[7, 8]] });
     await put;
   });
@@ -242,6 +245,32 @@ describe("uploadFile", () => {
 
     FakeXHR.all[1]!.finish(200, { ranges: [[0, 8]], received: 4 });
     await expect(promise).resolves.toMatchObject({ ok: true, bytes: 8 });
+  });
+
+  it("shrinks a rejected 1 MB upload below the proxy body limit", async () => {
+    const size = 1_000_000;
+    const { promise } = await startUpload({
+      file: blobOf(size),
+      chunkSize: size,
+      maxChunkBytes: size,
+      concurrency: 1,
+      session: { uploadId: "session", chunkSize: size, concurrency: 1, ranges: [], size },
+    });
+    await vi.waitFor(() => expect(FakeXHR.all).toHaveLength(1));
+    expect(FakeXHR.all[0]!.body!.size).toBe(size);
+
+    // Model a reverse proxy rejecting the raw PUT before it reaches Torrus or SSH.
+    FakeXHR.all[0]!.finish(413, "Request Entity Too Large");
+    await vi.waitFor(() => expect(FakeXHR.all).toHaveLength(2));
+    expect(FakeXHR.all[1]!.body!.size).toBe(500_000);
+
+    FakeXHR.all[1]!.finish(200, { ranges: [[0, 500_000]], received: 500_000 });
+    await vi.waitFor(() => expect(FakeXHR.all).toHaveLength(3));
+    expect(FakeXHR.all[2]!.url).toContain("offset=500000");
+    expect(FakeXHR.all[2]!.body!.size).toBe(500_000);
+    FakeXHR.all[2]!.finish(200, { ranges: [[0, size]], received: 500_000 });
+
+    await expect(promise).resolves.toMatchObject({ ok: true, bytes: size });
   });
 
   it("skips windows the server already holds", async () => {
