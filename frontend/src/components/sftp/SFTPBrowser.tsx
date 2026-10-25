@@ -1523,7 +1523,7 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
                       autoComplete="off"
                       value={chmodDialog.uid}
                       onChange={event => setChmodDialog(dialog => dialog ? { ...dialog, uid: event.target.value, ownershipDirty: true } : null)}
-                      className="h-8 rounded-md border border-surface-700 bg-surface-900 px-2 text-xs text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus:border-brand-500 max-xs:h-11"
+                      className="h-8 rounded-md border border-surface-700 bg-surface-900 px-2 text-xs text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 max-xs:h-11"
                       aria-label="Owner"
                     >
                       {!users.some(user => String(user.uid) === chmodDialog.uid) && chmodDialog.uid !== '' && (
@@ -1553,7 +1553,7 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
                       autoComplete="off"
                       value={chmodDialog.gid}
                       onChange={event => setChmodDialog(dialog => dialog ? { ...dialog, gid: event.target.value, ownershipDirty: true } : null)}
-                      className="h-8 rounded-md border border-surface-700 bg-surface-900 px-2 text-xs text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus:border-brand-500 max-xs:h-11"
+                      className="h-8 rounded-md border border-surface-700 bg-surface-900 px-2 text-xs text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 max-xs:h-11"
                       aria-label="Group"
                     >
                       {!groups.some(group => String(group.gid) === chmodDialog.gid) && chmodDialog.gid !== '' && (

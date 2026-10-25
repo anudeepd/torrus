@@ -113,7 +113,7 @@ function SlotPicker({ slotIndex, tabIds, tabs, onChange }: {
       <select
         id={`slot-${slotIndex}`}
         name={`slot-${slotIndex + 1}`}
-        className="flex-1 bg-surface-900 border border-surface-700 rounded-md px-2 py-1 text-xs text-slate-200 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus:border-brand-500"
+        className="flex-1 bg-surface-900 border border-surface-700 rounded-md px-2 py-1 text-xs text-slate-200 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
         value={tabIds[slotIndex] ?? ''}
         onChange={e => onChange(slotIndex, e.target.value)}
       >

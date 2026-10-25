@@ -21,11 +21,6 @@ import { anchoredSurface, exitTransition, fade, surfaceSpring, surfaceTransition
  *  after the second press, so anything inside it belongs to one click sequence. */
 const DOUBLE_CLICK_MS = 500
 
-// Keys that only modify another interaction — Shift for horizontal scrolling,
-// Ctrl for zoom. Chromium reveals a focused element's :focus-visible ring as
-// soon as any key is pressed, so these must not count as "the user is on the
-// keyboard". Every other key does.
-const MODIFIER_KEY_NAMES: Record<string, true> = { Shift: true, Control: true, Alt: true, Meta: true }
 
 /**
  * Everything the bar can ask the shell to do. They stay owned by AppLayout
@@ -89,8 +84,6 @@ interface ContextMenuState {
   tabId: string
   x: number
   y: number
-  openedByPointer: boolean
-  keyboardInteracted: boolean
 }
 
 interface SaveDialogState {
@@ -187,15 +180,6 @@ export default function TabBar({ actions, inSplitMode, compactSidebar = false, s
   const contextMenuRef = useRef<HTMLDivElement>(null)
   const tabRefs = useRef<Record<string, HTMLButtonElement | null>>({})
   const tabListRef = useRef<HTMLDivElement>(null)
-  // Tab whose focus came from a mouse press, and the tab id a pending press is
-  // for. Chromium focuses the pressed button and then treats the next key press
-  // as keyboard interaction, so a clicked tab lit its focus ring the moment the
-  // user held Shift — the standard gesture for scrolling horizontally. The ring
-  // is suppressed while focus is pointer-originated; keyboard focus still rings
-  // the tab, which otherwise fell back to Chromium's `outline: auto` (computed
-  // `rgb(16, 16, 16)`, all but invisible on this surface).
-  const [pointerFocusedTabId, setPointerFocusedTabId] = useState<string | null>(null)
-  const pointerPressRef = useRef<string | null>(null)
 
   useLayoutEffect(() => {
     const tab = activeTabId ? tabRefs.current[activeTabId]?.parentElement : null
@@ -344,9 +328,6 @@ export default function TabBar({ actions, inSplitMode, compactSidebar = false, s
             // The rename field lives inside this tablist; its own arrow keys
             // move the caret, so the strip must not claim them while it's open.
             if (editingTabId && event.target === editInputRef.current) return
-            // Any real key press means the user is on the keyboard: restore the
-            // ring. Modifiers alone do not (see MODIFIER_KEY_NAMES).
-            if (!MODIFIER_KEY_NAMES[event.key]) setPointerFocusedTabId(null)
             // WCAG 2.5.7: reordering is also available without dragging.
             if (event.altKey && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
               const focusedId = (document.activeElement as HTMLElement | null)?.dataset.tabId ?? null
@@ -370,8 +351,6 @@ export default function TabBar({ actions, inSplitMode, compactSidebar = false, s
                 tabId: activeTabId,
                 x: rect.left,
                 y: rect.bottom,
-                openedByPointer: false,
-                keyboardInteracted: false,
               })
               return
             }
@@ -419,8 +398,6 @@ export default function TabBar({ actions, inSplitMode, compactSidebar = false, s
                   tabId: tab.id,
                   x: e.clientX,
                   y: e.clientY,
-                  openedByPointer: e.button === 2,
-                  keyboardInteracted: false,
                 })
               }}
               className={cn(
@@ -460,25 +437,11 @@ export default function TabBar({ actions, inSplitMode, compactSidebar = false, s
                   tabIndex={activeTabId === tab.id ? 0 : -1}
                   data-tab-id={tab.id}
                   title={getTabTitle(tab, tabDisplayName(tab, tabs))}
-                  className={cn(
-                    'flex h-full min-w-0 flex-1 items-center gap-1.5 pl-3 text-left focus:outline-none',
-                    pointerFocusedTabId !== tab.id && 'focus-visible:ring-2 focus-visible:ring-brand-500',
-                  )}
+                  className="flex h-full min-w-0 flex-1 items-center gap-1.5 pl-3 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
                   onClick={() => { recordTabSwitch(tab.id); onSetActiveTab(tab.id) }}
                   onDoubleClick={(e) => {
                     e.stopPropagation()
                     startRenameFromDoubleClick(tab)
-                  }}
-                  onMouseDown={(event) => {
-                    if (event.button === 0) pointerPressRef.current = tab.id
-                  }}
-                  onFocus={() => {
-                    setPointerFocusedTabId(pointerPressRef.current === tab.id ? tab.id : null)
-                    pointerPressRef.current = null
-                  }}
-                  onBlur={() => {
-                    if (pointerPressRef.current === tab.id) pointerPressRef.current = null
-                    setPointerFocusedTabId(null)
                   }}
                 >
                   <StatusDot status={tab.status} />
@@ -592,11 +555,7 @@ export default function TabBar({ actions, inSplitMode, compactSidebar = false, s
         const tab = tabs.find(t => t.id === contextMenu.tabId)
         if (!tab) return null
         const tabIndex = tabs.findIndex(candidate => candidate.id === tab.id)
-        const menuItemClass = cn(
-          'w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-300 hover:bg-surface-700 transition-colors focus:outline-none',
-          (!contextMenu.openedByPointer || contextMenu.keyboardInteracted) &&
-            'focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-500',
-        )
+        const menuItemClass = 'w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-300 hover:bg-surface-700 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-500'
         return (
           <m.div
             {...anchoredSurface}
@@ -605,9 +564,6 @@ export default function TabBar({ actions, inSplitMode, compactSidebar = false, s
             role="menu"
             aria-label="Tab actions"
             onKeyDown={event => {
-              if (contextMenu.openedByPointer && !contextMenu.keyboardInteracted && !MODIFIER_KEY_NAMES[event.key]) {
-                setContextMenu(current => current ? { ...current, keyboardInteracted: true } : current)
-              }
               handleMenuKeyDown(event, contextMenuRef.current, () => {
                 setContextMenu(null)
                 tabRefs.current[contextMenu.tabId]?.focus()

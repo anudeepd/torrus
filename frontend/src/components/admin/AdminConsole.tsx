@@ -647,7 +647,7 @@ function ActivityFiltersForm({ filters, onApply }: { filters: ActivityFilters; o
       </div>
       <div>
         <label htmlFor="activity-kind" className="block text-xs font-medium text-slate-300">Type</label>
-        <select id="activity-kind" name="kind" value={kind} onChange={event => setKind(event.target.value)} className="transition-colors mt-1 w-full sm:w-44 rounded-md border border-surface-700 bg-surface-950 px-2.5 py-1.5 text-xs text-slate-200 outline-none focus:border-brand-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500">
+        <select id="activity-kind" name="kind" value={kind} onChange={event => setKind(event.target.value)} className="transition-colors mt-1 w-full sm:w-44 rounded-md border border-surface-700 bg-surface-950 px-2.5 py-1.5 text-xs text-slate-200 outline-none focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500">
           <option value="">All activity</option>
           <option value="command">Commands</option>
           <option value="sensitive">Sensitive (redacted)</option>

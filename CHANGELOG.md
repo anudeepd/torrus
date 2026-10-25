@@ -1,5 +1,25 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- **Modifier keys revealed residual focus rings outside the tab bar.** Shared input-modality
+  tracking now covers the shell, sidebar controls, context menus, settings, SFTP controls and
+  admin focus styling, replacing the tab/menu-only bookkeeping. Pointer-focused controls stay
+  quiet on Shift, Ctrl, Alt and Meta; Tab, Shift+Tab, arrows and Alt+Arrow tab reordering retain
+  visible keyboard focus. Native selects no longer keep pointer-only focus borders. Text-entry
+  feedback, terminal caret focus and split-pane state indicators remain intact.
+
+- **Release artifact validation was too permissive.** Releases now serialize through a
+  non-cancelling workflow group and reject wheel/sdist files whose names or versions
+  do not match the current Torrus package.
+
+### Changed
+
+- The release workflow now offers `patch`, `minor`, and `major`; it synchronizes release
+  versions and commits the version bump to `main` before publishing.
+
 ## [0.2.58] - 2026-10-21
 
 ### Fixed

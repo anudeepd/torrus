@@ -51,7 +51,7 @@ export default function SettingsDialog({ onClose }: SettingsDialogProps) {
               aria-describedby="settings-scrollback-help"
               value={scrollbackLines}
               onChange={e => update({ scrollbackLines: parseInt(e.target.value, 10) })}
-              className="mt-1 w-full bg-surface-900 border border-surface-700 rounded-md px-3 py-2 text-sm text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus:border-brand-500 transition-colors"
+              className="mt-1 w-full bg-surface-900 border border-surface-700 rounded-md px-3 py-2 text-sm text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 transition-colors"
             >
               {SCROLLBACK_OPTIONS.map(n => (
                 <option key={n} value={n}>{n.toLocaleString()}</option>
@@ -70,7 +70,7 @@ export default function SettingsDialog({ onClose }: SettingsDialogProps) {
               aria-describedby="settings-font-size-help"
               value={fontSize}
               onChange={e => update({ fontSize: parseInt(e.target.value, 10) })}
-              className="mt-1 w-full bg-surface-900 border border-surface-700 rounded-md px-3 py-2 text-sm text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus:border-brand-500 transition-colors"
+              className="mt-1 w-full bg-surface-900 border border-surface-700 rounded-md px-3 py-2 text-sm text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 transition-colors"
             >
               {FONT_SIZE_OPTIONS.map(n => (
                 <option key={n} value={n}>{n}px</option>

@@ -18,21 +18,24 @@ It runs all checks and makes the tested distributions available as the
 
 ## Publish a release
 
-1. Update the Torrus version in `pyproject.toml`, `src/torrus/__init__.py`,
-   `uv.lock`, `frontend/package.json`, and the root package entry in
-   `frontend/package-lock.json`.
-2. Commit the version and any release changes to `main`. The workflow checks that
-   all five version values match and that the corresponding `v<version>` tag is
-   unused.
-3. Run the **release** workflow from `main` with publishing enabled:
+1. Ensure the package versions are synchronized in `pyproject.toml`,
+   `src/torrus/__init__.py`, `uv.lock`, `frontend/package.json`, and the root
+   package entry in `frontend/package-lock.json`.
+2. Run the **release** workflow from `main` with publishing enabled and choose
+   the `patch`, `minor`, or `major` bump:
 
    ```sh
-   gh workflow run release.yml --repo anudeepd/torrus --ref main -f publish=true
+   gh workflow run release.yml --repo anudeepd/torrus --ref main \
+     -f publish=true -f bump=patch
    ```
 
-The workflow creates a GitHub Release tagged `v<version>` and attaches the wheel
-and source distribution. It also publishes those exact files to PyPI. Both
-publishing jobs wait for the checks and distribution smoke test to pass.
+The workflow calculates the next version, validates the unused `v<version>` tag,
+updates all five version files, builds and smoke-tests the matching wheel and
+source distribution, then commits the version change to `main`. It creates a
+GitHub Release targeting that commit and publishes the tested distributions to
+PyPI through OIDC. The Actions token must be allowed to push the version commit
+to `main`; branch protection or repository rulesets can otherwise block the
+release before publishing.
 
 ## PyPI Trusted Publishing setup
 

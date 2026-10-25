@@ -23,6 +23,19 @@
   [contenteditable='true'] {
     user-select: text;
   }
+
+  /* Keep modifier-only gestures from revealing focus left behind by a pointer.
+     Text entry and the terminal's own caret/pane indicators stay untouched. */
+  html[data-focus-modality='pointer'] :focus-visible:not(:is(
+    input:not([type='checkbox']):not([type='radio']):not([type='button']):not([type='submit']):not([type='reset']),
+    textarea,
+    [contenteditable]:not([contenteditable='false']),
+    [role='textbox']
+  )) {
+    outline: none !important;
+    --tw-ring-shadow: 0 0 #0000 !important;
+    --tw-ring-offset-shadow: 0 0 #0000 !important;
+  }
 }
 
 .torrus-connect-container {
@@ -72,11 +85,14 @@
 }
 
 @layer utilities {
-  /* The admin console's controls predate the shell's ring treatment; one scoped
-     rule gives them the same visible focus without touching every call site. */
+  /* Alt+Arrow is keyboard navigation even when native :focus-visible disagrees.
+     The admin console shares this ring rather than drawing a separate shadow. */
+  html[data-focus-modality='keyboard'] [role='tab']:focus,
   .admin-shell :is(button, a, input, select, [tabindex]):focus-visible {
     outline: none;
-    box-shadow: 0 0 0 2px theme(colors.brand.500);
+    --tw-ring-color: theme(colors.brand.500);
+    --tw-ring-shadow: 0 0 0 2px var(--tw-ring-color);
+    box-shadow: var(--tw-ring-offset-shadow, 0 0 #0000), var(--tw-ring-shadow), var(--tw-shadow, 0 0 #0000);
   }
   /* Press feedback and state colours move on the compositor-friendly set the
      controls actually change; a bare `transition-colors` utility on the same
