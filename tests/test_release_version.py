@@ -5,7 +5,8 @@ from pathlib import Path
 import pytest
 
 spec = spec_from_file_location("release_version", Path(__file__).parents[1] / "scripts/release_version.py")
-assert spec is not None and spec.loader is not None
+assert spec is not None
+assert spec.loader is not None
 release_version = module_from_spec(spec)
 spec.loader.exec_module(release_version)
 current_version = release_version.current_version
@@ -65,7 +66,7 @@ def test_set_version_rejects_non_semver_without_mutating_files(tmp_path: Path) -
     root = release_root(tmp_path)
     before = (root / "pyproject.toml").read_text()
 
-    with pytest.raises(SystemExit, match="stable MAJOR.MINOR.PATCH"):
+    with pytest.raises(SystemExit, match=r"stable MAJOR\.MINOR\.PATCH"):
         set_version(root, "0.3.0-rc1")
 
     assert (root / "pyproject.toml").read_text() == before
