@@ -123,3 +123,15 @@ def test_ldapgate_parses_the_shipped_config_and_we_extend_it():
     assert config.proxy.session_cookie_name == "torrus_session"
     for path in ("/favicon.svg", "/apple-touch-icon.png", "/manifest.webmanifest"):
         assert path in config.proxy.static_paths
+
+
+def test_shipped_ldap_config_keeps_idle_timeout_reachable():
+    """The sample must not set an idle timeout the cookie lifetime overrides."""
+    pytest.importorskip("ldapgate")
+
+    from ldapgate.config import load_config
+
+    config = load_config(str(Path(__file__).resolve().parents[1] / "ldapgate.yaml"))
+
+    assert config.proxy.idle_timeout > 0
+    assert config.proxy.session_ttl >= config.proxy.idle_timeout
