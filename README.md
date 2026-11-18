@@ -106,6 +106,8 @@ pip install 'torrus[ldap]'
 torrus serve --ldap-config /path/to/ldapgate.yaml
 ```
 
+`proxy.session_ttl` is the absolute lifetime of the LDAP cookie and token. `proxy.idle_timeout` is the inactivity limit and must not exceed it. The sample uses 12 hours and 4 hours. Restart and sign in again after changing either value so the browser receives the new cookie lifetime.
+
 When LDAP is enabled, a logout button and (for configured admins) an admin console button appear in the top-right corner of the tab bar.
 LDAPGate logout and browser/socket disconnects do not immediately terminate
 remote SSH sessions. Sessions attached to a live browser socket remain available
