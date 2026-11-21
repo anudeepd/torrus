@@ -5,7 +5,7 @@ import { useTerminalStore } from '@/store/terminalStore'
 import { useSettingsStore } from '@/store/settingsStore'
 import { useBroadcastStore } from '@/store/broadcastStore'
 import { createMockSocket } from '@/test/mocks/socket'
-import { mockSearchAddonInstances, mockTerminalInstances, clearMockTerminalInstances } from '@/test/mocks/xterm'
+import { mockSearchAddonInstances, mockTerminalInstances, clearMockTerminalInstances, setMockFitDimensions } from '@/test/mocks/xterm'
 import { mockResizeObserverInstances } from '@/test/setup'
 import { streamPosition } from '@/lib/terminalStream'
 import TerminalPane from './TerminalPane'
@@ -399,6 +399,73 @@ describe('TerminalPane', () => {
       'ssh:input',
       expect.anything()
     )
+  })
+
+  it('lays out the terminal before the connect form opens a PTY', async () => {
+    const tabId = 'tab-connect-size'
+    act(() => {
+      seedStores(tabId, 'disconnected')
+    })
+    setMockFitDimensions({ cols: 123, rows: 45 })
+
+    const offsetParent = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetParent')
+    const clientWidth = Object.getOwnPropertyDescriptor(Element.prototype, 'clientWidth')
+    const clientHeight = Object.getOwnPropertyDescriptor(Element.prototype, 'clientHeight')
+    Object.defineProperty(HTMLElement.prototype, 'offsetParent', {
+      configurable: true,
+      get() {
+        if (getComputedStyle(this).display === 'none') return null
+        let parent = this.parentElement
+        while (parent) {
+          if (getComputedStyle(parent).display === 'none') return null
+          parent = parent.parentElement
+        }
+        return document.body
+      },
+    })
+    Object.defineProperty(Element.prototype, 'clientWidth', { configurable: true, get: () => 800 })
+    Object.defineProperty(Element.prototype, 'clientHeight', { configurable: true, get: () => 600 })
+
+    try {
+      const socket = createMockSocket()
+      render(
+        <TerminalPane
+          tabId={tabId}
+          isActive={true}
+          focused={true}
+          socket={socket as unknown as import('socket.io-client').Socket}
+        />
+      )
+
+      await waitFor(() => {
+        expect(mockTerminalInstances.length).toBeGreaterThan(0)
+      })
+      const term = mockTerminalInstances[mockTerminalInstances.length - 1]
+      // The pane is wider than xterm's 80x24 default; the fit must run while
+      // the connection form is shown so the PTY is opened at the pane's size.
+      expect(term.cols).toBe(123)
+      expect(term.rows).toBe(45)
+      expect(term.textarea?.parentElement?.parentElement?.style.display).not.toBe('none')
+
+      socket.emit.mockClear()
+      fireEvent.change(screen.getByTestId('host-input'), { target: { value: 'example.com' } })
+      fireEvent.change(screen.getByTestId('port-input'), { target: { value: '22' } })
+      fireEvent.change(screen.getByTestId('username-input'), { target: { value: 'alice' } })
+      fireEvent.change(screen.getByTestId('password-input'), { target: { value: 'secret' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Connect' }))
+
+      expect(socket.emit).toHaveBeenCalledWith(
+        'ssh:connect',
+        expect.objectContaining({ host: 'example.com', cols: 123, rows: 45 }),
+      )
+    } finally {
+      if (offsetParent) Object.defineProperty(HTMLElement.prototype, 'offsetParent', offsetParent)
+      else delete (HTMLElement.prototype as { offsetParent?: unknown }).offsetParent
+      if (clientWidth) Object.defineProperty(Element.prototype, 'clientWidth', clientWidth)
+      else delete (Element.prototype as { clientWidth?: unknown }).clientWidth
+      if (clientHeight) Object.defineProperty(Element.prototype, 'clientHeight', clientHeight)
+      else delete (Element.prototype as { clientHeight?: unknown }).clientHeight
+    }
   })
 
   it('reuses the same terminal instance on remount (split-exit buffer preservation)', async () => {

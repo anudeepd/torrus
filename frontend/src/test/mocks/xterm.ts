@@ -2,6 +2,11 @@ import { vi } from 'vitest'
 
 export const mockTerminalInstances: MockTerminal[] = []
 export const mockSearchAddonInstances: MockSearchAddon[] = []
+export let mockFitDimensions: { cols: number; rows: number } | null = null
+
+export function setMockFitDimensions(dimensions: { cols: number; rows: number } | null) {
+  mockFitDimensions = dimensions
+}
 
 export class MockTerminal {
   cols = 80
@@ -30,7 +35,9 @@ export class MockTerminal {
     }
   }
 
-  loadAddon() {}
+  loadAddon(addon: { activate?: (terminal: MockTerminal) => void }) {
+    addon.activate?.(this)
+  }
   fit() {}
   focus() {}
   dispose() {}
@@ -72,10 +79,21 @@ export class MockTerminal {
 export function clearMockTerminalInstances() {
   mockTerminalInstances.length = 0
   mockSearchAddonInstances.length = 0
+  mockFitDimensions = null
 }
 
 export class MockFitAddon {
-  fit() {}
+  private terminal: MockTerminal | null = null
+
+  activate(terminal: MockTerminal) {
+    this.terminal = terminal
+  }
+
+  fit() {
+    if (!mockFitDimensions || !this.terminal) return
+    this.terminal.cols = mockFitDimensions.cols
+    this.terminal.rows = mockFitDimensions.rows
+  }
 }
 
 export class MockWebLinksAddon {}
