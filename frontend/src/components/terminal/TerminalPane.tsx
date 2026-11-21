@@ -276,7 +276,7 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
     })
   }, [socket, sessionId, tabId])
 
-  const fitAndEmitResize = useCallback((term: Terminal, fitAddon: FitAddon) => {
+  const fitAndEmitResize = useCallback((term: Terminal, fitAddon: FitAddon, force = false) => {
     if (!isVisibleTerminalContainer(containerRef.current)) return
     const wasAtBottom = term.buffer.active.viewportY >= term.buffer.active.baseY
     fitAddon.fit()
@@ -284,11 +284,18 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
     if (term.cols <= 0 || term.rows <= 0) return
 
     const previous = lastResizeRef.current
-    if (previous?.cols === term.cols && previous?.rows === term.rows) return
+    if (!force && previous?.cols === term.cols && previous?.rows === term.rows) return
 
     lastResizeRef.current = { cols: term.cols, rows: term.rows }
     emitResize(term)
   }, [emitResize])
+
+  const fitTerminalForConnection = useCallback((): Terminal | null => {
+    const term = termRef.current
+    if (!term) return null
+    fitRef.current?.fit()
+    return term
+  }, [])
 
   const scheduleFitAndEmitResize = useCallback((term: Terminal, fitAddon: FitAddon) => {
     if (resizeFrameRef.current !== null) return
@@ -767,10 +774,7 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
         requestAnimationFrame(() => {
           if (!mounted) return
           if (termRef.current && fitRef.current) {
-            // A resize sent before the session existed is dropped by the
-            // server, so the first post-connect fit must not be deduplicated.
-            lastResizeRef.current = null
-            fitAndEmitResize(termRef.current, fitRef.current)
+            fitAndEmitResize(termRef.current, fitRef.current, true)
           }
           termRef.current?.focus()
           suppressRestoreInputBriefly()
@@ -792,8 +796,7 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
       requestAnimationFrame(() => {
         if (!mounted) return
         if (termRef.current && fitRef.current) {
-          lastResizeRef.current = null
-          fitAndEmitResize(termRef.current, fitRef.current)
+          fitAndEmitResize(termRef.current, fitRef.current, true)
         }
         termRef.current?.focus()
         suppressRestoreInputBriefly()
@@ -858,12 +861,7 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
     sensitiveOutputTailRef.current = ''
     setTabStatus(tabId, 'connecting')
     setTabConnection(tabId, values.host, values.port, values.username)
-    const term = termRef.current
-    // The form overlays the terminal, so the hidden pane still has a layout
-    // box. Fit before reading the size: opening the PTY at xterm's 80x24
-    // default makes the remote wrap at a different column than the terminal
-    // draws, and readline's carriage return then overwrites the line start.
-    fitRef.current?.fit()
+    const term = fitTerminalForConnection()
     socket.emit('ssh:connect', {
       session_id: sessionId,
       tab_id: tabId,
@@ -883,7 +881,7 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
       suppressInputRef.current = true
       setTabStatus(tabId, 'dead')
     }, CONNECT_TIMEOUT_MS)
-  }, [socket, sessionId, tabId, setTabStatus, setTabConnection, clearConnectTimeout])
+  }, [socket, sessionId, tabId, setTabStatus, setTabConnection, clearConnectTimeout, fitTerminalForConnection])
 
   const showForm = !tab || tab.status === 'disconnected' || tab.status === 'dead'
   const isConnecting = tab?.status === 'connecting'

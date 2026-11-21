@@ -441,8 +441,6 @@ describe('TerminalPane', () => {
         expect(mockTerminalInstances.length).toBeGreaterThan(0)
       })
       const term = mockTerminalInstances[mockTerminalInstances.length - 1]
-      // The pane is wider than xterm's 80x24 default; the fit must run while
-      // the connection form is shown so the PTY is opened at the pane's size.
       expect(term.cols).toBe(123)
       expect(term.rows).toBe(45)
       expect(term.textarea?.parentElement?.parentElement?.style.display).not.toBe('none')
