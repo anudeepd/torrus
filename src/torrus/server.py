@@ -329,6 +329,35 @@ _BRACKETED_PASTE_OPEN = b"\x1b[200~"
 _BRACKETED_PASTE_CLOSE = b"\x1b[201~"
 
 
+def _apply_completion_edits(
+    line: str, cursor: int, incoming: str
+) -> tuple[str, int]:
+    """Apply one shell completion echo to the line being edited.
+
+    Readline redraws a completion with terminal edits, not with a fresh copy of
+    the line: a backspace moves the cursor left, a carriage return returns to
+    column 0, and every other character overwrites the cell under the cursor.
+    Treating those bytes as text (or stripping the backspaces from the chunk
+    alone) loses the characters they were meant to replace.
+    """
+    cells = list(line)
+    for ch in incoming:
+        if ch == "\r":
+            cursor = 0
+        elif ch == "\n":
+            cells = []
+            cursor = 0
+        elif ch in ("\b", "\x7f"):
+            cursor = max(0, cursor - 1)
+        elif ch != "\t":
+            if cursor < len(cells):
+                cells[cursor] = ch
+            else:
+                cells.append(ch)
+            cursor += 1
+    return "".join(cells), cursor
+
+
 @dataclass
 class _CommandInputBuffer:
     # The spool is owned by the dataclass and closed by its consumer, so there is
@@ -372,86 +401,94 @@ class _CommandInputBuffer:
         self.completion_pending = False
         self.completion_zone_start = 0
 
-    def _truncate_completion_zone(self) -> None:
-        """Discard everything in `spool` from the active completion zone onward."""
-        if self.completion_zone_start <= 0:
-            return
-        if self.completion_zone_start >= self.size:
-            return
+    def _read_prefix(self) -> str:
+        self.spool.seek(0)
+        return self.spool.read(self.completion_zone_start).decode(
+            "utf-8", errors="replace"
+        )
+
+    def _read_zone(self) -> str:
         self.spool.seek(self.completion_zone_start)
-        self.spool.truncate()
-        self.size = self.completion_zone_start
+        return self.spool.read(max(0, self.size - self.completion_zone_start)).decode(
+            "utf-8", errors="replace"
+        )
+
+    def _replace(self, text: str) -> None:
+        """Replace the spool with the line the shell now shows."""
+        data = text.encode("utf-8", errors="replace")
+        if len(data) > _INPUT_BUFFER_MAX_BYTES:
+            self.overflowed = True
+            data = data[:_INPUT_BUFFER_MAX_BYTES]
+        self.spool.seek(0)
+        self.spool.truncate(0)
+        self.spool.write(data)
+        self.size = len(data)
+        self.completion_zone_start = min(self.completion_zone_start, self.size)
+
+    def _line_from_redraw(self, base: str, last_line: str) -> str | None:
+        """Return the command line from a completed full-line redraw.
+
+        The last line of a completion echo is the shell prompt plus the current
+        input line. Find the typed text in it without regard to case: shells with
+        ``completion-ignore-case`` rewrite the case of the text they completed.
+        """
+        if not base:
+            return None
+        position = last_line.lower().find(base.lower())
+        if position < 0:
+            return None
+        line, _ = _apply_completion_edits("", 0, last_line[position:])
+        return line
+
+    def _line_from_edits(self, base: str, zone: str, incoming: str) -> str:
+        """Apply a bare completion chunk to the current line."""
+        line = base + zone
+        cursor = len(line)
+        if base and incoming.startswith(base):
+            line = base
+            cursor = len(base)
+            incoming = incoming[len(base) :]
+        elif base and incoming.lower().startswith(base.lower()):
+            line = incoming[: len(base)] + zone
+            cursor = len(base)
+            incoming = incoming[len(base) :]
+        elif zone and incoming.startswith(zone):
+            incoming = incoming[len(zone) :]
+        line, _ = _apply_completion_edits(line, cursor, incoming)
+        return line
 
     def observe_output(self, incoming: bytes) -> None:
-        """Replace inline shell-completion text while a Tab request is pending.
+        """Update the audited line from an inline shell-completion echo.
 
         Each incremental completion chunk (e.g. bash re-drawing a glob or
-        filename match list) overwrites the prior completion region instead
-        of appending to it, so the audited command reflects the final state
-        the user saw and submits.
+        filename match list) edits the current line instead of appending to it,
+        so the audited command reflects the final state the user saw and submits.
 
-        Three echo shapes arrive:
-        * bare suffix chunks (``me``, ``me/``) — a bare terminal write can
-          only append at the cursor, so each chunk appends to the completion
-          zone; a chunk that re-echoes the zone (or the full pre-tab line)
-          collapses to just its extension so cumulative redraws never
-          duplicate (ISSUE-003 glob redraws, split suffix echo chunks);
+        Two echo shapes arrive:
+        * bare chunks (``me``, ``me/``) — the terminal writes at the cursor; a
+          chunk that re-echoes the line or zone collapses to its extension and
+          a chunk that backspaces over the typed text edits the line in place;
         * readline redraws (``\r`` + full line, or ``\r\n`` option listing +
-          ``\r`` + prompt + line) — keep only what the line adds beyond the
-          pre-tab input text, which also skips any shell prompt prefix and
-          drops option listings outright.
+          ``\r`` + prompt + line) — take the final line and strip any prompt by
+          anchoring on the typed text, ignoring case.
         """
         if not self.completion_pending or not incoming:
             return
-        self.spool.seek(0)
-        base = self.spool.read(self.completion_zone_start).decode(
-            "utf-8", errors="replace"
-        )
-        if b"\r" in incoming or b"\n" in incoming:
-            # The final redraw line is the last one; earlier lines are option
-            # listings or scroll content and must not reach audit input.
-            last_line = incoming.split(b"\n")[-1].split(b"\r")[-1]
-            completion = audit_store.strip_escape(
-                last_line.decode("utf-8", errors="replace")
-            ).replace("\t", "")
-            if not completion:
-                return
-            position = completion.find(base)
-            if position < 0:
-                # Redraw with no relation to the pending input: ignore.
-                return
-            suffix = completion[position + len(base) :]
-            if not suffix:
-                return
-            self._truncate_completion_zone()
-            self._append(suffix.encode("utf-8", errors="replace"))
-            return
-        completion = audit_store.strip_escape(
+        base = self._read_prefix()
+        zone = self._read_zone()
+        text = audit_store.strip_ansi(
             incoming.decode("utf-8", errors="replace")
         ).replace("\t", "")
-        if not completion:
+        if not text:
             return
-        if base and completion.startswith(base):
-            # Full-line echo without a \r wrapper: keep only the addition.
-            suffix = completion[len(base) :]
-            if not suffix:
-                return
-            self._truncate_completion_zone()
-            self._append(suffix.encode("utf-8", errors="replace"))
+        if "\r" in text or "\n" in text:
+            last_line = text.split("\n")[-1].split("\r")[-1]
+            line = self._line_from_redraw(base, last_line)
+        else:
+            line = self._line_from_edits(base, zone, text)
+        if line is None or line == base + zone:
             return
-        self.spool.seek(self.completion_zone_start)
-        zone = self.spool.read(max(0, self.size - self.completion_zone_start)).decode(
-            "utf-8", errors="replace"
-        )
-        if zone and completion.startswith(zone):
-            # Cumulative re-echo of the zone: only the extension is new.
-            suffix = completion[len(zone) :]
-            if not suffix:
-                return
-            self._append(suffix.encode("utf-8", errors="replace"))
-            return
-        # Plain cursor-append chunk (possibly split across output reads).
-        self._append(completion.encode("utf-8", errors="replace"))
+        self._replace(line)
 
     def _filtered_input(self, incoming: bytes) -> list[tuple[int, bool]]:
         """Remove bracketed-paste markers while retaining literal paste tabs."""
