@@ -332,14 +332,6 @@ _BRACKETED_PASTE_CLOSE = b"\x1b[201~"
 def _apply_completion_edits(
     line: str, cursor: int, incoming: str
 ) -> tuple[str, int]:
-    """Apply one shell completion echo to the line being edited.
-
-    Readline redraws a completion with terminal edits, not with a fresh copy of
-    the line: a backspace moves the cursor left, a carriage return returns to
-    column 0, and every other character overwrites the cell under the cursor.
-    Treating those bytes as text (or stripping the backspaces from the chunk
-    alone) loses the characters they were meant to replace.
-    """
     cells = list(line)
     for ch in incoming:
         if ch == "\r":
@@ -414,7 +406,6 @@ class _CommandInputBuffer:
         )
 
     def _replace(self, text: str) -> None:
-        """Replace the spool with the line the shell now shows."""
         data = text.encode("utf-8", errors="replace")
         if len(data) > _INPUT_BUFFER_MAX_BYTES:
             self.overflowed = True
@@ -426,12 +417,6 @@ class _CommandInputBuffer:
         self.completion_zone_start = min(self.completion_zone_start, self.size)
 
     def _line_from_redraw(self, base: str, last_line: str) -> str | None:
-        """Return the command line from a completed full-line redraw.
-
-        The last line of a completion echo is the shell prompt plus the current
-        input line. Find the typed text in it without regard to case: shells with
-        ``completion-ignore-case`` rewrite the case of the text they completed.
-        """
         if not base:
             return None
         position = last_line.lower().find(base.lower())
@@ -441,7 +426,6 @@ class _CommandInputBuffer:
         return line
 
     def _line_from_edits(self, base: str, zone: str, incoming: str) -> str:
-        """Apply a bare completion chunk to the current line."""
         line = base + zone
         cursor = len(line)
         if base and incoming.startswith(base):
@@ -458,20 +442,6 @@ class _CommandInputBuffer:
         return line
 
     def observe_output(self, incoming: bytes) -> None:
-        """Update the audited line from an inline shell-completion echo.
-
-        Each incremental completion chunk (e.g. bash re-drawing a glob or
-        filename match list) edits the current line instead of appending to it,
-        so the audited command reflects the final state the user saw and submits.
-
-        Two echo shapes arrive:
-        * bare chunks (``me``, ``me/``) — the terminal writes at the cursor; a
-          chunk that re-echoes the line or zone collapses to its extension and
-          a chunk that backspaces over the typed text edits the line in place;
-        * readline redraws (``\r`` + full line, or ``\r\n`` option listing +
-          ``\r`` + prompt + line) — take the final line and strip any prompt by
-          anchoring on the typed text, ignoring case.
-        """
         if not self.completion_pending or not incoming:
             return
         base = self._read_prefix()
