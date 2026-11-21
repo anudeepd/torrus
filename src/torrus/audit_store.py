@@ -28,9 +28,14 @@ _SENSITIVE_COMMAND_RE = re.compile(
 )
 
 
+def strip_ansi(text: str) -> str:
+    """Remove ANSI escape sequences but keep line-editing control characters."""
+    return _ANSI_RE.sub("", text)
+
+
 def strip_escape(text: str) -> str:
     """Remove ANSI escape sequences and control characters from terminal text."""
-    text = _ANSI_RE.sub("", text)
+    text = strip_ansi(text)
     result: list[str] = []
     for ch in text:
         if ch in ("\b", "\x7f"):

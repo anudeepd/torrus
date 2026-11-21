@@ -151,6 +151,50 @@ async def test_glob_completion_incremental_chunks_do_not_duplicate():
 
 
 @pytest.mark.asyncio
+async def test_case_insensitive_completion_redraw_is_captured():
+    import torrus.server as server_module
+
+    key = ("sid", "session", "tab")
+    buffer = server_module._CommandInputBuffer()
+    server_module._input_buffers[key] = buffer
+    try:
+        assert buffer.extract(b"cat ALP") == []
+        assert buffer.extract(b"\t") == []
+        await server_module._record_ssh_output_audit(
+            "session",
+            "tab",
+            b"\r\nalpha/      alpha.txt   alpine/     alpine.txt  \r\n"
+            b"[user@rhel8 torrus]$ cat alp",
+        )
+        assert buffer.extract(b"\r") == ["cat alp"]
+    finally:
+        server_module._input_buffers.pop(key, None)
+        buffer.close()
+
+
+@pytest.mark.asyncio
+async def test_case_insensitive_completion_backspace_replacement_is_captured():
+    import torrus.server as server_module
+
+    key = ("sid", "session", "tab")
+    buffer = server_module._CommandInputBuffer()
+    server_module._input_buffers[key] = buffer
+    try:
+        assert buffer.extract(b"cat AARDVARK.TXT") == []
+        assert buffer.extract(b"\t") == []
+        await server_module._record_ssh_output_audit(
+            "session",
+            "tab",
+            b"cat AARDVARK.TXT\x07\x08\x08\x08\x08\x08\x08\x08\x08\x08\x08\x08\x08"
+            b"aardvark.txt ",
+        )
+        assert buffer.extract(b"\r") == ["cat aardvark.txt"]
+    finally:
+        server_module._input_buffers.pop(key, None)
+        buffer.close()
+
+
+@pytest.mark.asyncio
 async def test_late_output_after_enter_does_not_overwrite_audited_command():
     """ISSUE-guard: an SSH output chunk arriving after Enter must not mutate
     the already-submitted command or the buffer's completion zone.
