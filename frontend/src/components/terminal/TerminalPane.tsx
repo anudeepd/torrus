@@ -767,6 +767,9 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
         requestAnimationFrame(() => {
           if (!mounted) return
           if (termRef.current && fitRef.current) {
+            // A resize sent before the session existed is dropped by the
+            // server, so the first post-connect fit must not be deduplicated.
+            lastResizeRef.current = null
             fitAndEmitResize(termRef.current, fitRef.current)
           }
           termRef.current?.focus()
@@ -789,6 +792,7 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
       requestAnimationFrame(() => {
         if (!mounted) return
         if (termRef.current && fitRef.current) {
+          lastResizeRef.current = null
           fitAndEmitResize(termRef.current, fitRef.current)
         }
         termRef.current?.focus()
@@ -855,6 +859,11 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
     setTabStatus(tabId, 'connecting')
     setTabConnection(tabId, values.host, values.port, values.username)
     const term = termRef.current
+    // The form overlays the terminal, so the hidden pane still has a layout
+    // box. Fit before reading the size: opening the PTY at xterm's 80x24
+    // default makes the remote wrap at a different column than the terminal
+    // draws, and readline's carriage return then overwrites the line start.
+    fitRef.current?.fit()
     socket.emit('ssh:connect', {
       session_id: sessionId,
       tab_id: tabId,
@@ -885,7 +894,7 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
       <div
         ref={containerRef}
         className="absolute inset-0"
-        style={{ display: showForm ? 'none' : 'block' }}
+        style={{ visibility: showForm ? 'hidden' : 'visible' }}
       />
 
       <AnimatePresence initial={false}>
