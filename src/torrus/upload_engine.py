@@ -1,8 +1,7 @@
-"""Chunked upload engine shared by torrus and xwing.
+"""Chunked upload engine for torrus.
 
-This file is vendored verbatim into both repositories; keep the two copies
-byte-identical (tests/test_upload_engine_parity.py pins the digest). It imports
-nothing from either application, so it can be copied between packages unchanged.
+It imports nothing from the application so the storage and range accounting
+stay independent of the web and SSH layers.
 
 Wire protocol
 -------------
@@ -29,10 +28,13 @@ import re
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
+
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
 
 logger = logging.getLogger(__name__)
 

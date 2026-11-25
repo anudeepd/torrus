@@ -122,7 +122,7 @@ describe('TerminalPane', () => {
     )
   })
 
-  it('drops terminal probe replies instead of sending them to the shell', async () => {
+  it('forwards terminal probe replies to the process that asked for them', async () => {
     const tabId = 'tab-probe'
     act(() => {
       seedStores(tabId, 'connected')
@@ -151,7 +151,74 @@ describe('TerminalPane', () => {
       term.simulateData('\x1b]11;rgb:0000/0000/0000\x07')
     })
 
-    expect(socket.emit).not.toHaveBeenCalledWith('ssh:input', expect.anything())
+    expect(socket.emit).toHaveBeenNthCalledWith(
+      1,
+      'ssh:input',
+      expect.objectContaining({ data: '\x1b[?1;2c' }),
+    )
+    expect(socket.emit).toHaveBeenNthCalledWith(
+      2,
+      'ssh:input',
+      expect.objectContaining({ data: '\x1b[24;80R' }),
+    )
+    expect(socket.emit).toHaveBeenNthCalledWith(
+      3,
+      'ssh:input',
+      expect.objectContaining({ data: '\x1b]11;rgb:0000/0000/0000\x07' }),
+    )
+  })
+
+  it('does not broadcast terminal probe replies to other terminals', async () => {
+    const tabId = 'tab-probe-focused'
+    act(() => {
+      seedStores(tabId, 'connected')
+      useTerminalStore.setState(state => ({
+        tabs: [
+          ...state.tabs,
+          {
+            id: 'tab-probe-other',
+            type: 'terminal',
+            host: 'localhost',
+            port: 22,
+            username: 'test',
+            label: null,
+            status: 'connected',
+            sessionKey: 'test-session:tab-probe-other',
+          },
+        ],
+      }))
+      useBroadcastStore.setState({ enabled: true, excludedTabIds: [] })
+    })
+
+    const socket = createMockSocket()
+    render(
+      <TerminalPane
+        tabId={tabId}
+        isActive={true}
+        focused={true}
+        socket={socket as unknown as import('socket.io-client').Socket}
+      />
+    )
+
+    await waitFor(() => {
+      expect(mockTerminalInstances.length).toBeGreaterThan(0)
+    })
+
+    const term = mockTerminalInstances[mockTerminalInstances.length - 1]
+    act(() => {
+      term.textarea?.dispatchEvent(new FocusEvent('focus'))
+    })
+    socket.emit.mockClear()
+
+    act(() => {
+      term.simulateData('\x1b[?1;2c')
+    })
+
+    expect(socket.emit).toHaveBeenCalledOnce()
+    expect(socket.emit).toHaveBeenCalledWith(
+      'ssh:input',
+      expect.objectContaining({ tab_id: tabId, data: '\x1b[?1;2c' }),
+    )
   })
 
   it('marks input after a password prompt as sensitive until Enter', async () => {

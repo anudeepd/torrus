@@ -186,10 +186,9 @@ fastapi_app = FastAPI(title="torrus", docs_url=None, redoc_url=None, lifespan=li
 fastapi_app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 
-# One error shape for every HTTP failure. The upload router is a vendored module
-# shared with xwing and raises HTTPException, which FastAPI renders as
-# {"detail": ...}; normalising here keeps a single envelope on the wire without
-# forking the shared engine.
+# One error shape for every HTTP failure. The upload router raises
+# HTTPException, which FastAPI renders as {"detail": ...}; normalising here
+# keeps a single envelope on the wire.
 _HTTP_ERROR_CODES = {
     400: "bad_request",
     401: "unauthorized",

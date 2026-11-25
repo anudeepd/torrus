@@ -220,7 +220,7 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
 
   const emitInput = useCallback((data: string) => {
     if (suppressInputRef.current) return
-    if (isTerminalReplyOnly(data)) return
+    const terminalReply = isTerminalReplyOnly(data)
 
     if (suppressNextScrollbackClearRef.current && data !== '\x0c') {
       if (pendingScrollbackClearPrefixRef.current) {
@@ -233,13 +233,13 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
     const currentTab = useTerminalStore.getState().tabs.find(t => t.id === tabId)
     if (currentTab?.status !== 'connected') return
 
-    const sensitive = sensitiveInputPendingRef.current
+    const sensitive = sensitiveInputPendingRef.current && !terminalReply
     const payload = sensitive
       ? { session_id: sessionId, tab_id: tabId, data, sensitive: true }
       : { session_id: sessionId, tab_id: tabId, data }
     const { enabled } = useBroadcastStore.getState()
 
-    if (enabled && hasFocusRef.current && broadcastTargetIdsRef.current.size > 0) {
+    if (!terminalReply && enabled && hasFocusRef.current && broadcastTargetIdsRef.current.size > 0) {
       for (const targetTabId of broadcastTargetIdsRef.current) {
         if (targetTabId !== tabId) {
           socket.emit('ssh:input', { ...payload, tab_id: targetTabId })

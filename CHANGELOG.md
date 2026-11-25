@@ -4,6 +4,11 @@
 
 ### Fixed
 
+- **`vi` could hang after opening a file.** Terminal replies to cursor-position,
+  device-attribute and color queries were discarded, so a full-screen editor
+  waiting for one never redrew. Torrus now forwards those replies after the
+  reconnect quiet period and keeps them out of broadcast input.
+
 - **Modifier keys revealed residual focus rings outside the tab bar.** Shared input-modality
   tracking now covers the shell, sidebar controls, context menus, settings, SFTP controls and
   admin focus styling, replacing the tab/menu-only bookkeeping. Pointer-focused controls stay
@@ -16,6 +21,9 @@
   do not match the current Torrus package.
 
 ### Changed
+
+- Drop the Torrus/Xwing upload-engine parity test. Torrus and Xwing now maintain
+  their upload implementations independently.
 
 - The release workflow now offers `patch`, `minor`, and `major`; it synchronizes release
   versions and commits the version bump to `main` before publishing.

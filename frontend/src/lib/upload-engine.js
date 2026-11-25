@@ -1,10 +1,8 @@
 /**
- * Chunked upload client shared by torrus and xwing.
+ * Chunked upload client for torrus.
  *
- * This file is vendored verbatim into both repositories; keep the two copies
- * byte-identical (the parity test pins the digest). It has no imports and no
- * framework dependency, so it drops into a Vite/React build and into plain
- * ESM alike.
+ * It has no imports and no framework dependency, so it drops into the
+ * Vite/React build unchanged.
  *
  * Why it is shaped this way:
  *
