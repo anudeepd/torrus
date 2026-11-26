@@ -267,7 +267,7 @@ describe('AdminConsole', () => {
     )
     expect(block).toHaveClass('whitespace-pre-wrap')
     // One block row, not three rows.
-    expect(screen.getAllByText('example.com:22')).toHaveLength(1)
+    expect(screen.getAllByText('example.com:22 (root)')).toHaveLength(1)
   })
 
   it('does not group command lines across a sensitive event or a session change', async () => {

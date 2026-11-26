@@ -1,7 +1,18 @@
 import { act, renderHook } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Socket } from 'socket.io-client'
-import { useSFTP } from './useSFTP'
+import {
+  contextualFailureMessage,
+  deleteFailureMessage,
+  deleteSuccessMessage,
+  itemLabel,
+  joinPath,
+  normalizePath,
+  parentPath,
+  plural,
+  uploadProgress,
+  useSFTP,
+} from './useSFTP'
 import { useSFTPStore } from '@/store/sftpStore'
 import { useTerminalStore } from '@/store/terminalStore'
 import { createMockSocket } from '@/test/mocks/socket'
@@ -903,5 +914,668 @@ describe('useSFTP', () => {
       tab_id: tabId,
       source_tab_id: 'terminal-tab',
     })
+  })
+
+  it('normalizes dot segments and runs a quiet listing through timeout and failure', () => {
+    vi.useFakeTimers()
+    const socket = createMockSocket()
+    const { result } = renderHook(() => useSFTP(tabId, undefined, socket as unknown as Socket))
+
+    act(() => result.current.list('a/../b'))
+    expect(socket.emit).toHaveBeenCalledWith(
+      'sftp:list',
+      expect.objectContaining({ path: 'a/../b' }),
+    )
+
+    act(() => result.current.list('/quiet', { quiet: true }))
+    act(() => vi.advanceTimersByTime(15_000))
+    expect(useSFTPStore.getState().tabs[tabId]?.error).toBeNull()
+
+    act(() => {
+      result.current.list('/quiet', { quiet: true })
+      socket._trigger('sftp:list:result', {
+        tab_id: tabId,
+        ok: false,
+        path: '/quiet',
+        message: 'denied',
+      })
+    })
+    expect(useSFTPStore.getState().tabs[tabId]?.error).toBeNull()
+  })
+
+  it('ignores unrelated source events and marks a dead restored source', () => {
+    const socket = createMockSocket()
+    renderHook(() => useSFTP(tabId, 'terminal-tab', socket as unknown as Socket))
+    act(() => {
+      socket._trigger('session:restored', { tab_id: 'other', status: 'active' })
+      socket._trigger('ssh:closed', { tab_id: 'other' })
+      socket._trigger('session:restored', {
+        tab_id: 'terminal-tab',
+        status: 'dead',
+      })
+    })
+    expect(useSFTPStore.getState().tabs[tabId]?.disconnected).toBe(true)
+  })
+
+  it('downloads inline data and reports download failures', () => {
+    const socket = createMockSocket()
+    const createObjectURL = vi.fn(() => 'blob:download')
+    const revokeObjectURL = vi.fn()
+    Object.defineProperty(URL, 'createObjectURL', { value: createObjectURL, writable: true })
+    Object.defineProperty(URL, 'revokeObjectURL', { value: revokeObjectURL, writable: true })
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    renderHook(() => useSFTP(tabId, 'terminal-tab', socket as unknown as Socket))
+
+    act(() => {
+      socket._trigger('sftp:download:result', {
+        tab_id: tabId,
+        ok: true,
+        name: 'hello.txt',
+        data: btoa('hello'),
+      })
+      socket._trigger('sftp:download:result', {
+        tab_id: tabId,
+        ok: true,
+        data: btoa('unnamed'),
+      })
+    })
+    expect(click).toHaveBeenCalledTimes(2)
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:download')
+
+    act(() => {
+      socket._trigger('sftp:download:result', {
+        tab_id: tabId,
+        ok: false,
+        message: 'not found',
+      })
+    })
+    expect(useSFTPStore.getState().tabs[tabId]?.error).toBe(
+      'Download failed: not found',
+    )
+  })
+
+  it('formats multi-item delete failures and connection loss', () => {
+    const socket = createMockSocket()
+    renderHook(() => useSFTP(tabId, 'terminal-tab', socket as unknown as Socket))
+
+    act(() => {
+      socket._trigger('sftp:delete:result', {
+        tab_id: tabId,
+        ok: false,
+        results: [
+          { ok: false, path: '/a', message: 'denied' },
+          { ok: false, path: '/b', message: 'denied' },
+        ],
+      })
+    })
+    expect(useSFTPStore.getState().tabs[tabId]?.error).toBe(
+      'Failed to delete 2 items (a): denied',
+    )
+
+    act(() => {
+      socket._trigger('sftp:delete:result', {
+        tab_id: tabId,
+        ok: false,
+        results: [
+          { ok: true, path: '/ok' },
+          { ok: false, path: '/a', message: 'denied' },
+          { ok: false, path: '/b', message: 'denied' },
+        ],
+      })
+    })
+    expect(useSFTPStore.getState().tabs[tabId]?.error).toContain(
+      'Deleted 1 item. Failed to delete 2 items (a): denied',
+    )
+
+    act(() => {
+      socket._trigger('sftp:delete:result', {
+        tab_id: tabId,
+        ok: false,
+        code: 'CONNECTION_CLOSED',
+        results: [{ ok: false, path: '/x', code: 'CONNECTION_CLOSED' }],
+      })
+    })
+    expect(useSFTPStore.getState().tabs[tabId]?.disconnected).toBe(true)
+  })
+
+  it('does not duplicate a failure prefix already present in the message', () => {
+    const socket = createMockSocket()
+    renderHook(() => useSFTP(tabId, 'terminal-tab', socket as unknown as Socket))
+    act(() => {
+      socket._trigger('sftp:error', {
+        tab_id: tabId,
+        operation: 'upload',
+        code: 'X',
+        message: 'Upload failed: quota exceeded',
+      })
+    })
+    expect(useSFTPStore.getState().tabs[tabId]?.error).toBe(
+      'Upload failed: quota exceeded',
+    )
+  })
+
+  it('surfaces upload init failures and retries a failed transfer', async () => {
+    const socket = createMockSocket()
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 403,
+      json: async () => ({ message: 'Not permitted' }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const { result } = renderHook(() => useSFTP(tabId, 'terminal-tab', socket as unknown as Socket))
+
+    await act(async () => {
+      await result.current.uploadFiles([new File(['hello'], 'failed.txt')])
+    })
+    expect(useSFTPStore.getState().transfers[0]).toMatchObject({
+      status: 'error',
+      error: 'Not permitted',
+    })
+
+    act(() => result.current.retryUpload(useSFTPStore.getState().transfers[0].id))
+    await vi.waitFor(() =>
+      expect(useSFTPStore.getState().transfers[0].status).toBe('error'),
+    )
+  })
+
+  it('times out folder creation and leaves no upload queued', async () => {
+    vi.useFakeTimers()
+    const socket = createMockSocket()
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const { result } = renderHook(() => useSFTP(tabId, 'terminal-tab', socket as unknown as Socket))
+
+    let upload: Promise<void>
+    act(() => {
+      upload = result.current.uploadFiles([
+        { file: new File(['hello'], 'note.txt'), relativePath: 'locked/note.txt' },
+      ])
+    })
+    await act(async () => {
+      vi.advanceTimersByTime(15_000)
+      await upload!
+    })
+    expect(useSFTPStore.getState().tabs[tabId]?.error).toBe(
+      'Timed out creating the folders for this upload.',
+    )
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('uses the folder-creation fallback message', async () => {
+    const socket = createMockSocket()
+    const { result } = renderHook(() => useSFTP(tabId, 'terminal-tab', socket as unknown as Socket))
+    const upload = result.current.uploadFiles([
+      { file: new File(['x'], 'x.txt'), relativePath: 'missing/x.txt' },
+    ])
+    const emit = socket.emit.mock.calls.find(call => call[0] === 'sftp:mkdirs')
+    const requestId = (emit?.[1] as { request_id: string }).request_id
+    await act(async () => {
+      socket._trigger('sftp:mkdirs:result', {
+        tab_id: tabId,
+        request_id: requestId,
+        ok: false,
+      })
+      await upload
+    })
+    expect(useSFTPStore.getState().tabs[tabId]?.error).toBe(
+      'Could not create the folders for this upload.',
+    )
+  })
+
+  it('uses the upload fallback for a non-Error init rejection', async () => {
+    const socket = createMockSocket()
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue('offline'))
+    const { result } = renderHook(() => useSFTP(tabId, 'terminal-tab', socket as unknown as Socket))
+    await act(async () => {
+      await result.current.uploadFiles([new File(['x'], 'offline.txt')])
+    })
+    expect(useSFTPStore.getState().transfers[0]).toMatchObject({
+      status: 'error',
+      error: 'Upload failed',
+    })
+  })
+
+  it('emits small downloads and every direct file mutation', () => {
+    const socket = createMockSocket()
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    const { result } = renderHook(() => useSFTP(tabId, 'terminal-tab', socket as unknown as Socket))
+    socket.emit.mockClear()
+
+    act(() => {
+      void result.current.download({
+        name: 'small.txt',
+        path: '/small.txt',
+        type: 'file',
+        size: 1,
+        mtime: 1,
+      })
+      result.current.remove(['/a'])
+      result.current.rename('/a', '/b')
+      result.current.mkdir('child')
+      result.current.mkdir('/absolute')
+      result.current.mkdir('slash/')
+    })
+    expect(click).not.toHaveBeenCalled()
+    expect(socket.emit).toHaveBeenCalledWith('sftp:download', {
+      session_id: 'test-session',
+      tab_id: tabId,
+      path: '/small.txt',
+    })
+    expect(socket.emit).toHaveBeenCalledWith('sftp:delete', {
+      session_id: 'test-session',
+      tab_id: tabId,
+      paths: ['/a'],
+    })
+    expect(socket.emit).toHaveBeenCalledWith('sftp:rename', {
+      session_id: 'test-session',
+      tab_id: tabId,
+      old_path: '/a',
+      new_path: '/b',
+    })
+  })
+
+  it('replays a coalesced refresh after a failed listing', () => {
+    const socket = createMockSocket()
+    const { result } = renderHook(() => useSFTP(tabId, 'terminal-tab', socket as unknown as Socket))
+    socket.emit.mockClear()
+    act(() => {
+      result.current.list('/same')
+      result.current.list('/same')
+      socket._trigger('sftp:list:result', {
+        tab_id: tabId,
+        ok: false,
+        path: '/same',
+        message: 'denied',
+      })
+    })
+    expect(
+      socket.emit.mock.calls.filter(call => call[0] === 'sftp:list'),
+    ).toHaveLength(2)
+  })
+
+  it('resolves default paths and ignores events for another tab', () => {
+    const socket = createMockSocket()
+    useSFTPStore.setState({
+      tabs: {
+        [tabId]: {
+          path: '/saved',
+          username: null,
+          isRoot: false,
+          entries: [],
+          selectedPaths: [],
+          loading: false,
+          error: null,
+          notice: null,
+          disconnected: false,
+        },
+      },
+      transfers: [],
+    })
+    const { result } = renderHook(() => useSFTP(tabId, 'terminal-tab', socket as unknown as Socket))
+    socket.emit.mockClear()
+    act(() => result.current.list())
+    expect(socket.emit).toHaveBeenCalledWith(
+      'sftp:list',
+      expect.objectContaining({ path: '/saved' }),
+    )
+
+    act(() => {
+      for (const event of [
+        'sftp:open:result',
+        'sftp:list:result',
+        'sftp:error',
+        'sftp:delete:result',
+        'sftp:rename:result',
+        'sftp:mkdir:result',
+        'sftp:mkdirs:result',
+        'sftp:chmod:result',
+        'sftp:chown:result',
+        'sftp:download:result',
+        'sftp:accounts:result',
+      ]) {
+        socket._trigger(event, { tab_id: 'other', ok: true })
+      }
+    })
+    expect(useSFTPStore.getState().tabs[tabId]?.path).toBe('/saved')
+  })
+
+  it('opens a restored path and ignores a repeated source-ready event', () => {
+    vi.useFakeTimers()
+    const socket = createMockSocket()
+    useTerminalStore.setState({
+      sessionId: 'test-session',
+      activeTabId: tabId,
+      tabs: [
+        {
+          id: 'terminal-tab', type: 'terminal', host: 'h', port: 22, username: 'u',
+          label: null, status: 'connected', sessionKey: 's:terminal-tab',
+        },
+        {
+          id: tabId, type: 'sftp', host: 'h', port: 22, username: 'u',
+          label: null, status: 'connected', sessionKey: `s:${tabId}`,
+          sourceTabId: 'terminal-tab', sftpPath: '/remembered',
+        },
+      ],
+    })
+    renderHook(() => useSFTP(tabId, 'terminal-tab', socket as unknown as Socket))
+    act(() => {
+      socket._trigger('session:restored', {
+        tab_id: 'terminal-tab',
+        status: 'active',
+      })
+      socket._trigger('ssh:connected', {
+        tab_id: 'terminal-tab',
+        status: 'active',
+      })
+    })
+    expect(
+      socket.emit.mock.calls.filter(call => call[0] === 'sftp:open'),
+    ).toHaveLength(1)
+    expect(socket.emit).toHaveBeenCalledWith(
+      'sftp:open',
+      expect.objectContaining({ path: '/remembered' }),
+    )
+  })
+
+  it('creates a replacement source when the persisted SFTP metadata is incomplete', () => {
+    const socket = createMockSocket()
+    useTerminalStore.setState({
+      sessionId: 'test-session',
+      activeTabId: tabId,
+      tabs: [{
+        id: tabId, type: 'sftp', host: null, port: null, username: null,
+        label: null, status: 'dead', sessionKey: `s:${tabId}`,
+        sourceTabId: 'missing',
+      }],
+    })
+    const { result } = renderHook(() => useSFTP(tabId, 'missing', socket as unknown as Socket))
+    act(() => result.current.open())
+    const replacement = useTerminalStore.getState().tabs.find(tab => tab.type === 'terminal')
+    expect(replacement).toBeDefined()
+    expect(replacement?.host).toBeNull()
+
+    useTerminalStore.setState({
+      sessionId: 'test-session',
+      activeTabId: tabId,
+      tabs: [{
+        id: tabId, type: 'sftp', host: 'host', port: 22, username: null,
+        label: null, status: 'dead', sessionKey: `s:${tabId}`,
+        sourceTabId: 'missing-again',
+      }],
+    })
+    const secondSocket = createMockSocket()
+    const rendered = renderHook(() =>
+      useSFTP(tabId, 'missing-again', secondSocket as unknown as Socket),
+    )
+    act(() => rendered.result.current.open())
+
+    useTerminalStore.setState({
+      sessionId: 'test-session',
+      activeTabId: tabId,
+      tabs: [{
+        id: tabId, type: 'sftp', host: 'host', port: null, username: 'u',
+        label: null, status: 'dead', sessionKey: `s:${tabId}`,
+        sourceTabId: 'missing-port',
+      }],
+    })
+    const thirdSocket = createMockSocket()
+    const third = renderHook(() =>
+      useSFTP(tabId, 'missing-port', thirdSocket as unknown as Socket),
+    )
+    act(() => third.result.current.open())
+  })
+
+  it('accepts quiet successes and payloads without optional fields', () => {
+    const socket = createMockSocket()
+    const { result } = renderHook(() => useSFTP(tabId, 'terminal-tab', socket as unknown as Socket))
+    act(() => result.current.list(undefined, { quiet: true }))
+    act(() => {
+      socket._trigger('sftp:list:result', {
+        tab_id: tabId,
+        ok: true,
+      })
+      socket._trigger('sftp:accounts:result', {
+        tab_id: tabId,
+        ok: true,
+      })
+      socket._trigger('sftp:download:result', {
+        tab_id: tabId,
+        ok: true,
+      })
+    })
+    expect(useSFTPStore.getState().tabs[tabId]?.path).toBe('.')
+    expect(result.current.users).toEqual([])
+    expect(result.current.groups).toEqual([])
+
+    act(() => {
+      result.current.list('/with-entries', { quiet: true })
+      socket._trigger('sftp:list:result', {
+        tab_id: tabId,
+        ok: true,
+        path: '/with-entries',
+        entries: [{ name: 'a', path: '/with-entries/a', type: 'file', size: 1, mtime: 1 }],
+      })
+      result.current.list('/visible')
+      socket._trigger('sftp:list:result', {
+        tab_id: tabId,
+        ok: true,
+        path: '/visible',
+      })
+      socket._trigger('sftp:list:result', { tab_id: tabId, ok: true, path: '/last' })
+      socket._trigger('sftp:error', { tab_id: tabId, code: 'X' })
+    })
+    expect(useSFTPStore.getState().tabs[tabId]?.path).toBe('/last')
+  })
+
+  it('ignores mkdirs responses that do not match a pending request', () => {
+    const socket = createMockSocket()
+    renderHook(() => useSFTP(tabId, 'terminal-tab', socket as unknown as Socket))
+    act(() => {
+      socket._trigger('sftp:mkdirs:result', {
+        tab_id: tabId,
+        ok: true,
+      })
+      socket._trigger('sftp:mkdirs:result', {
+        tab_id: tabId,
+        request_id: 'missing',
+        ok: true,
+      })
+    })
+  })
+
+  it('ignores empty and malformed upload candidates', async () => {
+    const socket = createMockSocket()
+    const { result } = renderHook(() => useSFTP(tabId, 'terminal-tab', socket as unknown as Socket))
+    await act(async () => {
+      await result.current.uploadFiles([])
+      await result.current.uploadFiles([
+        null as unknown as File,
+        { file: null, relativePath: 'x' } as never,
+      ])
+    })
+    expect(useSFTPStore.getState().transfers).toEqual([])
+    act(() => result.current.retryUpload('missing-transfer'))
+  })
+
+  it('uploads a zero-byte file without dividing by zero', async () => {
+    const socket = createMockSocket()
+    useSFTPStore.setState({
+      tabs: {
+        [tabId]: {
+          path: '/dest',
+          username: null,
+          isRoot: false,
+          entries: [],
+          selectedPaths: [],
+          loading: false,
+          error: null,
+          notice: null,
+          disconnected: false,
+        },
+      },
+      transfers: [],
+    })
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => ({
+      ok: true,
+      status: 200,
+      json: async () =>
+        String(input).includes('/init')
+          ? { upload_id: 'empty', chunk_size: 4, concurrency: 1, size: 0 }
+          : { path: 'empty.txt', size: 0 },
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('XMLHttpRequest', createMockUploadRequest([]))
+    const { result } = renderHook(() => useSFTP(tabId, 'terminal-tab', socket as unknown as Socket))
+    await act(async () => {
+      await result.current.uploadFiles([{
+        file: new File([], 'empty.txt', { type: 'text/plain' }),
+        relativePath: 'empty.txt',
+      }])
+    })
+    expect(useSFTPStore.getState().transfers[0]).toMatchObject({
+      status: 'done',
+      progress: 100,
+    })
+  })
+
+  it('handles bulk download responses without JSON or filenames', async () => {
+    const socket = createMockSocket()
+    const createObjectURL = vi.fn(() => 'blob:fallback')
+    Object.defineProperty(URL, 'createObjectURL', { value: createObjectURL, writable: true })
+    Object.defineProperty(URL, 'revokeObjectURL', { value: vi.fn(), writable: true })
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 500,
+      json: async () => {
+        throw new Error('not json')
+      },
+    }))
+    const { result } = renderHook(() => useSFTP(tabId, 'terminal-tab', socket as unknown as Socket))
+    await act(async () => {
+      await result.current.bulkDownload([
+        { name: 'a', path: '/a', type: 'file', size: 1, mtime: 1 },
+      ])
+    })
+    expect(useSFTPStore.getState().tabs[tabId]?.error).toBe(
+      'Download failed (500)',
+    )
+
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      blob: async () => new Blob(['zip']),
+      headers: new Headers(),
+    }))
+    await act(async () => {
+      await result.current.bulkDownload([
+        { name: 'a', path: '/a', type: 'file', size: 1, mtime: 1 },
+      ])
+    })
+    expect(click).toHaveBeenCalled()
+
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue('offline'))
+    await act(async () => {
+      await result.current.bulkDownload([
+        { name: 'a', path: '/a', type: 'file', size: 1, mtime: 1 },
+      ])
+    })
+    expect(useSFTPStore.getState().tabs[tabId]?.error).toBe('Download failed')
+  })
+})
+
+describe('useSFTP path and message helpers', () => {
+  it('joins absolute, dot, empty, and trailing-slash paths', () => {
+    expect(joinPath('/base/', 'file')).toBe('/base/file')
+    expect(joinPath('/base', '/absolute')).toBe('/absolute')
+    expect(joinPath('', 'file')).toBe('file')
+    expect(joinPath('.', 'file')).toBe('file')
+  })
+
+  it('finds every parent path shape', () => {
+    expect(parentPath('')).toBe('.')
+    expect(parentPath('.')).toBe('.')
+    expect(parentPath('/')).toBe('/')
+    expect(parentPath('/file')).toBe('/')
+    expect(parentPath('file')).toBe('.')
+    expect(parentPath('/a/b/')).toBe('/a')
+  })
+
+  it('normalizes every relative and absolute path shape', () => {
+    expect(normalizePath('')).toBe('.')
+    expect(normalizePath('/')).toBe('/')
+    expect(normalizePath('/a/../b')).toBe('/b')
+    expect(normalizePath('../a')).toBe('a')
+    expect(normalizePath('a/..')).toBe('.')
+    expect(normalizePath('/a/../../..')).toBe('/')
+  })
+
+  it('labels paths and pluralizes counts', () => {
+    expect(itemLabel()).toBe('item')
+    expect(itemLabel('/a/b.txt')).toBe('b.txt')
+    expect(itemLabel('/')).toBe('/')
+    expect(plural(0, 'item')).toBe('0 items')
+    expect(plural(1, 'item')).toBe('1 item')
+    expect(plural(2, 'item')).toBe('2 items')
+    expect(uploadProgress(1, 2)).toBe(50)
+    expect(uploadProgress(1, 0)).toBe(0)
+  })
+
+  it('formats every delete success and failure combination', () => {
+    expect(deleteSuccessMessage({ tab_id: 't' })).toBe(
+      'Deleted selected items.',
+    )
+    expect(
+      deleteSuccessMessage({
+        tab_id: 't',
+        results: [{ ok: true }, { ok: false }],
+      }),
+    ).toBe('Deleted 1 item.')
+
+    expect(
+      deleteFailureMessage({
+        tab_id: 't',
+        results: [
+          { ok: true },
+          { ok: false, path: '/a', message: 'denied' },
+          { ok: false, path: '/b', message: 'denied' },
+        ],
+      }),
+    ).toBe('Deleted 1 item. Failed to delete 2 items (a): denied')
+    expect(
+      deleteFailureMessage({
+        tab_id: 't',
+        results: [
+          { ok: false, message: 'no path' },
+          { ok: false, path: '/b', message: 'denied' },
+        ],
+      }),
+    ).toBe('Failed to delete 2 items: no path')
+    expect(
+      deleteFailureMessage({
+        tab_id: 't',
+        message: 'fallback',
+      }),
+    ).toBe('Failed to delete item: fallback')
+    expect(
+      deleteFailureMessage({
+        tab_id: 't',
+        results: [{ ok: true }, { ok: false, path: '/' }],
+      }),
+    ).toBe(
+      'Deleted 1 item. Failed to delete /: Check permissions and retry.',
+    )
+  })
+
+  it('avoids duplicate operation prefixes', () => {
+    expect(contextualFailureMessage('Upload failed', {}, 'fallback')).toBe(
+      'Upload failed: fallback',
+    )
+    expect(
+      contextualFailureMessage(
+        'Upload failed',
+        { message: 'upload failed: quota' },
+        'fallback',
+      ),
+    ).toBe('upload failed: quota')
   })
 })

@@ -79,4 +79,15 @@ describe('startAuthIdleTimer', () => {
 
     expect(onIdle).not.toHaveBeenCalled()
   })
+
+  it('expires only once when another check runs after the deadline', () => {
+    vi.useFakeTimers()
+    const onIdle = vi.fn()
+
+    startAuthIdleTimer({ enabled: true, idleTimeoutSeconds: 2, onIdle })
+    vi.advanceTimersByTime(3_000)
+    window.dispatchEvent(new Event('focus'))
+
+    expect(onIdle).toHaveBeenCalledOnce()
+  })
 })

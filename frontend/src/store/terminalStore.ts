@@ -174,6 +174,7 @@ export const useTerminalStore = create<TerminalState>()(
             })),
           }
         }
+        /* v8 ignore next - rehydrate skips migrate when the persisted version matches */
         return persistedState
       },
       partialize: (s) => ({

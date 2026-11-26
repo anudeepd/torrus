@@ -57,4 +57,48 @@ describe('ConnectForm', () => {
       password: 'secret',
     })
   })
+
+  it('focuses each invalid field and never submits invalid values', () => {
+    const onConnect = vi.fn()
+    render(
+      <ConnectForm
+        initialHost="example.com"
+        initialPort={22}
+        initialUsername="alice"
+        onConnect={onConnect}
+      />,
+    )
+    const host = screen.getByTestId('host-input')
+    const username = screen.getByTestId('username-input')
+    const port = screen.getByTestId('port-input')
+
+    fireEvent.change(host, { target: { value: ' ' } })
+    fireEvent.submit(host.closest('form')!)
+    expect(screen.getByRole('alert')).toHaveTextContent('Host is required.')
+    expect(host).toHaveFocus()
+
+    fireEvent.change(host, { target: { value: 'example.com' } })
+    fireEvent.change(username, { target: { value: ' ' } })
+    fireEvent.submit(username.closest('form')!)
+    expect(screen.getByRole('alert')).toHaveTextContent('Username is required.')
+    expect(username).toHaveFocus()
+
+    fireEvent.change(username, { target: { value: 'alice' } })
+    fireEvent.change(port, { target: { value: '70000' } })
+    fireEvent.submit(port.closest('form')!)
+    expect(screen.getByRole('alert')).toHaveTextContent('Port must be 1-65535.')
+    expect(port).toHaveFocus()
+    expect(onConnect).not.toHaveBeenCalled()
+  })
+
+  it('only submits Enter from an input, not from another form control or key', () => {
+    const onConnect = vi.fn()
+    render(<ConnectForm onConnect={onConnect} />)
+    const host = screen.getByTestId('host-input')
+    const button = screen.getByRole('button', { name: 'Show password' })
+
+    fireEvent.keyDown(button, { key: 'Enter' })
+    fireEvent.keyDown(host, { key: 'x' })
+    expect(onConnect).not.toHaveBeenCalled()
+  })
 })

@@ -155,6 +155,24 @@ class TestServeCommand:
         _args, kwargs = mock_uvicorn.call_args
         assert kwargs["reload"] is True
 
+    def test_serve_records_the_log_file_for_reload_processes(self, tmp_path):
+        import os
+
+        from torrus.cli import serve
+
+        log_file = tmp_path / "torrus.log"
+        runner = CliRunner()
+        with (
+            patch("torrus.cli.configure_logging"),
+            patch("torrus.cli.uvicorn.run"),
+        ):
+            result = runner.invoke(
+                serve, ["--log-file", str(log_file), "--no-browser"]
+            )
+
+        assert result.exit_code == 0
+        assert os.environ["TORRUS_LOG_FILE"] == str(log_file)
+
 def test_audit_show_escapes_control_characters(tmp_path):
     """Viewing an event must not replay control characters it contains."""
     import os
@@ -214,3 +232,33 @@ def test_audit_purge_reports_how_many_rows_went(tmp_path):
     assert result.exit_code == 0, result.output
     assert "Purged 1 audit events" in result.output
     assert audit_store.count_audit_events_older_than(1) == 0
+
+
+def test_audit_group_without_a_subcommand_prints_merged_events(tmp_path):
+    import os
+
+    from click.testing import CliRunner
+
+    from torrus import audit_store
+    from torrus.cli import main
+
+    os.environ["TORRUS_AUDIT_DB"] = str(tmp_path / "audit.db")
+    audit_store.init_db()
+    audit_store.record_command_event(
+        ldap_username="alice", session_id="s", tab_id="t", command="ls"
+    )
+    audit_store.record_sftp_event(
+        ldap_username="alice",
+        session_id="s",
+        tab_id="t",
+        operation="upload",
+        path="/x",
+        size=1,
+        detail="ok",
+    )
+
+    result = CliRunner().invoke(main, ["audit"])
+
+    assert result.exit_code == 0, result.output
+    assert "sftp upload /x (1 bytes) ok" in result.output
+    assert '"ls"' in result.output

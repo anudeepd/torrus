@@ -3,33 +3,11 @@ import { Radio, X } from 'lucide-react'
 import { cn } from '@/lib/cn'
 import Dialog from '@/components/ui/Dialog'
 import type { PaneNode } from '@/store/layoutStore'
-import { makeSplitId } from '@/store/layoutStore'
+import { autoLayout } from '@/lib/autoLayout'
 import type { Tab } from '@/types'
 import * as m from 'motion/react-m'
 import { AnimatePresence } from 'motion/react'
 import { exitTransition, fade, microTransition, surfaceTransition } from '@/motion/tokens'
-
-// ─── Auto-layout for N terminals ───────────────────────────────────────────
-
-function leaf(tabId: string): PaneNode { return { type: 'leaf', tabId } }
-function h(a: PaneNode, b: PaneNode): PaneNode {
-  return { type: 'split', id: makeSplitId(), dir: 'h', ratio: 0.5, a, b }
-}
-function v(a: PaneNode, b: PaneNode): PaneNode {
-  return { type: 'split', id: makeSplitId(), dir: 'v', ratio: 0.5, a, b }
-}
-
-function autoLayout(tabIds: string[]): PaneNode | null {
-  if (tabIds.length === 0) return null
-  if (tabIds.length === 1) return leaf(tabIds[0])
-  if (tabIds.length === 2) return h(leaf(tabIds[0]), leaf(tabIds[1]))
-  if (tabIds.length === 3) return h(leaf(tabIds[0]), v(leaf(tabIds[1]), leaf(tabIds[2])))
-  if (tabIds.length === 4) return h(v(leaf(tabIds[0]), leaf(tabIds[2])), v(leaf(tabIds[1]), leaf(tabIds[3])))
-  // 5+: left col of 2 + right col of rest (recursed)
-  const right = autoLayout(tabIds.slice(2))
-  if (!right) return null
-  return h(v(leaf(tabIds[0]), leaf(tabIds[1])), right)
-}
 
 // ─── Modal ──────────────────────────────────────────────────────────────────
 

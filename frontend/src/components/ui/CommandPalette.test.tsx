@@ -74,4 +74,14 @@ describe('CommandPalette', () => {
 
     expect(props.onClose).toHaveBeenCalledOnce()
   })
+
+  it('ignores Enter when the filtered list has no command', () => {
+    const props = renderPalette()
+    const input = screen.getByLabelText('Search commands and tabs')
+
+    fireEvent.change(input, { target: { value: 'no-such-command' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    expect(props.onClose).not.toHaveBeenCalled()
+  })
 })

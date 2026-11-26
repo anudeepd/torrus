@@ -2,6 +2,23 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Scrollbar-engine probe: the size must match PROBE_WIDTH in
+   utils/scrollbarFallback.ts. Keeping the probe rule external lets the app run
+   under a CSP that forbids inline style elements. */
+[data-scrollbar-probe] {
+  position: fixed;
+  top: -100px;
+  left: -100px;
+  width: 100px;
+  height: 100px;
+  overflow: scroll;
+}
+
+[data-scrollbar-probe]::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+
 @layer base {
   /* Controls and app chrome are not content: a drag that starts in a gap, or a
      double-click on a control's caption, must not paint the surrounding buttons
@@ -155,6 +172,7 @@
   html {
     padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom)
       env(safe-area-inset-left);
+    background: theme(colors.surface.950);
     /* Drop the double-tap-zoom delay; pinch-zoom still works. */
     touch-action: manipulation;
   }

@@ -2,10 +2,26 @@ import { vi } from 'vitest'
 
 export const mockTerminalInstances: MockTerminal[] = []
 export const mockSearchAddonInstances: MockSearchAddon[] = []
+export const mockWebLinkHandlers: Array<(event: MouseEvent, uri: string) => void> = []
 export let mockFitDimensions: { cols: number; rows: number } | null = null
+export let mockTerminalHasTextarea = true
+export let mockTerminalConstructorError: Error | null = null
+export let mockTerminalHasFallbackTextarea = true
 
 export function setMockFitDimensions(dimensions: { cols: number; rows: number } | null) {
   mockFitDimensions = dimensions
+}
+
+export function setMockTerminalHasTextarea(value: boolean) {
+  mockTerminalHasTextarea = value
+}
+
+export function setMockTerminalConstructorError(error: Error | null) {
+  mockTerminalConstructorError = error
+}
+
+export function setMockTerminalHasFallbackTextarea(value: boolean) {
+  mockTerminalHasFallbackTextarea = value
 }
 
 export class MockTerminal {
@@ -24,14 +40,19 @@ export class MockTerminal {
   private _keyHandler: ((event: KeyboardEvent) => boolean) | null = null
   private _wheelHandler: ((event: WheelEvent) => boolean) | null = null
   constructor(options: Record<string, unknown> = {}) {
+    if (mockTerminalConstructorError) throw mockTerminalConstructorError
     this.options = options
-    this.textarea = document.createElement('textarea')
+    this.textarea = mockTerminalHasTextarea ? document.createElement('textarea') : null
     mockTerminalInstances.push(this)
   }
 
   open(container: HTMLElement) {
     if (this.textarea) {
       container.appendChild(this.textarea)
+    } else if (mockTerminalHasFallbackTextarea) {
+      const fallback = document.createElement('textarea')
+      fallback.dataset.fallback = 'true'
+      container.appendChild(fallback)
     }
   }
 
@@ -39,8 +60,8 @@ export class MockTerminal {
     addon.activate?.(this)
   }
   fit() {}
-  focus() {}
-  dispose() {}
+  focus = vi.fn()
+  dispose = vi.fn()
   write = vi.fn((_data: string | Uint8Array, callback?: () => void) => callback?.())
   hasSelection() { return this.selection }
   attachCustomKeyEventHandler(handler: (event: KeyboardEvent) => boolean) {
@@ -79,7 +100,11 @@ export class MockTerminal {
 export function clearMockTerminalInstances() {
   mockTerminalInstances.length = 0
   mockSearchAddonInstances.length = 0
+  mockWebLinkHandlers.length = 0
   mockFitDimensions = null
+  mockTerminalHasTextarea = true
+  mockTerminalConstructorError = null
+  mockTerminalHasFallbackTextarea = true
 }
 
 export class MockFitAddon {
@@ -96,7 +121,11 @@ export class MockFitAddon {
   }
 }
 
-export class MockWebLinksAddon {}
+export class MockWebLinksAddon {
+  constructor(handler: (event: MouseEvent, uri: string) => void) {
+    mockWebLinkHandlers.push(handler)
+  }
+}
 
 export class MockUnicode11Addon {}
 

@@ -17,7 +17,7 @@ export default function App() {
   const [isAdminRoute, setIsAdminRoute] = useState(() => window.location.pathname === '/admin')
 
   useEffect(() => {
-    loadServerConfig()
+    void loadServerConfig()
   }, [loadServerConfig])
 
   useEffect(() => {

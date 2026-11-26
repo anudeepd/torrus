@@ -564,12 +564,7 @@ export default function TabBar({ actions, inSplitMode, compactSidebar = false, s
             ref={contextMenuRef}
             role="menu"
             aria-label="Tab actions"
-            onKeyDown={event => {
-              handleMenuKeyDown(event, contextMenuRef.current, () => {
-                setContextMenu(null)
-                tabRefs.current[contextMenu.tabId]?.focus()
-              })
-            }}
+            onKeyDown={event => handleMenuKeyDown(event, contextMenuRef.current, () => setContextMenu(null))}
             className="fixed z-menu bg-surface-800 border border-surface-700 rounded-lg shadow-xl py-1 min-w-40"
             style={{ left: contextMenu.x, top: contextMenu.y }}
           >

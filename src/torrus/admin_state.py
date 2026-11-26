@@ -77,7 +77,7 @@ class LDAPPolicyStore:
         allowed = tuple(
             str(item).strip()
             for item in document["ldap"].get("allowed_users", [])
-            if str(item).strip()
+            if item is not None and str(item).strip()
         )
         return {"fingerprint": fingerprint, "allowed_users": list(allowed)}
 
@@ -93,7 +93,7 @@ class LDAPPolicyStore:
             allowed = [
                 str(item).strip()
                 for item in document["ldap"].get("allowed_users", [])
-                if str(item).strip()
+                if item is not None and str(item).strip()
             ]
             folded = username.casefold()
             if enabled:

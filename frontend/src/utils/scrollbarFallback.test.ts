@@ -33,4 +33,20 @@ describe('installScrollbarFallback', () => {
     expect(document.querySelector('[data-scrollbar-probe]')).toBeNull()
     expect(document.querySelectorAll('style').length).toBe(0)
   })
+
+  it('leaves the document unmarked when the engine honours the webkit rule', () => {
+    const offsetWidth = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetWidth')
+    const clientWidth = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientWidth')
+    Object.defineProperty(HTMLElement.prototype, 'offsetWidth', { configurable: true, get: () => 100 })
+    Object.defineProperty(HTMLElement.prototype, 'clientWidth', { configurable: true, get: () => 95 })
+    try {
+      installScrollbarFallback(document)
+      expect(document.documentElement.getAttribute(STANDARD_SCROLLBARS_ATTRIBUTE)).toBeNull()
+    } finally {
+      if (offsetWidth) Object.defineProperty(HTMLElement.prototype, 'offsetWidth', offsetWidth)
+      else delete (HTMLElement.prototype as { offsetWidth?: unknown }).offsetWidth
+      if (clientWidth) Object.defineProperty(HTMLElement.prototype, 'clientWidth', clientWidth)
+      else delete (HTMLElement.prototype as { clientWidth?: unknown }).clientWidth
+    }
+  })
 })

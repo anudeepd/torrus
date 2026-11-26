@@ -5,11 +5,13 @@ import './index.css'
 import App from './App'
 import { installScrollbarFallback } from './utils/scrollbarFallback'
 import { installFocusModality } from './utils/focusModality'
+import { installStyleNonce } from './utils/cspNonce'
 
 // Before the first paint: Firefox and Waterfox ignore the `::-webkit-scrollbar`
 // rules in index.css and would otherwise show the platform scrollbar.
 installScrollbarFallback()
 installFocusModality()
+installStyleNonce()
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

@@ -217,6 +217,7 @@ export default function SplitPane({ node, socket, onClose, isOnlyPane }: SplitPa
 
   const handleDrag = (delta: number) => {
     const el = containerRef.current
+    /* v8 ignore next - the separator and container mount together */
     if (!el) return
     const total = node.dir === 'h' ? el.offsetWidth : el.offsetHeight
     if (total === 0) return

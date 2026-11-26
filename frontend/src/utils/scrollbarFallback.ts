@@ -41,18 +41,13 @@ export function engineStylesWebkitScrollbars(gutterWidth: number): boolean {
  * painted.
  */
 export function installScrollbarFallback(doc: Document = document): void {
-  const style = doc.createElement('style')
-  style.textContent = `[data-scrollbar-probe]::-webkit-scrollbar { width: ${PROBE_WIDTH}px; height: ${PROBE_WIDTH}px; }`
   const probe = doc.createElement('div')
   probe.setAttribute('data-scrollbar-probe', '')
-  probe.style.cssText = 'position:fixed;top:-100px;left:-100px;width:100px;height:100px;overflow:scroll'
-  doc.head.appendChild(style)
   doc.documentElement.appendChild(probe)
 
   const gutterWidth = probe.offsetWidth - probe.clientWidth
 
   probe.remove()
-  style.remove()
   if (engineStylesWebkitScrollbars(gutterWidth)) return
 
   doc.documentElement.setAttribute(STANDARD_SCROLLBARS_ATTRIBUTE, 'standard')

@@ -78,6 +78,22 @@ class FakeXHR {
     this.dispatchUpload("load", { loaded: this.body?.size ?? 0 });
   }
 
+  uploadError(): void {
+    this.dispatchUpload("error", { loaded: 0 });
+  }
+
+  networkError(): void {
+    this.dispatch("error");
+  }
+
+  timeoutError(): void {
+    this.dispatch("timeout");
+  }
+
+  abortNow(): void {
+    this.dispatch("abort");
+  }
+
   finish(status: number, payload: unknown = { ranges: [[0, 0]] }): void {
     this.status = status;
     this.responseText = typeof payload === "string" ? payload : JSON.stringify(payload);
@@ -177,6 +193,14 @@ describe("SpeedTracker", () => {
     expect(tracker.speed()).toBe(4_000);
     now.mockRestore();
   });
+
+  it("returns zero when samples share a timestamp", () => {
+    vi.spyOn(Date, "now").mockReturnValue(1000);
+    const tracker = new SpeedTracker();
+    tracker.sample(0);
+    tracker.sample(10);
+    expect(tracker.speed()).toBe(0);
+  });
 });
 
 describe("range planning", () => {
@@ -185,6 +209,10 @@ describe("range planning", () => {
     expect(missingRanges([[0, 4], [8, 10]], 10)).toEqual([[4, 8]]);
     expect(missingRanges([[0, 10]], 10)).toEqual([]);
     expect(missingRanges([[0, 4], [4, 10]], 10)).toEqual([]);
+    expect(missingRanges([[0, 4], [6, 10], [2, 2], [NaN, 4]], 10)).toEqual([
+      [4, 6],
+    ]);
+    expect(missingRanges(null, 0)).toEqual([]);
   });
 
   it("splits gaps into equal windows and keeps the remainder", () => {
@@ -231,6 +259,136 @@ describe("UploadClient", () => {
     xhr.finish(200, { ranges: [[7, 8]] });
     await put;
   });
+
+  it("maps non-JSON failures for init, status, and complete", async () => {
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 502,
+        json: async () => {
+          throw new Error("html");
+        },
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 404,
+        json: async () => ({ code: "UPLOAD_INCOMPLETE", message: "missing" }),
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 500,
+        json: async () => {
+          throw new Error("html");
+        },
+      });
+    const client = new UploadClient({ fetchImpl: fetchImpl as unknown as typeof fetch });
+    await expect(client.initWithRetry({ filename: "x", size: 1, dir: "/" }))
+      .rejects.toMatchObject({ status: 502, code: "UPLOAD_FAILED", retryable: true });
+    await expect(client.status("abc")).rejects.toMatchObject({
+      status: 404,
+      code: "UPLOAD_INCOMPLETE",
+    });
+    await expect(client.complete("abc")).rejects.toMatchObject({ status: 500 });
+
+    const statusWithoutJson = new UploadClient({
+      fetchImpl: vi.fn().mockResolvedValue({
+        ok: false,
+        status: 500,
+        json: async () => {
+          throw new Error("html");
+        },
+      }) as unknown as typeof fetch,
+    });
+    await expect(statusWithoutJson.status("abc")).rejects.toMatchObject({
+      status: 500,
+    });
+
+    const jsonError = new UploadClient({
+      fetchImpl: vi.fn().mockResolvedValue({
+        ok: false,
+        status: 429,
+        json: async () => ({ code: "SINK_ERROR", message: "busy" }),
+      }) as unknown as typeof fetch,
+    });
+    await expect(jsonError.initWithRetry({ filename: "x", size: 1, dir: "/" }))
+      .rejects.toMatchObject({ status: 429, code: "SINK_ERROR", retryable: true });
+  });
+
+  it("makes cancellation best effort", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({ ok: false });
+    const client = new UploadClient({ fetchImpl: fetchImpl as unknown as typeof fetch });
+    await expect(client.cancel("abc")).resolves.toBeUndefined();
+    expect(fetchImpl).toHaveBeenCalledWith("/_upload/abc", expect.objectContaining({ method: "DELETE" }));
+
+    const offline = new UploadClient({
+      fetchImpl: vi.fn().mockRejectedValue("offline") as unknown as typeof fetch,
+    });
+    await expect(offline.cancel("abc")).resolves.toBeUndefined();
+
+    const defaults = new UploadClient();
+    expect(defaults.base).toBe("/_upload");
+    expect(defaults.params).toBeNull();
+    expect(typeof defaults.fetchImpl).toBe("function");
+
+    const fetchDefault = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ ranges: [] }),
+    });
+    vi.stubGlobal("fetch", fetchDefault);
+    await new UploadClient().status("default");
+    expect(fetchDefault).toHaveBeenCalled();
+  });
+
+  it("prefers a request signal over the client signal", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({}),
+    });
+    const clientSignal = new AbortController();
+    const requestSignal = new AbortController();
+    const client = new UploadClient({
+      params: { a: "1" },
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      signal: clientSignal.signal,
+    });
+    await client.initWithRetry({ filename: "x", size: 1, dir: "/" });
+    expect(fetchImpl.mock.calls[0][1].signal).toBe(clientSignal.signal);
+    await client.status("abc").catch(() => {});
+    const request = client.put("abc", 0, blobOf(1), { signal: requestSignal.signal });
+    FakeXHR.all.at(-1)!.finish(200, { ranges: [[0, 1]] });
+    await request;
+  });
+
+  it("rejects a put started with an already aborted signal", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const put = client().put("abc", 0, blobOf(1), { signal: controller.signal });
+    await expect(put).rejects.toMatchObject({ code: "ABORTED" });
+  });
+
+  it("reports upload, network, timeout, and XHR abort events", async () => {
+    const cases = async (event: (xhr: FakeXHR) => void, code: string) => {
+      const put = client().put("abc", 0, blobOf(1));
+      const xhr = FakeXHR.all.at(-1)!;
+      event(xhr);
+      await expect(put).rejects.toMatchObject({ code });
+    };
+    await cases(xhr => xhr.uploadError(), "NETWORK");
+    await cases(xhr => xhr.networkError(), "NETWORK");
+    await cases(xhr => xhr.timeoutError(), "TIMEOUT");
+    await cases(xhr => xhr.abortNow(), "ABORTED");
+  });
+
+  it("does not let a throwing abort mask the original failure", async () => {
+    const controller = new AbortController();
+    const put = client().put("abc", 0, blobOf(1), { signal: controller.signal });
+    const xhr = FakeXHR.all.at(-1)!;
+    xhr.abort = () => {
+      throw new Error("abort already finished");
+    };
+    controller.abort();
+    await expect(put).rejects.toMatchObject({ code: "ABORTED" });
+  });
 });
 
 describe("uploadFile", () => {
@@ -256,7 +414,7 @@ describe("uploadFile", () => {
       concurrency: 1,
       session: { uploadId: "session", chunkSize: size, concurrency: 1, ranges: [], size },
     });
-    await vi.waitFor(() => expect(FakeXHR.all).toHaveLength(1));
+    expect(FakeXHR.all).toHaveLength(1);
     expect(FakeXHR.all[0]!.body!.size).toBe(size);
 
     // Model a reverse proxy rejecting the raw PUT before it reaches Torrus or SSH.
@@ -277,7 +435,7 @@ describe("uploadFile", () => {
     const { promise } = await startUpload({
       session: { uploadId: "s", chunkSize: 4, concurrency: 1, ranges: [[0, 4]], size: 8 },
     });
-    await vi.waitFor(() => expect(FakeXHR.all).toHaveLength(1));
+    expect(FakeXHR.all).toHaveLength(1);
     expect(FakeXHR.all[0]!.url).toBe("/_upload/s?offset=4");
     FakeXHR.all[0]!.finish(200, { ranges: [[0, 8]], received: 4 });
     await expect(promise).resolves.toMatchObject({ ok: true });
@@ -447,6 +605,350 @@ describe("uploadFile", () => {
     FakeXHR.all[0]!.bodySent();
     expect(states).toContain(UploadState.PROCESSING);
   });
+
+  it("publishes the resumable session and accepts a received-only response", async () => {
+    const sessions: unknown[] = [];
+    const { promise } = await startUpload({
+      callbacks: {
+        onSession: (session: unknown) => sessions.push(session),
+      },
+    });
+    expect(sessions).toHaveLength(1);
+    FakeXHR.all[0]!.finish(200, { received: 4 });
+    await vi.waitFor(() => expect(FakeXHR.all).toHaveLength(2));
+    FakeXHR.all[1]!.finish(200, { ranges: [[0, 8]], received: 4 });
+    await expect(promise).resolves.toMatchObject({ ok: true, path: "file.bin" });
+    expect(sessions.length).toBeGreaterThan(1);
+  });
+
+  it("retries a retryable finalize response", async () => {
+    let completes = 0;
+    const fetchImpl = vi.fn(async (url: RequestInfo | URL) => {
+      if (!String(url).includes("/complete")) return { ok: true, json: async () => ({}) };
+      completes += 1;
+      return completes === 1
+        ? { ok: false, status: 503, json: async () => ({ message: "busy" }) }
+        : { ok: true, status: 200, json: async () => ({ path: "retried.bin" }) };
+    });
+    const { promise } = await startUpload({
+      client: new UploadClient({ fetchImpl: fetchImpl as unknown as typeof fetch }),
+      backoffMs: [1],
+      chunkSize: 8,
+      session: { uploadId: "session", chunkSize: 8, concurrency: 1, ranges: [], size: 8 },
+    });
+    await vi.waitFor(() => expect(FakeXHR.all).toHaveLength(1));
+    FakeXHR.all[0]!.finish(200, { ranges: [[0, 8]] });
+    await expect(promise).resolves.toMatchObject({ path: "retried.bin" });
+    expect(completes).toBe(2);
+  });
+
+  it("rejects after the bounded number of incomplete passes", async () => {
+    const retries: string[] = [];
+    const { promise } = await startUpload({
+      chunkSize: 8,
+      session: { uploadId: "session", chunkSize: 8, concurrency: 1, ranges: [], size: 8 },
+      callbacks: {
+        onRetry: (info: { code: string }) => retries.push(info.code),
+      },
+    });
+    await vi.waitFor(() => expect(FakeXHR.all).toHaveLength(1));
+    for (let pass = 0; pass < 4; pass += 1) {
+      await vi.waitFor(() => expect(FakeXHR.all).toHaveLength(pass + 1));
+      FakeXHR.all[pass]!.finish(200, { ranges: [] });
+    }
+    await expect(promise).rejects.toMatchObject({ code: "INCOMPLETE" });
+    expect(retries.filter(code => code === "INCOMPLETE")).toHaveLength(4);
+  });
+
+  it("keeps the server ranges visible when an upload finally fails", async () => {
+    const progress: number[] = [];
+    const fetchImpl = vi.fn(async (url: RequestInfo | URL) => {
+      if (String(url).endsWith("/status")) return { ok: false, status: 500 };
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ ranges: [[0, 4]] }),
+      };
+    });
+    const customClient = new UploadClient({
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    const { promise } = await startUpload({
+      client: customClient,
+      maxAttempts: 1,
+      callbacks: { onProgress: (value: number) => progress.push(value) },
+    });
+    FakeXHR.all[0]!.finish(403, { detail: "denied" });
+    await expect(promise).rejects.toMatchObject({ status: 403 });
+    await vi.waitFor(() => expect(progress).toContain(4));
+  });
+
+  it("does not restart a lost session when restart is disabled", async () => {
+    const fetchImpl = vi.fn();
+    const { promise } = await startUpload({
+      client: new UploadClient({ fetchImpl: fetchImpl as unknown as typeof fetch }),
+      restartOnSessionLoss: false,
+    });
+    await vi.waitFor(() => expect(FakeXHR.all).toHaveLength(1));
+    FakeXHR.all[0]!.finish(404, { detail: "lost" });
+    await expect(promise).rejects.toMatchObject({ code: "SESSION_LOST" });
+    expect(
+      fetchImpl.mock.calls.some(([url]) => String(url).includes("/init")),
+    ).toBe(false);
+  });
+
+  it("replans queued windows after a 413", async () => {
+    const { promise } = await startUpload({
+      file: blobOf(12000),
+      chunkSize: 12000,
+      minChunkBytes: 1000,
+      maxChunkBytes: 12000,
+      concurrency: 1,
+      session: {
+        uploadId: "session",
+        chunkSize: 4000,
+        concurrency: 1,
+        ranges: [],
+        size: 12000,
+      },
+    });
+    await vi.waitFor(() => expect(FakeXHR.all).toHaveLength(1));
+    FakeXHR.all[0]!.finish(413, "too large");
+    await vi.waitFor(() => expect(FakeXHR.all).toHaveLength(2));
+    expect(FakeXHR.all[1]!.body!.size).toBe(6000);
+    FakeXHR.all[1]!.finish(200, { ranges: [[0, 6000]] });
+    await vi.waitFor(() => expect(FakeXHR.all).toHaveLength(3));
+    FakeXHR.all[2]!.finish(200, { ranges: [[0, 12000]] });
+    await expect(promise).resolves.toMatchObject({ ok: true });
+  });
+
+  it("replans every queued window after a smaller proxy limit", async () => {
+    const { promise } = await startUpload({
+      file: blobOf(16000),
+      chunkSize: 4000,
+      minChunkBytes: 100,
+      maxChunkBytes: 4000,
+      concurrency: 1,
+      session: {
+        uploadId: "session",
+        chunkSize: 4000,
+        concurrency: 1,
+        ranges: [],
+        size: 16000,
+      },
+    });
+    await vi.waitFor(() => expect(FakeXHR.all).toHaveLength(1));
+    FakeXHR.all[0]!.finish(413, "too large");
+    await vi.waitFor(() => expect(FakeXHR.all).toHaveLength(2));
+    const offsets: string[] = [];
+    for (let index = 1; index < 9; index += 1) {
+      const xhr = FakeXHR.all[index];
+      if (!xhr) {
+        await vi.waitFor(() => expect(FakeXHR.all.length).toBeGreaterThan(index));
+      }
+      const current = FakeXHR.all[index]!;
+      offsets.push(new URL(current.url, "http://x").searchParams.get("offset") ?? "");
+      const offset = Number(offsets.at(-1));
+      current.finish(200, {
+        ranges: [[0, Math.min(16000, offset + (current.body?.size ?? 0))]],
+      });
+    }
+    await expect(promise).resolves.toMatchObject({ ok: true });
+    expect(offsets).toContain("2000");
+  });
+
+  it("initializes a missing session and uses fallback chunk settings", async () => {
+    const fetchImpl = vi.fn(async (url: RequestInfo | URL) => {
+      if (String(url).includes("/init")) {
+        return {
+          ok: true,
+          json: async () => ({
+            upload_id: "created",
+            chunk_size: 4,
+            concurrency: 1,
+            size: 8,
+          }),
+        };
+      }
+      return { ok: true, json: async () => ({ path: "" }) };
+    });
+    const { promise } = await startUpload({
+      client: new UploadClient({ fetchImpl: fetchImpl as unknown as typeof fetch }),
+      session: null,
+      chunkSize: null,
+      concurrency: null,
+    });
+    await vi.waitFor(() => expect(FakeXHR.all).toHaveLength(1));
+    FakeXHR.all[0]!.finish(200, { ranges: [[0, 4]] });
+    await vi.waitFor(() => expect(FakeXHR.all).toHaveLength(2));
+    FakeXHR.all[1]!.finish(200, { ranges: [[0, 8]] });
+    await expect(promise).resolves.toMatchObject({ path: "" });
+
+    FakeXHR.all = [];
+    const zeroHints = {
+      initWithRetry: vi.fn().mockResolvedValue({
+        upload_id: "zero",
+        chunk_size: 0,
+        concurrency: 0,
+        size: 4,
+      }),
+      put: vi.fn().mockResolvedValue({ ranges: [[0, 4]] }),
+      complete: vi.fn().mockResolvedValue({ path: "zero.bin" }),
+      status: vi.fn(),
+    };
+    await expect(
+      uploadFile({
+        client: zeroHints,
+        file: blobOf(4),
+        destDir: "/",
+      }),
+    ).resolves.toMatchObject({ uploadId: "zero" });
+  });
+
+  it("falls back to the file name when finalize returns no path", async () => {
+    const file = new File(["12345678"], "fallback.bin");
+    const fetchImpl = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({}),
+    }));
+    const promise = uploadFile({
+      client: new UploadClient({ fetchImpl: fetchImpl as unknown as typeof fetch }),
+      file,
+      destDir: "/",
+      session: {
+        uploadId: "session",
+        chunkSize: 8,
+        concurrency: 1,
+        ranges: [[0, 8]],
+        size: 8,
+      },
+    });
+    await expect(promise).resolves.toMatchObject({ path: "fallback.bin" });
+  });
+
+  it("handles a session without ranges and invalid chunk hints", async () => {
+    const { promise } = await startUpload({
+      chunkSize: -1,
+      concurrency: 0,
+      session: {
+        uploadId: "session",
+        chunkSize: 0,
+        concurrency: 0,
+        ranges: null,
+        size: 8,
+      },
+    });
+    await vi.waitFor(() => expect(FakeXHR.all).toHaveLength(1));
+    FakeXHR.all[0]!.finish(200, { received: 8 });
+    await expect(promise).resolves.toMatchObject({ ok: true });
+
+    const initClient = {
+      initWithRetry: vi.fn().mockResolvedValue({
+        upload_id: "new",
+        chunk_size: 4,
+        concurrency: 1,
+        ranges: [[0, 0]],
+        size: 4,
+      }),
+      put: vi.fn().mockResolvedValue({ ranges: [[0, 4]] }),
+      complete: vi.fn().mockResolvedValue({ path: "new.bin" }),
+      status: vi.fn(),
+    };
+    await expect(
+      uploadFile({
+        client: initClient,
+        file: blobOf(4),
+        destDir: "/",
+      }),
+    ).resolves.toMatchObject({ uploadId: "new" });
+
+    FakeXHR.all = [];
+    const receivedZero = await startUpload({
+      client: {
+        put: vi.fn().mockResolvedValue({ received: 0 }),
+        complete: vi.fn().mockResolvedValue({ path: "zero.bin" }),
+        status: vi.fn(),
+      },
+      chunkSize: 8,
+      session: { uploadId: "session", chunkSize: 8, concurrency: 1, ranges: [], size: 8 },
+    });
+    await expect(receivedZero.promise).resolves.toMatchObject({ path: "zero.bin" });
+  });
+
+  it("rejects a 413 at the minimum chunk size", async () => {
+    const { promise } = await startUpload({
+      file: blobOf(100),
+      chunkSize: 100,
+      minChunkBytes: 100,
+      maxChunkBytes: 100,
+      session: {
+        uploadId: "session",
+        chunkSize: 100,
+        concurrency: 1,
+        ranges: [],
+        size: 100,
+      },
+    });
+    FakeXHR.all[0]!.finish(413, { message: "too large" });
+    await expect(promise).rejects.toMatchObject({ status: 413 });
+  });
+
+  it("wraps a non-upload error from put", async () => {
+    const rejectingClient = {
+      put: vi.fn().mockRejectedValue("offline"),
+      complete: vi.fn(),
+      status: vi.fn().mockResolvedValue(null),
+    };
+    const promise = uploadFile({
+      client: rejectingClient,
+      file: blobOf(4),
+      destDir: "/",
+      maxAttempts: 1,
+      session: {
+        uploadId: "session",
+        chunkSize: 4,
+        concurrency: 1,
+        ranges: [],
+        size: 4,
+      },
+    });
+    await expect(promise).rejects.toMatchObject({
+      message: "Upload failed",
+      retryable: true,
+    });
+  });
+
+  it("wraps a non-upload error from complete", async () => {
+    const rejectingClient = {
+      put: vi.fn(),
+      complete: vi.fn().mockRejectedValue("offline"),
+      status: vi.fn().mockResolvedValue(null),
+    };
+    const promise = uploadFile({
+      client: rejectingClient,
+      file: blobOf(4),
+      destDir: "/",
+      maxAttempts: 1,
+      session: {
+        uploadId: "session",
+        chunkSize: 4,
+        concurrency: 1,
+        ranges: [[0, 4]],
+        size: 4,
+      },
+    });
+    await expect(promise).rejects.toMatchObject({ message: "offline" });
+  });
+
+  it("wraps a non-upload error while replacing a lost session", async () => {
+    const fetchImpl = vi.fn().mockRejectedValue("init offline");
+    const { promise } = await startUpload({
+      client: new UploadClient({ fetchImpl: fetchImpl as unknown as typeof fetch }),
+    });
+    await vi.waitFor(() => expect(FakeXHR.all).toHaveLength(1));
+    FakeXHR.all[0]!.finish(404, { detail: "lost" });
+    await expect(promise).rejects.toMatchObject({ message: "Upload failed" });
+  });
 });
 
 describe("request deadlines", () => {
@@ -512,5 +1014,75 @@ describe("request deadlines", () => {
     FakeXHR.all[0]!.finish(200, { ranges: [[0, 4]], received: 4 });
     await vi.advanceTimersByTimeAsync(0);
     await expect(promise).resolves.toMatchObject({ ok: true });
+  });
+
+  it("abandons an unacknowledged response after the response timeout", async () => {
+    vi.useFakeTimers();
+    const { promise } = await startUpload({
+      file: blobOf(4),
+      session: { uploadId: "session", chunkSize: 4, concurrency: 1, ranges: [], size: 4 },
+      idleTimeoutMs: 1000,
+      responseTimeoutMs: 2000,
+      backoffMs: [1],
+    });
+    expect(FakeXHR.all).toHaveLength(1);
+    FakeXHR.all[0]!.bodySent();
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(FakeXHR.all[0]!.aborted).toBe(true);
+    await vi.advanceTimersByTimeAsync(10);
+    FakeXHR.all[1]!.finish(200, { ranges: [[0, 4]] });
+    await vi.advanceTimersByTimeAsync(0);
+    await expect(promise).resolves.toMatchObject({ ok: true });
+  });
+
+  it("cancels during a retry backoff", async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    const { promise } = await startUpload({
+      signal: controller.signal,
+      backoffMs: [10_000],
+      maxAttempts: 2,
+    });
+    FakeXHR.all[0]!.finish(500);
+    await vi.advanceTimersByTimeAsync(10);
+    controller.abort();
+    await expect(promise).rejects.toMatchObject({ code: "ABORTED" });
+  });
+
+  it("cancels before a retry starts and removes an unneeded abort listener", async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    const preAbort = await startUpload({
+      signal: controller.signal,
+      backoffMs: [1000],
+      maxAttempts: 2,
+      callbacks: {
+        onRetry: () => controller.abort(),
+      },
+    });
+    preAbort.promise.catch(() => {});
+    FakeXHR.all[0]!.finish(500);
+    await vi.advanceTimersByTimeAsync(0);
+    await expect(preAbort.promise).rejects.toMatchObject({ code: "ABORTED" });
+
+    FakeXHR.all = [];
+    const liveController = new AbortController();
+    const onListener = vi.spyOn(
+      liveController.signal,
+      "removeEventListener",
+    );
+    const normal = await startUpload({
+      signal: liveController.signal,
+      backoffMs: [1000],
+      chunkSize: 8,
+      session: { uploadId: "session", chunkSize: 8, concurrency: 1, ranges: [], size: 8 },
+    });
+    FakeXHR.all.at(-1)!.finish(500);
+    await vi.advanceTimersByTimeAsync(1000);
+    await vi.waitFor(() => expect(FakeXHR.all).toHaveLength(2));
+    FakeXHR.all[1]!.finish(200, { ranges: [[0, 8]] });
+    await vi.advanceTimersByTimeAsync(0);
+    await expect(normal.promise).resolves.toMatchObject({ ok: true });
+    expect(onListener).toHaveBeenCalled();
   });
 });

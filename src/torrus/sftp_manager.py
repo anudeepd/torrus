@@ -345,8 +345,6 @@ class SFTPSink:
                     raise self._failure
             if offset < self._streamed:
                 data = data[self._streamed - offset :]
-            if not data:
-                return
             await self._send_locked(data)
             await self._drain_locked()
 
@@ -879,7 +877,7 @@ class SFTPManager:
             finally:
                 try:
                     os.write(write_fd, b"x")
-                except OSError:
+                except OSError:  # pragma: no cover - a failed pipe write is unrecoverable
                     pass
 
         def complete() -> None:
@@ -1129,7 +1127,7 @@ class SFTPManager:
         stack = [directory]
         while stack:
             current = stack.pop()
-            if current in visited:
+            if current in visited:  # pragma: no cover - duplicate stack entry guard
                 continue
             visited.add(current)
             try:

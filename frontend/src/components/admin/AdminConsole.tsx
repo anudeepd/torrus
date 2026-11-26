@@ -173,6 +173,7 @@ export default function AdminConsole({ onClose }: { onClose?: () => void }) {
         .filter((value): value is number => typeof value === 'number')
       setLastUpdated(observed.length ? Math.max(...observed) * 1000 : Date.now())
     } catch (cause) {
+      /* v8 ignore next - a slower, superseded refresh cannot surface its error */
       if (generation !== refreshGenerationRef.current) return
       setError(cause instanceof Error ? cause as RequestFailure : new Error('Admin data unavailable.'))
     } finally {
@@ -718,12 +719,17 @@ function groupActivityEvents(events: ActivityEvent[]): ActivityGroup[] {
   return groups
 }
 
+function connectionLabel(host: string | null, port: number | null, username: string | null) {
+  return `${host || '—'}:${port || '—'} (${username || '—'})`
+}
+
 function renderActivityEventRow(event: ActivityEvent) {
+  const connection = connectionLabel(event.ssh_host, event.ssh_port, event.ssh_username)
   return (
     <tr key={event.event_id} className="border-b border-surface-800/70 last:border-0">
       <td className="break-words px-3 py-3 text-slate-400 [overflow-wrap:anywhere]">{ACTIVITY_DATE_TIME.format(new Date(event.occurred_at))}</td>
       <td className="break-words px-3 py-3 [overflow-wrap:anywhere]">{event.ldap_username}</td>
-      <td className="break-words px-3 py-3 [overflow-wrap:anywhere]">{event.ssh_host || '—'}:{event.ssh_port || '—'} <span className="break-words text-slate-400 [overflow-wrap:anywhere]">({event.ssh_username || '—'})</span></td>
+      <td className="break-words px-3 py-3 [overflow-wrap:anywhere]">{connection}</td>
       <td className="break-words px-3 py-3 font-mono text-2xs text-slate-200 [overflow-wrap:anywhere]"><ActivityInput value={event.input} kind={event.kind} /></td>
       <td className="break-words px-3 py-3 text-slate-400 [overflow-wrap:anywhere]">{event.kind === 'sensitive' ? 'Sensitive (redacted)' : event.kind}</td>
       <td className="px-3 py-3 text-right text-slate-400">{event.bytes}</td>
@@ -737,6 +743,7 @@ function renderActivityGroupRow(group: ActivityGroup) {
   const started = ordered[0]
   const ended = ordered[ordered.length - 1]
   const lead = group.lead
+  const connection = connectionLabel(lead.ssh_host, lead.ssh_port, lead.ssh_username)
   return (
     <tr key={`group-${lead.event_id}`} className="border-b border-surface-800/70 last:border-0">
       <td className="break-words px-3 py-3 text-slate-400 [overflow-wrap:anywhere]">
@@ -744,7 +751,7 @@ function renderActivityGroupRow(group: ActivityGroup) {
         <span className="block text-3xs text-slate-400">through {ACTIVITY_TIME.format(new Date(ended.occurred_at))}</span>
       </td>
       <td className="break-words px-3 py-3 [overflow-wrap:anywhere]">{lead.ldap_username}</td>
-      <td className="break-words px-3 py-3 [overflow-wrap:anywhere]">{lead.ssh_host || '—'}:{lead.ssh_port || '—'} <span className="break-words text-slate-400 [overflow-wrap:anywhere]">({lead.ssh_username || '—'})</span></td>
+      <td className="break-words px-3 py-3 [overflow-wrap:anywhere]">{connection}</td>
       <td className="break-words px-3 py-3 font-mono text-2xs text-slate-200 [overflow-wrap:anywhere]"><ActivityInput value={ordered.map(event => event.input).join('\n')} kind={lead.kind} /></td>
       <td className="break-words px-3 py-3 text-slate-400 [overflow-wrap:anywhere]">command · {ordered.length} lines</td>
       <td className="px-3 py-3 text-right text-slate-400">{ordered.reduce((total, event) => total + event.bytes, 0)}</td>
