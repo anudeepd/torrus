@@ -43,18 +43,20 @@ export function evaluateSonarMetrics(measures) {
 }
 
 /**
- * @param {{host: string, project: string, token?: string, fetcher?: typeof fetch}} options
+ * @param {{host: string, project: string, token?: string, pullRequest?: string, fetcher?: typeof fetch}} options
  * @returns {Promise<Record<string, string>>}
  */
 export async function fetchSonarMetrics({
   host,
   project,
   token,
+  pullRequest,
   fetcher = fetch,
 }) {
   const url = new URL("/api/measures/component", host);
   url.searchParams.set("component", project);
   url.searchParams.set("metricKeys", METRICS.join(","));
+  if (pullRequest) url.searchParams.set("pullRequest", pullRequest);
   const headers = { Accept: "application/json" };
   if (token) headers.Authorization = `Bearer ${token}`;
 
@@ -75,10 +77,18 @@ export async function fetchSonarMetrics({
 }
 
 export async function main() {
+  const pullRequestMatch = /^refs\/pull\/(\d+)\//.exec(
+    process.env.GITHUB_REF || "",
+  );
+  const pullRequest =
+    process.env.GITHUB_EVENT_NAME === "pull_request"
+      ? pullRequestMatch?.[1]
+      : undefined;
   const measures = await fetchSonarMetrics({
     host: process.env.SONAR_HOST_URL || DEFAULT_HOST,
     project: process.env.SONAR_PROJECT_KEY || DEFAULT_PROJECT,
     token: process.env.SONAR_TOKEN,
+    pullRequest,
   });
   const failures = evaluateSonarMetrics(measures);
   if (failures.length) {
@@ -88,7 +98,7 @@ export async function main() {
     return;
   }
   console.log(
-    "Sonar quality guard passed: coverage 100%, branch coverage 100%, duplicated lines 0.",
+    `Sonar quality guard passed${pullRequest ? ` for pull request ${pullRequest}` : ""}: coverage 100%, branch coverage 100%, duplicated lines 0.`,
   );
 }
 
