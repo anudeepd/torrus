@@ -751,6 +751,26 @@ def test_paramiko_helpers_tolerate_streams_without_channels():
     assert _connection_probes_blocking(client) == (True, True)
 
 
+def test_load_known_hosts_updates_the_client(monkeypatch):
+    client = MagicMock()
+    monkeypatch.setattr(module, "torrus_host_keys", lambda: {"host": "key"})
+
+    module._load_known_hosts(client)
+
+    client.load_system_host_keys.assert_called_once()
+    client.get_host_keys.return_value.update.assert_called_once_with({"host": "key"})
+
+
+def test_load_known_hosts_tolerates_missing_system_store(monkeypatch):
+    client = MagicMock()
+    client.load_system_host_keys.side_effect = OSError("missing")
+    monkeypatch.setattr(module, "torrus_host_keys", dict)
+
+    module._load_known_hosts(client)
+
+    client.get_host_keys.return_value.update.assert_not_called()
+
+
 def test_connect_helper_configures_transport_and_swallows_probe_failure():
     client = MagicMock()
     transport = MagicMock()

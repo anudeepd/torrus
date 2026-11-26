@@ -299,20 +299,7 @@ class SSHManager:
         try:
             client = paramiko.SSHClient()
 
-            def _load_host_keys() -> None:
-                """Read both stores off the event loop; a large file is real I/O."""
-                try:
-                    client.load_system_host_keys()
-                except _KNOWN_HOSTS_LOAD_ERRORS:
-                    logger.warning(
-                        "Could not read the system known_hosts file; continuing without it",
-                        exc_info=True,
-                    )
-                known = torrus_host_keys()
-                if known:
-                    client.get_host_keys().update(known)
-
-            await asyncio.to_thread(_load_host_keys)
+            await asyncio.to_thread(_load_known_hosts, client)
             client.set_missing_host_key_policy(HostKeyPolicy())
 
             loop = asyncio.get_running_loop()
@@ -1454,6 +1441,20 @@ def _check_tmux_blocking(client: paramiko.SSHClient) -> bool:
             channel = getattr(stream, "channel", None)
             if channel is not None:
                 channel.close()
+
+
+def _load_known_hosts(client: paramiko.SSHClient) -> None:
+    """Read both host-key stores off the event loop; a large file is real I/O."""
+    try:
+        client.load_system_host_keys()
+    except _KNOWN_HOSTS_LOAD_ERRORS:
+        logger.warning(
+            "Could not read the system known_hosts file; continuing without it",
+            exc_info=True,
+        )
+    known = torrus_host_keys()
+    if known:
+        client.get_host_keys().update(known)
 
 
 def _connection_probes_blocking(client: paramiko.SSHClient) -> tuple[bool, bool]:

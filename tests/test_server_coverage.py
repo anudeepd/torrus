@@ -1948,6 +1948,14 @@ def test_admin_hosts_without_configuration_or_host_header(monkeypatch):
     assert server._admin_hosts(request_for(headers={})) == set()
 
 
+def test_private_host_check_tolerates_resolution_failure(monkeypatch):
+    monkeypatch.setattr(
+        server.socket, "getaddrinfo", MagicMock(side_effect=OSError("dns"))
+    )
+
+    assert server._is_private_host("example.com") is False
+
+
 @pytest.mark.asyncio
 async def test_admin_guard_allows_a_valid_mutation(monkeypatch):
     monkeypatch.setattr(server, "_admin_actor", AsyncMock(return_value=("admin", None)))
