@@ -57,7 +57,7 @@ _DEV_MODE = bool(os.getenv("TORRUS_DEV"))
 
 def _dev_socket_origins() -> list[str]:
     return [
-        f"http://{host}:{port}"
+        f"http://{host}:{port}"  # NOSONAR(S5332) local Vite dev origins only.
         for host in ("localhost", "127.0.0.1")
         for port in (8080, *range(5173, 5184))
     ]
@@ -85,7 +85,8 @@ APP_CSP = (
     # source this replaces allowed any host on those schemes.
     "connect-src 'self'; "
     "script-src 'self'; "
-    "style-src 'self' 'unsafe-inline'; "
+    "style-src 'self'; "
+    "style-src-attr 'unsafe-inline'; "
     "img-src 'self' data:; "
     "font-src 'self' data:; "
     "manifest-src 'self'; "
@@ -156,15 +157,17 @@ async def lifespan(_app):
         audit_store.init_db()
     ssh_manager.start_background_tasks()
     sweeper = asyncio.create_task(_sweep_upload_sessions())
-    yield
-    sweeper.cancel()
-    # Await it: a cancelled task that is never awaited leaves its cancellation
-    # unobserved and can surface as a warning at interpreter shutdown.
-    with suppress(asyncio.CancelledError):
-        await sweeper
-    await upload_store.close()
-    await sftp_manager.shutdown()
-    await ssh_manager.stop_background_tasks()
+    try:
+        yield
+    finally:
+        sweeper.cancel()
+        # Await it: a cancelled task that is never awaited leaves its cancellation
+        # unobserved and can surface as a warning at interpreter shutdown.
+        with suppress(asyncio.CancelledError):
+            await sweeper
+        await upload_store.close()
+        await sftp_manager.shutdown()
+        await ssh_manager.stop_background_tasks()
 
 
 async def _sweep_upload_sessions() -> None:
@@ -919,6 +922,38 @@ async def _finish_admin_action(
     return completed or {**record, "status": status, "result": result, "error": error}
 
 
+async def _admin_failure_response(
+    record: dict | None,
+    exc: Exception,
+    *,
+    status_code: int,
+    code: str,
+    message: str | None = None,
+) -> JSONResponse:
+    failure_message = message or str(exc)
+    payload = {"ok": False, "code": code, "message": failure_message}
+    await _finish_admin_action(
+        record or {}, status="failed", result=payload, error=failure_message
+    )
+    return JSONResponse(status_code=status_code, content=payload)
+
+
+async def _admin_policy_failure_response(
+    record: dict | None, exc: Exception
+) -> JSONResponse:
+    if isinstance(exc, PolicyConflict):
+        return await _admin_failure_response(
+            record, exc, status_code=409, code="policy_conflict"
+        )
+    if isinstance(exc, (PolicyError, OSError)):
+        return await _admin_failure_response(
+            record, exc, status_code=503, code="policy_unavailable"
+        )
+    return await _admin_failure_response(
+        record, exc, status_code=501, code="revocation_unsupported"
+    )
+
+
 async def _emit_admin_event(kind: str, data: dict) -> None:
     async with _admin_stream_lock:
         sequence = _admin_stream_sequence.advance()
@@ -956,7 +991,7 @@ async def admin_csrf(request: Request):
         token,
         max_age=_ADMIN_CSRF_TTL,
         secure=secure,
-        httponly=False,
+        httponly=True,
         samesite="strict",
     )
     return response
@@ -1400,18 +1435,8 @@ async def admin_add_user(request: Request):
         policy = await _policy_mutation(normalized, True, expected)
         _PENDING_DISABLED_USERS.discard(normalized)
         _apply_live_ldap_allowlist(policy["allowed_users"])
-    except PolicyConflict as exc:
-        payload = {"ok": False, "code": "policy_conflict", "message": str(exc)}
-        await _finish_admin_action(
-            record or {}, status="failed", result=payload, error=str(exc)
-        )
-        return JSONResponse(status_code=409, content=payload)
-    except (PolicyError, OSError) as exc:
-        payload = {"ok": False, "code": "policy_unavailable", "message": str(exc)}
-        await _finish_admin_action(
-            record or {}, status="failed", result=payload, error=str(exc)
-        )
-        return JSONResponse(status_code=503, content=payload)
+    except (PolicyConflict, PolicyError, OSError) as exc:
+        return await _admin_policy_failure_response(record, exc)
     payload = {
         "ok": True,
         "policy_state": "allowed",
@@ -1465,35 +1490,17 @@ async def admin_disable_user(username: str, request: Request):
     try:
         revoked_cookies, closed_tabs = await _revoke_ldap_user(normalized)
         policy = await _policy_mutation(normalized, False, expected)
-    except RuntimeError as exc:
-        payload = {"ok": False, "code": "revocation_unsupported", "message": str(exc)}
-        await _finish_admin_action(
-            record or {}, status="failed", result=payload, error=str(exc)
-        )
-        return JSONResponse(status_code=501, content=payload)
-    except PolicyConflict as exc:
-        payload = {"ok": False, "code": "policy_conflict", "message": str(exc)}
-        await _finish_admin_action(
-            record or {}, status="failed", result=payload, error=str(exc)
-        )
-        return JSONResponse(status_code=409, content=payload)
-    except (PolicyError, OSError) as exc:
-        payload = {"ok": False, "code": "policy_unavailable", "message": str(exc)}
-        await _finish_admin_action(
-            record or {}, status="failed", result=payload, error=str(exc)
-        )
-        return JSONResponse(status_code=503, content=payload)
-    except Exception:
+    except (PolicyConflict, PolicyError, OSError, RuntimeError) as exc:
+        return await _admin_policy_failure_response(record, exc)
+    except Exception as exc:
         logger.exception("LDAP user revocation failed for admin policy change")
-        payload = {
-            "ok": False,
-            "code": "revocation_failed",
-            "message": "User policy was not changed because session revocation failed.",
-        }
-        await _finish_admin_action(
-            record or {}, status="failed", result=payload, error=payload["message"]
+        return await _admin_failure_response(
+            record,
+            exc,
+            status_code=503,
+            code="revocation_failed",
+            message="User policy was not changed because session revocation failed.",
         )
-        return JSONResponse(status_code=503, content=payload)
     _PENDING_DISABLED_USERS.add(normalized)
     _apply_live_ldap_allowlist(policy["allowed_users"])
     payload = {
@@ -1539,24 +1546,8 @@ async def admin_enable_user(username: str, request: Request):
     try:
         policy = await _policy_mutation(normalized, True, expected)
         await _restore_ldap_user(normalized)
-    except RuntimeError as exc:
-        payload = {"ok": False, "code": "revocation_unsupported", "message": str(exc)}
-        await _finish_admin_action(
-            record or {}, status="failed", result=payload, error=str(exc)
-        )
-        return JSONResponse(status_code=501, content=payload)
-    except PolicyConflict as exc:
-        payload = {"ok": False, "code": "policy_conflict", "message": str(exc)}
-        await _finish_admin_action(
-            record or {}, status="failed", result=payload, error=str(exc)
-        )
-        return JSONResponse(status_code=409, content=payload)
-    except (PolicyError, OSError) as exc:
-        payload = {"ok": False, "code": "policy_unavailable", "message": str(exc)}
-        await _finish_admin_action(
-            record or {}, status="failed", result=payload, error=str(exc)
-        )
-        return JSONResponse(status_code=503, content=payload)
+    except (PolicyConflict, PolicyError, OSError, RuntimeError) as exc:
+        return await _admin_policy_failure_response(record, exc)
     _PENDING_DISABLED_USERS.discard(normalized)
     _apply_live_ldap_allowlist(policy["allowed_users"])
     payload = {
@@ -2125,7 +2116,7 @@ async def on_session_register(sid, data):
 # Shared address space (RFC 6598): carrier NAT and overlay networks such as
 # Tailscale. `ipaddress` does not treat it as private, but it is not reachable
 # from the public internet either, so it is the same pivot as a LAN address.
-_SHARED_ADDRESS_SPACE = ipaddress.ip_network("100.64.0.0/10")
+_SHARED_ADDRESS_SPACE = ipaddress.ip_network("100.64.0.0/10")  # NOSONAR(S1313) RFC 6598 SSRF guard.
 
 
 def _is_private_host(host: str) -> bool:

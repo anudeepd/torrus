@@ -559,7 +559,9 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
       }
     }
 
-    init()
+    void init().catch(error => {
+      console.error('Terminal initialization failed', error)
+    })
 
     return () => {
       cancelled = true

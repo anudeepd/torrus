@@ -19,6 +19,8 @@ def test_app_csp_allows_self_fonts_and_websockets():
     assert "font-src 'self' data:" in APP_CSP
     assert "connect-src 'self';" in APP_CSP
     assert "ws:" not in APP_CSP.split("connect-src")[1].split(";")[0]
+    assert "style-src 'self';" in APP_CSP
+    assert "style-src-attr 'unsafe-inline'" in APP_CSP
     assert "frame-ancestors 'none'" in APP_CSP
     assert "form-action 'self'" in APP_CSP
     assert "object-src 'none'" in APP_CSP

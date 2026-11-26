@@ -69,6 +69,61 @@ class TestServeCommand:
         assert captured_args["target"] is cli_module.webbrowser.open
         assert "127.0.0.1:8080" in captured_args["args"][0]
 
+    def test_serve_https_uses_https_browser_url_and_tls(self, tmp_path):
+        from torrus.cli import serve
+
+        key = tmp_path / "key.pem"
+        cert = tmp_path / "cert.pem"
+        key.write_text("key")
+        cert.write_text("cert")
+        captured_args = {}
+
+        class FakeTimer:
+            def __init__(self, delay, target, args=()):
+                captured_args["delay"] = delay
+                captured_args["target"] = target
+                captured_args["args"] = args
+
+            def start(self):
+                pass
+
+        runner = CliRunner()
+        with (
+            patch("torrus.cli.threading.Timer", FakeTimer),
+            patch("torrus.cli.uvicorn.run") as mock_uvicorn,
+        ):
+            result = runner.invoke(
+                serve,
+                [
+                    "--ssl-keyfile",
+                    str(key),
+                    "--ssl-certfile",
+                    str(cert),
+                ],
+            )
+
+        assert result.exit_code == 0, result.output
+        assert captured_args["args"][0].startswith("https://")
+        _args, kwargs = mock_uvicorn.call_args
+        assert kwargs["ssl_keyfile"] == str(key)
+        assert kwargs["ssl_certfile"] == str(cert)
+
+    def test_serve_rejects_a_partial_tls_configuration(self, tmp_path):
+        from torrus.cli import serve
+
+        key = tmp_path / "key.pem"
+        key.write_text("key")
+
+        runner = CliRunner()
+        with patch("torrus.cli.uvicorn.run") as mock_uvicorn:
+            result = runner.invoke(
+                serve, ["--ssl-keyfile", str(key), "--no-browser"]
+            )
+
+        assert result.exit_code == 2
+        assert "must be provided together" in result.output
+        mock_uvicorn.assert_not_called()
+
     def test_serve_ldap_config(self, tmp_path):
         from torrus.cli import serve
 

@@ -71,13 +71,14 @@ function EditModal({ server, onSave, onClose }: EditModalProps) {
   const [port, setPort] = useState(server.port.toString())
   const [username, setUsername] = useState(server.username)
   const [error, setError] = useState('')
+  const nameInputRef = useRef<HTMLInputElement>(null)
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault()
     setError('')
     if (!host.trim()) { setError('Host is required.'); return }
     if (!username.trim()) { setError('Username is required.'); return }
-    const parsedPort = parseInt(port, 10)
+    const parsedPort = Number.parseInt(port, 10)
     if (!parsedPort || parsedPort < 1 || parsedPort > 65535) { setError('Port must be 1–65535.'); return }
 
     const ok = onSave({
@@ -97,7 +98,7 @@ function EditModal({ server, onSave, onClose }: EditModalProps) {
   const labelCls = 'text-xs text-slate-400 font-medium'
 
   return (
-    <Dialog label="Edit session" onClose={onClose} className="w-80 gap-4">
+    <Dialog label="Edit session" onClose={onClose} initialFocus={nameInputRef} className="w-80 gap-4">
         <div className="flex items-center gap-2">
           <Pencil className="size-4 text-brand-400" aria-hidden="true" />
           <h2 className="text-sm font-semibold text-slate-200 text-balance">Edit session</h2>
@@ -107,6 +108,7 @@ function EditModal({ server, onSave, onClose }: EditModalProps) {
           <div className="flex flex-col gap-1">
             <label htmlFor="edit-session-name" className={labelCls}>Name</label>
             <input
+              ref={nameInputRef}
               id="edit-session-name"
               name="name"
               className={inputCls}
@@ -115,7 +117,6 @@ function EditModal({ server, onSave, onClose }: EditModalProps) {
               onChange={e => setName(e.target.value)}
               spellCheck={false}
               autoComplete="off"
-              autoFocus
             />
           </div>
 

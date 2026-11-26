@@ -1,6 +1,7 @@
 # Python
 __pycache__/
 *.py[cod]
+.coverage
 *.egg-info/
 dist/
 build/
@@ -33,6 +34,9 @@ frontend/test-results/
 # to the config and reappears after every build.
 *.tsbuildinfo
 /node_modules/
+# Test coverage reports.
+coverage/
+.scannerwork/
 
 # Project specific
 torrus.log

@@ -412,6 +412,7 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
   const fileInputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
   const pathInputRef = useRef<HTMLInputElement>(null)
+  const renameInputRef = useRef<HTMLInputElement>(null)
   const folderInputRef = useRef<HTMLInputElement>(null)
   const contextMenuRef = useRef<HTMLDivElement>(null)
   const contextMenuTriggerRef = useRef<HTMLElement | null>(null)
@@ -719,6 +720,10 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
     setRenameValue(entry.name)
     setContextMenu(null)
   }, [])
+
+  useEffect(() => {
+    if (renamePath !== null) renameInputRef.current?.focus()
+  }, [renamePath])
 
   const confirmRename = useCallback(() => {
     if (!renamePath || !renameValue.trim()) {
@@ -1239,7 +1244,7 @@ export default function SFTPBrowser({ tabId, sourceTabId, socket }: SFTPBrowserP
                   <div className="min-w-0">
                   {renamePath === entry.path ? (
                     <input
-                      autoFocus
+                      ref={renameInputRef}
                       name="rename"
                       autoComplete="off"
                       value={renameValue}

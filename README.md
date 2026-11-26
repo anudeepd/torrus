@@ -54,6 +54,11 @@ Options:
 --log-file PATH          Write the server log to a file as well as stderr.
 ```
 
+Pass `--ssl-keyfile` and `--ssl-certfile` together to serve HTTPS directly; Torrus
+rejects a partial TLS configuration. When TLS ends at a reverse proxy, run Torrus
+over its private HTTP hop and set `proxy.secure_cookies` for the browser-facing
+scheme. Plain HTTP deployments must use `proxy.secure_cookies: false`.
+
 ### Connecting to servers on your own network
 
 Torrus refuses targets that are not publicly routable by default: private,

@@ -217,15 +217,11 @@ class SSHManager:
         self._tasks.append(asyncio.create_task(self._cleanup_loop()))
 
     async def stop_background_tasks(self):
-        for task in self._tasks:
+        tasks, self._tasks = self._tasks, []
+        for task in tasks:
             if not task.done():
                 task.cancel()
-        for task in self._tasks:
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
-        self._tasks.clear()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
         for key in list(self._sessions.keys()):
             await self._destroy_session(key)
@@ -1129,8 +1125,6 @@ class SSHManager:
                 data = await loop.run_in_executor(
                     self._ssh_executor, _blocking_read, session.channel
                 )
-            except asyncio.CancelledError:
-                return
             except Exception:
                 logger.warning(
                     "Read error for %s/%s",
@@ -1249,7 +1243,7 @@ class SSHManager:
             except asyncio.CancelledError:
                 if request is not None and not request.completion.done():
                     request.completion.set_result("failed")
-                return
+                raise
             except Exception:
                 logger.warning(
                     "Write error for %s/%s",

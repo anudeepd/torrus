@@ -6,6 +6,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException
 
+from torrus.admin_state import PolicyConflict, PolicyError
+
 
 def test_dev_socket_origins_allow_local_torrus_server():
     from torrus.server import _dev_socket_origins
@@ -13,6 +15,90 @@ def test_dev_socket_origins_allow_local_torrus_server():
     origins = _dev_socket_origins()
     assert "http://localhost:8080" in origins
     assert "http://127.0.0.1:8080" in origins
+
+
+def test_ldap_cookie_name_tracks_http_and_https(monkeypatch):
+    import torrus.server as server_module
+
+    proxy = SimpleNamespace(session_cookie_name="torrus_session", secure_cookies=False)
+    monkeypatch.setattr(
+        server_module, "_ldap_config", SimpleNamespace(proxy=proxy)
+    )
+    assert server_module._ldap_cookie_name() == "torrus_session"
+
+    proxy.secure_cookies = True
+    assert server_module._ldap_cookie_name() == "__Host-torrus_session"
+
+
+@pytest.mark.asyncio
+async def test_lifespan_closes_background_resources(monkeypatch):
+    import torrus.server as server_module
+
+    monkeypatch.setattr(server_module.ssh_manager, "start_background_tasks", MagicMock())
+    monkeypatch.setattr(
+        server_module.ssh_manager, "stop_background_tasks", AsyncMock()
+    )
+    monkeypatch.setattr(server_module.upload_store, "close", AsyncMock())
+    monkeypatch.setattr(server_module.sftp_manager, "shutdown", AsyncMock())
+
+    async with server_module.lifespan(None):
+        pass
+
+    server_module.ssh_manager.stop_background_tasks.assert_awaited_once()
+    server_module.upload_store.close.assert_awaited_once()
+    server_module.sftp_manager.shutdown.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_admin_csrf_cookie_is_http_only(monkeypatch):
+    import json
+
+    import torrus.server as server_module
+
+    monkeypatch.setattr(
+        server_module, "_admin_guard", AsyncMock(return_value=("admin", None))
+    )
+    monkeypatch.setattr(
+        server_module,
+        "_ldap_config",
+        SimpleNamespace(proxy=SimpleNamespace(secure_cookies=True)),
+    )
+
+    response = await server_module.admin_csrf(MagicMock())
+    token = json.loads(response.body)["token"]
+    try:
+        cookie = response.headers["set-cookie"].lower()
+        assert "httponly" in cookie
+        assert "secure" in cookie
+        assert "samesite=strict" in cookie
+    finally:
+        server_module._admin_csrf_tokens.pop(token, None)
+
+
+@pytest.mark.asyncio
+async def test_admin_csrf_cookie_works_on_plain_http(monkeypatch):
+    import json
+
+    import torrus.server as server_module
+
+    monkeypatch.setattr(
+        server_module, "_admin_guard", AsyncMock(return_value=("admin", None))
+    )
+    monkeypatch.setattr(
+        server_module,
+        "_ldap_config",
+        SimpleNamespace(proxy=SimpleNamespace(secure_cookies=False)),
+    )
+
+    response = await server_module.admin_csrf(MagicMock())
+    token = json.loads(response.body)["token"]
+    try:
+        cookie = response.headers["set-cookie"].lower()
+        assert "httponly" in cookie
+        assert "secure" not in cookie
+        assert "samesite=strict" in cookie
+    finally:
+        server_module._admin_csrf_tokens.pop(token, None)
 
 
 class TestServerConfig:
@@ -1191,6 +1277,36 @@ async def test_add_user_updates_live_allowlist_without_restart(monkeypatch):
     assert ldap_settings.allowed_users == ["alice", "bob"]
 
 
+@pytest.mark.asyncio
+async def test_add_user_policy_conflict_returns_409(monkeypatch):
+    import torrus.server as server_module
+
+    request = MagicMock()
+    request.json = AsyncMock(return_value={"username": "bob"})
+    monkeypatch.setattr(
+        server_module, "_admin_guard", AsyncMock(return_value=("admin", None))
+    )
+    monkeypatch.setattr(server_module, "_ldap_config_path", "/tmp/ldap.yaml")
+    monkeypatch.setattr(
+        server_module,
+        "_begin_admin_action",
+        AsyncMock(return_value=({"action_id": "action-1"}, False, None)),
+    )
+    monkeypatch.setattr(
+        server_module,
+        "_policy_mutation",
+        AsyncMock(side_effect=PolicyConflict("changed")),
+    )
+    monkeypatch.setattr(
+        server_module, "_finish_admin_action", AsyncMock(return_value={})
+    )
+
+    response = await server_module.admin_add_user(request)
+
+    assert response.status_code == 409
+    assert '"code":"policy_conflict"' in response.body.decode()
+
+
 class TestSocketDisconnect:
     """Socket disconnect cleanup must await async SSH manager cleanup."""
 
@@ -1235,6 +1351,79 @@ class TestSocketDisconnect:
 
 
 class TestAdminUserRevocation:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("handler_name", "error", "status_code", "code"),
+        [
+            ("admin_disable_user", PolicyConflict("changed"), 409, "policy_conflict"),
+            ("admin_disable_user", PolicyError("unavailable"), 503, "policy_unavailable"),
+            ("admin_enable_user", PolicyConflict("changed"), 409, "policy_conflict"),
+            ("admin_enable_user", PolicyError("unavailable"), 503, "policy_unavailable"),
+            ("admin_enable_user", RuntimeError("unsupported"), 501, "revocation_unsupported"),
+        ],
+    )
+    async def test_policy_failures_keep_their_specific_response(
+        self, monkeypatch, handler_name, error, status_code, code
+    ):
+        import torrus.server as server_module
+
+        request = MagicMock()
+        request.json = AsyncMock(return_value={})
+        monkeypatch.setattr(
+            server_module, "_admin_guard", AsyncMock(return_value=("admin", None))
+        )
+        monkeypatch.setattr(
+            server_module,
+            "_begin_admin_action",
+            AsyncMock(return_value=({"action_id": "action-1"}, False, None)),
+        )
+        monkeypatch.setattr(
+            server_module, "_revoke_ldap_user", AsyncMock(return_value=(0, 0))
+        )
+        monkeypatch.setattr(
+            server_module, "_policy_mutation", AsyncMock(side_effect=error)
+        )
+        monkeypatch.setattr(
+            server_module, "_finish_admin_action", AsyncMock(return_value={})
+        )
+
+        response = await getattr(server_module, handler_name)("bob", request)
+
+        assert response.status_code == status_code
+        assert f'"code":"{code}"' in response.body.decode()
+
+    @pytest.mark.asyncio
+    async def test_disable_reports_unexpected_revocation_failure(
+        self, monkeypatch
+    ):
+        import torrus.server as server_module
+
+        request = MagicMock()
+        request.json = AsyncMock(return_value={})
+        monkeypatch.setattr(
+            server_module, "_admin_guard", AsyncMock(return_value=("admin", None))
+        )
+        monkeypatch.setattr(
+            server_module,
+            "_begin_admin_action",
+            AsyncMock(return_value=({"action_id": "action-1"}, False, None)),
+        )
+        monkeypatch.setattr(
+            server_module,
+            "_revoke_ldap_user",
+            AsyncMock(side_effect=ValueError("boom")),
+        )
+        monkeypatch.setattr(
+            server_module, "_finish_admin_action", AsyncMock(return_value={})
+        )
+
+        response = await server_module.admin_disable_user("bob", request)
+
+        assert response.status_code == 503
+        body = response.body.decode()
+        assert '"code":"revocation_failed"' in body
+        assert "User policy was not changed" in body
+
     @pytest.mark.asyncio
     async def test_disable_is_feature_disabled_without_user_revocation(
         self, monkeypatch, tmp_path

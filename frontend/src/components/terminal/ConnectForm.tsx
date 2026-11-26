@@ -44,7 +44,7 @@ export default function ConnectForm({
       usernameRef.current?.focus()
       return
     }
-    const parsedPort = parseInt(port, 10)
+    const parsedPort = Number.parseInt(port, 10)
     if (!Number.isFinite(parsedPort) || parsedPort < 1 || parsedPort > 65535) {
       setLocalError('Port must be 1-65535.')
       portRef.current?.focus()
