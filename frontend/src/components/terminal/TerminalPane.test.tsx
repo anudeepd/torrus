@@ -5,7 +5,16 @@ import { useTerminalStore } from '@/store/terminalStore'
 import { useSettingsStore } from '@/store/settingsStore'
 import { useBroadcastStore } from '@/store/broadcastStore'
 import { createMockSocket } from '@/test/mocks/socket'
-import { mockSearchAddonInstances, mockTerminalInstances, clearMockTerminalInstances, setMockFitDimensions } from '@/test/mocks/xterm'
+import {
+  mockSearchAddonInstances,
+  mockTerminalInstances,
+  mockWebLinkHandlers,
+  clearMockTerminalInstances,
+  setMockFitDimensions,
+  setMockTerminalConstructorError,
+  setMockTerminalHasFallbackTextarea,
+  setMockTerminalHasTextarea,
+} from '@/test/mocks/xterm'
 import { mockResizeObserverInstances } from '@/test/setup'
 import { streamPosition } from '@/lib/terminalStream'
 import TerminalPane from './TerminalPane'
@@ -53,6 +62,7 @@ describe('TerminalPane', () => {
   })
 
   afterEach(() => {
+    vi.useRealTimers()
     setUserAgent(originalUserAgent)
     act(() => {
       useTerminalStore.setState({ sessionId: '', tabs: [], activeTabId: null })
@@ -1146,5 +1156,729 @@ describe('TerminalPane', () => {
       socket._trigger('ssh:connected', { tab_id: tabId })
     })
     expect(useTerminalStore.getState().tabs[0]?.status).toBe('connected')
+  })
+
+  describe('coverage edges', () => {
+    async function renderConnected(tabId: string) {
+      act(() => seedStores(tabId, 'connected'))
+      const socket = createMockSocket()
+      const view = render(
+        <TerminalPane
+          tabId={tabId}
+          isActive={true}
+          focused={true}
+          socket={socket as unknown as Socket}
+        />,
+      )
+      await waitFor(() => expect(mockTerminalInstances.length).toBeGreaterThan(0))
+      return { socket, term: mockTerminalInstances.at(-1)!, view }
+    }
+
+    it('maps every custom key path to the right terminal action', async () => {
+      const tabId = 'keys'
+      const { socket, term } = await renderConnected(tabId)
+      const tabButton = document.createElement('button')
+      tabButton.id = `torrus-tab-${tabId}`
+      document.body.appendChild(tabButton)
+
+      expect(term.simulateKey({ key: 'F6' })).toBe(false)
+      expect(document.activeElement).toBe(tabButton)
+
+      socket.emit.mockClear()
+      expect(term.simulateKey({ key: 'Backspace', altKey: true })).toBe(false)
+      expect(socket.emit).toHaveBeenCalledWith('ssh:input', expect.objectContaining({ data: '\x1b\x7f' }))
+
+      socket.emit.mockClear()
+      expect(term.simulateKey({ key: 'y', ctrlKey: true })).toBe(false)
+      expect(socket.emit).toHaveBeenCalledWith('ssh:input', expect.objectContaining({ data: '\x19' }))
+
+      socket.emit.mockClear()
+      expect(term.simulateKey({ key: 'a', repeat: true })).toBe(false)
+      expect(socket.emit).toHaveBeenCalledWith('ssh:input', expect.objectContaining({ data: 'a' }))
+
+      for (const init of [
+        { key: 'w', metaKey: true },
+        { key: 't', metaKey: true },
+        { key: ',', metaKey: true },
+        { key: 'Tab', ctrlKey: true },
+      ]) {
+        expect(term.simulateKey(init)).toBe(false)
+      }
+
+      expect(term.simulateKey({ key: 'f', ctrlKey: true })).toBe(false)
+      expect(await screen.findByRole('textbox', { name: 'Find in terminal' })).toBeInTheDocument()
+      fireEvent.keyDown(screen.getByRole('textbox', { name: 'Find in terminal' }), { key: 'Escape' })
+
+      term.selection = true
+      expect(term.simulateKey({ key: 'c', ctrlKey: true })).toBe(false)
+      expect(term.simulateKey({ key: 'c', metaKey: true })).toBe(false)
+      expect(term.simulateKey({ key: 'v', metaKey: true })).toBe(false)
+
+      socket.emit.mockClear()
+      term.rows = 0
+      expect(term.simulateKey({ key: 'l', ctrlKey: true })).toBe(false)
+      expect(socket.emit).toHaveBeenCalledWith('ssh:input', expect.objectContaining({ data: '\x0c' }))
+
+      term.rows = 24
+      socket.emit.mockClear()
+      expect(term.simulateKey({ key: 'l', ctrlKey: true })).toBe(false)
+      expect(term.write).toHaveBeenCalled()
+      expect(socket.emit).toHaveBeenCalledWith('ssh:input', expect.objectContaining({ data: '\x0c' }))
+      tabButton.remove()
+    })
+
+    it('pastes plain and bracketed text and ignores a paste with no data', async () => {
+      const { socket, term } = await renderConnected('paste')
+      const textarea = term.textarea!
+
+      const paste = (text: string | null, bracketed = false) => {
+        term.modes.bracketedPasteMode = bracketed
+        const event = new Event('paste', { bubbles: true, cancelable: true }) as ClipboardEvent
+        Object.defineProperty(event, 'clipboardData', {
+          value: text === null ? undefined : { getData: () => text },
+        })
+        textarea.dispatchEvent(event)
+        return event
+      }
+
+      socket.emit.mockClear()
+      const plain = paste('one\ntwo')
+      expect(plain.defaultPrevented).toBe(true)
+      expect(socket.emit).toHaveBeenCalledWith('ssh:input', expect.objectContaining({ data: 'one\rtwo' }))
+
+      socket.emit.mockClear()
+      paste('bracketed', true)
+      expect(socket.emit).toHaveBeenCalledWith(
+        'ssh:input',
+        expect.objectContaining({ data: '\x1b[200~bracketed\x1b[201~' }),
+      )
+
+      socket.emit.mockClear()
+      paste(null)
+      expect(socket.emit).not.toHaveBeenCalled()
+    })
+
+    it('reuses the cached terminal paste and data handlers on remount', async () => {
+      const tabId = 'cached'
+      act(() => seedStores(tabId, 'connected'))
+      const socket = createMockSocket()
+      const first = render(
+        <TerminalPane tabId={tabId} isActive={true} focused={true} socket={socket as unknown as Socket} />,
+      )
+      await waitFor(() => expect(mockTerminalInstances.length).toBe(1))
+      const term = mockTerminalInstances[0]
+      first.unmount()
+
+      render(
+        <TerminalPane tabId={tabId} isActive={true} focused={true} socket={socket as unknown as Socket} />,
+      )
+      await waitFor(() => expect(mockTerminalInstances.length).toBe(1))
+
+      socket.emit.mockClear()
+      term.textarea?.dispatchEvent(new FocusEvent('focus'))
+      term.textarea?.dispatchEvent(new FocusEvent('blur'))
+      const event = new Event('paste', { bubbles: true, cancelable: true }) as ClipboardEvent
+      Object.defineProperty(event, 'clipboardData', { value: { getData: () => 'cached' } })
+      term.textarea?.dispatchEvent(event)
+      expect(socket.emit).toHaveBeenCalledWith('ssh:input', expect.objectContaining({ data: 'cached' }))
+
+      term.simulateData('typed')
+      expect(socket.emit).toHaveBeenCalledWith('ssh:input', expect.objectContaining({ data: 'typed' }))
+
+      const offsetParent = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetParent')
+      const clientWidth = Object.getOwnPropertyDescriptor(Element.prototype, 'clientWidth')
+      const clientHeight = Object.getOwnPropertyDescriptor(Element.prototype, 'clientHeight')
+      Object.defineProperty(HTMLElement.prototype, 'offsetParent', { configurable: true, get: () => document.body })
+      Object.defineProperty(Element.prototype, 'clientWidth', { configurable: true, get: () => 800 })
+      Object.defineProperty(Element.prototype, 'clientHeight', { configurable: true, get: () => 600 })
+      try {
+        socket.emit.mockClear()
+        act(() => mockResizeObserverInstances.at(-1)?.trigger())
+        await act(async () => { await new Promise(resolve => requestAnimationFrame(resolve)) })
+        expect(socket.emit).toHaveBeenCalledWith('terminal:resize', expect.anything())
+      } finally {
+        if (offsetParent) Object.defineProperty(HTMLElement.prototype, 'offsetParent', offsetParent)
+        else delete (HTMLElement.prototype as { offsetParent?: unknown }).offsetParent
+        if (clientWidth) Object.defineProperty(Element.prototype, 'clientWidth', clientWidth)
+        else delete (Element.prototype as { clientWidth?: unknown }).clientWidth
+        if (clientHeight) Object.defineProperty(Element.prototype, 'clientHeight', clientHeight)
+        else delete (Element.prototype as { clientHeight?: unknown }).clientHeight
+      }
+    })
+
+    it('keeps a terminal usable when the font probe fails', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const fonts = document.fonts.load as unknown as ReturnType<typeof vi.fn>
+      fonts.mockRejectedValueOnce(new Error('missing'))
+      const { term } = await renderConnected('font-fail')
+      expect(term).toBeDefined()
+      expect(warn).toHaveBeenCalledWith(
+        'Failed to preload JetBrains Mono font; terminal may use fallback',
+      )
+    })
+
+    it('blocks script links and opens external links safely', async () => {
+      const open = vi.spyOn(window, 'open').mockImplementation(() => null)
+      await renderConnected('links')
+      const handler = mockWebLinkHandlers.at(-1)!
+
+      for (const uri of ['javascript:alert(1)', 'data:text/html,x', 'vbscript:msgbox']) {
+        const event = new MouseEvent('click', { cancelable: true })
+        handler(event, uri)
+        expect(event.defaultPrevented).toBe(true)
+      }
+      expect(open).not.toHaveBeenCalled()
+
+      handler(new MouseEvent('click'), 'https://example.com')
+      expect(open).toHaveBeenCalledWith('https://example.com', '_blank', 'noopener,noreferrer')
+    })
+
+    it('drives find results, keyboard shortcuts, escape handling, and close', async () => {
+      await renderConnected('search')
+      fireEvent.keyDown(window, { key: 'f', ctrlKey: true })
+      const input = await screen.findByRole('textbox', { name: 'Find in terminal' })
+      const addon = mockSearchAddonInstances.at(-1)!
+      await act(async () => { await new Promise(resolve => requestAnimationFrame(resolve)) })
+      expect(document.activeElement).toBe(input)
+      fireEvent.keyDown(input, { key: 'x' })
+
+      fireEvent.click(screen.getByRole('button', { name: 'Next match' }))
+      fireEvent.change(input, { target: { value: 'x' } })
+      expect(addon.findNext).toHaveBeenCalledWith('x', { incremental: true })
+      expect(screen.queryByText('No match')).not.toBeInTheDocument()
+      addon.findNext.mockReturnValueOnce(false)
+      fireEvent.change(input, { target: { value: 'zzz' } })
+      expect(screen.getByText('No match')).toBeInTheDocument()
+      addon.findNext.mockImplementationOnce(() => undefined as unknown as boolean)
+      fireEvent.change(input, { target: { value: 'yyy' } })
+      expect(screen.getByText('No match')).toBeInTheDocument()
+
+      fireEvent.click(screen.getByRole('button', { name: 'Previous match' }))
+      expect(addon.findPrevious).toHaveBeenCalled()
+      fireEvent.click(screen.getByRole('button', { name: 'Next match' }))
+      fireEvent.keyDown(input, { key: 'Enter' })
+      fireEvent.keyDown(input, { key: 'Enter', shiftKey: true })
+      fireEvent.click(screen.getByRole('button', { name: 'Close find' }))
+      expect(screen.queryByRole('textbox', { name: 'Find in terminal' })).not.toBeInTheDocument()
+      expect(addon.clearDecorations).toHaveBeenCalled()
+
+      fireEvent.keyDown(window, { key: 'f', ctrlKey: true })
+      const dialog = document.createElement('div')
+      dialog.setAttribute('role', 'dialog')
+      dialog.tabIndex = -1
+      document.body.appendChild(dialog)
+      dialog.focus()
+      fireEvent.keyDown(dialog, { key: 'Escape' })
+      expect(screen.getByRole('textbox', { name: 'Find in terminal' })).toBeInTheDocument()
+      fireEvent.keyDown(window, { key: 'Escape' })
+      expect(screen.queryByRole('textbox', { name: 'Find in terminal' })).not.toBeInTheDocument()
+      dialog.remove()
+
+      fireEvent.keyDown(window, { key: 'f', ctrlKey: true })
+      const reopened = await screen.findByRole('textbox', { name: 'Find in terminal' })
+      fireEvent.keyDown(reopened, { key: 'Escape' })
+      expect(screen.queryByRole('textbox', { name: 'Find in terminal' })).not.toBeInTheDocument()
+    })
+
+    it('applies settings changes to the live terminal and refits when visible', async () => {
+      const { term } = await renderConnected('settings')
+      act(() => useSettingsStore.setState({ scrollbackLines: 1234, fontSize: 18 }))
+      expect(term.options.scrollback).toBe(1234)
+      expect(term.options.fontSize).toBe(18)
+
+      const offsetParent = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetParent')
+      const clientWidth = Object.getOwnPropertyDescriptor(Element.prototype, 'clientWidth')
+      const clientHeight = Object.getOwnPropertyDescriptor(Element.prototype, 'clientHeight')
+      Object.defineProperty(HTMLElement.prototype, 'offsetParent', { configurable: true, get: () => document.body })
+      Object.defineProperty(Element.prototype, 'clientWidth', { configurable: true, get: () => 800 })
+      Object.defineProperty(Element.prototype, 'clientHeight', { configurable: true, get: () => 600 })
+      try {
+        act(() => useSettingsStore.setState({ fontSize: 19 }))
+        expect(term.options.fontSize).toBe(19)
+      } finally {
+        if (offsetParent) Object.defineProperty(HTMLElement.prototype, 'offsetParent', offsetParent)
+        else delete (HTMLElement.prototype as { offsetParent?: unknown }).offsetParent
+        if (clientWidth) Object.defineProperty(Element.prototype, 'clientWidth', clientWidth)
+        else delete (Element.prototype as { clientWidth?: unknown }).clientWidth
+        if (clientHeight) Object.defineProperty(Element.prototype, 'clientHeight', clientHeight)
+        else delete (Element.prototype as { clientHeight?: unknown }).clientHeight
+      }
+    })
+
+    it('writes string, buffer, and reset output and rejects unknown payloads', async () => {
+      const { socket, term } = await renderConnected('output-types')
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+      act(() => socket._trigger('ssh:output', { tab_id: 'output-types', data: 'plain' }))
+      expect(term.write).toHaveBeenCalledWith('plain')
+
+      term.write.mockClear()
+      const buffer = new window.ArrayBuffer(6)
+      new Uint8Array(buffer).set([98, 117, 102, 102, 101, 114])
+      act(() => socket._trigger('ssh:output', { tab_id: 'output-types', data: buffer }))
+      expect(term.write).toHaveBeenCalled()
+
+      term.write.mockClear()
+      act(() => socket._trigger('ssh:output', { tab_id: 'output-types', data: { nope: true } }))
+      expect(term.write).not.toHaveBeenCalled()
+      expect(warn).toHaveBeenCalledWith(
+        'Received unexpected data type from ssh:output:',
+        'object',
+      )
+
+      act(() => socket._trigger('ssh:output', { tab_id: 'output-types', data: 'reset', reset: true }))
+      expect(term.reset).toHaveBeenCalled()
+    })
+
+    it('handles partial scrollback clears across frames', async () => {
+      const { socket, term } = await renderConnected('partial-clear')
+      socket.emit.mockClear()
+      act(() => {
+        term.simulateKey({ key: 'l', ctrlKey: true })
+      })
+      term.write.mockClear()
+      act(() => socket._trigger('ssh:output', { tab_id: 'partial-clear', data: '\x1b[' }))
+      act(() => socket._trigger('ssh:output', { tab_id: 'partial-clear', data: '3Jhello' }))
+      expect(term.write).toHaveBeenCalledWith('hello')
+
+      term.write.mockClear()
+      act(() => socket._trigger('ssh:output', { tab_id: 'partial-clear', data: 'more' }))
+      expect(term.write).toHaveBeenCalledWith('more')
+    })
+
+    it('covers restored, connected, error, closed, and cleanup event paths', async () => {
+      const tabId = 'events'
+      act(() => seedStores(tabId, 'disconnected'))
+      const socket = createMockSocket()
+      const view = render(
+        <TerminalPane tabId={tabId} isActive={true} focused={true} socket={socket as unknown as Socket} />,
+      )
+      await waitFor(() => expect(mockTerminalInstances.length).toBeGreaterThan(0))
+      const term = mockTerminalInstances.at(-1)!
+
+      act(() => socket._trigger('session:restored', { tab_id: 'other', status: 'active' }))
+      act(() => socket._trigger('session:restored', { tab_id: tabId, status: 'closed' }))
+      expect(useTerminalStore.getState().tabs[0]?.status).toBe('disconnected')
+
+      act(() => socket._trigger('session:restored', { tab_id: tabId, status: 'active' }))
+      await act(async () => { await new Promise(resolve => requestAnimationFrame(resolve)) })
+      expect(useTerminalStore.getState().tabs[0]?.status).toBe('connected')
+
+      act(() => socket._trigger('ssh:connected', { tab_id: 'other' }))
+      act(() => socket._trigger('ssh:connected', { tab_id: tabId }))
+      await act(async () => { await new Promise(resolve => requestAnimationFrame(resolve)) })
+      expect(useTerminalStore.getState().tabs[0]?.status).toBe('connected')
+
+      act(() => socket._trigger('ssh:error', { tab_id: 'other', message: 'ignored' }))
+      act(() => socket._trigger('ssh:error', { tab_id: tabId, message: 'boom' }))
+      expect(useTerminalStore.getState().tabs[0]?.status).toBe('dead')
+      expect(screen.getByText('boom')).toBeInTheDocument()
+
+      act(() => socket._trigger('ssh:closed', { tab_id: 'other', reason: 'ignored' }))
+      term.write.mockClear()
+      act(() => socket._trigger('ssh:closed', { tab_id: tabId, reason: 'bye' }))
+      expect(term.write).toHaveBeenCalledWith(expect.stringContaining('[torrus: bye]'))
+
+      view.unmount()
+    })
+
+    it('times out a connection that never answers', async () => {
+      vi.useFakeTimers()
+      const tabId = 'timeout'
+      act(() => seedStores(tabId, 'disconnected'))
+      const socket = createMockSocket()
+      render(
+        <TerminalPane tabId={tabId} isActive={true} focused={true} socket={socket as unknown as Socket} />,
+      )
+      await act(async () => { await Promise.resolve() })
+
+      fireEvent.change(screen.getByTestId('host-input'), { target: { value: 'example.com' } })
+      fireEvent.change(screen.getByTestId('username-input'), { target: { value: 'alice' } })
+      fireEvent.change(screen.getByTestId('password-input'), { target: { value: 'secret' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Connect' }))
+      expect(useTerminalStore.getState().tabs[0]?.status).toBe('connecting')
+
+      act(() => vi.advanceTimersByTime(25_000))
+      expect(useTerminalStore.getState().tabs[0]?.status).toBe('dead')
+      expect(screen.getByText(/Connection timed out/)).toBeInTheDocument()
+    })
+
+    it('disposes a terminal after unmount only when its tab was closed', async () => {
+      vi.useFakeTimers()
+      const tabId = 'dispose'
+      act(() => seedStores(tabId, 'connected'))
+      const socket = createMockSocket()
+      const { unmount } = render(
+        <TerminalPane tabId={tabId} isActive={true} focused={true} socket={socket as unknown as Socket} />,
+      )
+      await act(async () => { await Promise.resolve() })
+      const term = mockTerminalInstances.at(-1)!
+      unmount()
+      act(() => useTerminalStore.setState({ tabs: [], activeTabId: null }))
+      act(() => vi.advanceTimersByTime(1))
+      expect(term.dispose).toHaveBeenCalled()
+    })
+
+    it('broadcasts typed input and interrupts to the other focused panes', async () => {
+      const tabId = 'broadcast'
+      act(() => {
+        seedStores(tabId, 'connected')
+        useTerminalStore.setState(state => ({
+          tabs: [
+            ...state.tabs,
+            {
+              id: 'other',
+              type: 'terminal',
+              host: 'other',
+              port: 22,
+              username: 'alice',
+              label: 'Other',
+              status: 'connected',
+              sessionKey: 'test-session:other',
+            },
+          ],
+        }))
+        useBroadcastStore.setState({ enabled: true, excludedTabIds: [] })
+      })
+      const socket = createMockSocket()
+      render(
+        <TerminalPane tabId={tabId} isActive={true} focused={true} socket={socket as unknown as Socket} />,
+      )
+      await waitFor(() => expect(mockTerminalInstances.length).toBeGreaterThan(0))
+      const term = mockTerminalInstances.at(-1)!
+      term.textarea?.dispatchEvent(new FocusEvent('focus'))
+
+      socket.emit.mockClear()
+      act(() => term.simulateData('x'))
+      expect(socket.emit).toHaveBeenCalledWith(
+        'ssh:input',
+        expect.objectContaining({ tab_id: 'other', data: 'x' }),
+      )
+      expect(socket.emit).toHaveBeenLastCalledWith(
+        'ssh:input',
+        expect.objectContaining({ tab_id: tabId, data: 'x' }),
+      )
+
+      socket.emit.mockClear()
+      act(() => term.simulateKey({ key: 'c', ctrlKey: true }))
+      expect(socket.emit).toHaveBeenCalledWith(
+        'ssh:interrupt',
+        expect.objectContaining({ tab_id: 'other' }),
+      )
+      expect(socket.emit).toHaveBeenLastCalledWith(
+        'ssh:interrupt',
+        expect.objectContaining({ tab_id: tabId }),
+      )
+    })
+
+    it('writes a pending partial clear prefix before forwarding user input', async () => {
+      const { socket, term } = await renderConnected('pending-prefix')
+      term.write.mockClear()
+      act(() => term.simulateKey({ key: 'l', ctrlKey: true }))
+      act(() => socket._trigger('ssh:output', { tab_id: 'pending-prefix', data: '\x1b[' }))
+      term.write.mockClear()
+      socket.emit.mockClear()
+
+      act(() => term.simulateData('x'))
+      expect(term.write).toHaveBeenCalledWith('\x1b[')
+      expect(socket.emit).toHaveBeenCalledWith('ssh:input', expect.objectContaining({ data: 'x' }))
+    })
+
+    it('falls back to a textarea inside the terminal container', async () => {
+      setMockTerminalHasTextarea(false)
+      const { socket } = await renderConnected('fallback-textarea')
+      const textarea = document.querySelector<HTMLTextAreaElement>('textarea[data-fallback="true"]')!
+      expect(textarea).toBeInTheDocument()
+
+      const event = new Event('paste', { bubbles: true, cancelable: true }) as ClipboardEvent
+      Object.defineProperty(event, 'clipboardData', { value: { getData: () => 'fallback' } })
+      socket.emit.mockClear()
+      textarea.dispatchEvent(event)
+      expect(socket.emit).toHaveBeenCalledWith('ssh:input', expect.objectContaining({ data: 'fallback' }))
+    })
+
+    it('logs a terminal construction failure instead of throwing', async () => {
+      const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+      setMockTerminalConstructorError(new Error('terminal failed'))
+      act(() => seedStores('construct-failure', 'connected'))
+      render(
+        <TerminalPane
+          tabId="construct-failure"
+          isActive={true}
+          focused={true}
+          socket={createMockSocket() as unknown as Socket}
+        />,
+      )
+      await waitFor(() =>
+        expect(error).toHaveBeenCalledWith('Terminal initialization failed', expect.any(Error)),
+      )
+    })
+
+    it('cancels a pending resize frame and ignores zero-sized fits', async () => {
+      const { socket, view } = await renderConnected('resize-cancel')
+      const offsetParent = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetParent')
+      const clientWidth = Object.getOwnPropertyDescriptor(Element.prototype, 'clientWidth')
+      const clientHeight = Object.getOwnPropertyDescriptor(Element.prototype, 'clientHeight')
+      Object.defineProperty(HTMLElement.prototype, 'offsetParent', { configurable: true, get: () => document.body })
+      Object.defineProperty(Element.prototype, 'clientWidth', { configurable: true, get: () => 800 })
+      Object.defineProperty(Element.prototype, 'clientHeight', { configurable: true, get: () => 600 })
+      const cancel = vi.spyOn(window, 'cancelAnimationFrame')
+      try {
+        setMockFitDimensions({ cols: 0, rows: 0 })
+        socket.emit.mockClear()
+        act(() => mockResizeObserverInstances.at(-1)?.trigger())
+        await act(async () => { await new Promise(resolve => requestAnimationFrame(resolve)) })
+        expect(socket.emit).not.toHaveBeenCalledWith('terminal:resize', expect.anything())
+
+        act(() => mockResizeObserverInstances.at(-1)?.trigger())
+      } finally {
+        setMockFitDimensions(null)
+        if (offsetParent) Object.defineProperty(HTMLElement.prototype, 'offsetParent', offsetParent)
+        else delete (HTMLElement.prototype as { offsetParent?: unknown }).offsetParent
+        if (clientWidth) Object.defineProperty(Element.prototype, 'clientWidth', clientWidth)
+        else delete (Element.prototype as { clientWidth?: unknown }).clientWidth
+        if (clientHeight) Object.defineProperty(Element.prototype, 'clientHeight', clientHeight)
+        else delete (Element.prototype as { clientHeight?: unknown }).clientHeight
+      }
+      view.unmount()
+      expect(cancel).toHaveBeenCalled()
+    })
+
+    it('shows the host fallback while a tab is connecting', () => {
+      useTerminalStore.setState({
+        sessionId: 'test-session',
+        tabs: [{
+          id: 'connecting',
+          type: 'terminal',
+          host: null,
+          port: null,
+          username: null,
+          label: null,
+          status: 'connecting',
+          sessionKey: 'test-session:connecting',
+        }],
+        activeTabId: 'connecting',
+      })
+      render(
+        <TerminalPane
+          tabId="connecting"
+          isActive={true}
+          focused={true}
+          socket={createMockSocket() as unknown as Socket}
+        />,
+      )
+      expect(screen.getByText('Connecting to host…')).toBeInTheDocument()
+    })
+
+    it('does not interrupt while input is suppressed or the tab is disconnected', async () => {
+      const { socket, term } = await renderConnected('interrupt-guard')
+      act(() => socket._trigger('disconnect'))
+      socket.emit.mockClear()
+      act(() => term.simulateKey({ key: 'c', ctrlKey: true }))
+      expect(socket.emit).not.toHaveBeenCalledWith('ssh:interrupt', expect.anything())
+
+      act(() => socket._trigger('session:restored', { tab_id: 'interrupt-guard', status: 'closed' }))
+      act(() => useTerminalStore.setState(state => ({
+        tabs: state.tabs.map(tab => ({ ...tab, status: 'disconnected' })),
+      })))
+      act(() => term.simulateData('allowed'))
+      socket.emit.mockClear()
+      act(() => term.simulateKey({ key: 'c', ctrlKey: true }))
+      expect(socket.emit).not.toHaveBeenCalledWith('ssh:interrupt', expect.anything())
+    })
+
+    it('shows a generic closed message for a dead tab without an error', () => {
+      useTerminalStore.setState({
+        sessionId: 'test-session',
+        tabs: [{
+          id: 'dead',
+          type: 'terminal',
+          host: 'host',
+          port: 22,
+          username: 'alice',
+          label: null,
+          status: 'dead',
+          sessionKey: 's:dead',
+        }],
+        activeTabId: 'dead',
+      })
+      render(
+        <TerminalPane
+          tabId="dead"
+          isActive={true}
+          focused={true}
+          socket={createMockSocket() as unknown as Socket}
+        />,
+      )
+      expect(screen.getByText('Connection closed.')).toBeInTheDocument()
+    })
+
+    it('handles cached pastes with no data and bracketed paste mode', async () => {
+      const tabId = 'cached-paste'
+      act(() => seedStores(tabId, 'connected'))
+      const socket = createMockSocket()
+      const first = render(
+        <TerminalPane tabId={tabId} isActive={true} focused={true} socket={socket as unknown as Socket} />,
+      )
+      await waitFor(() => expect(mockTerminalInstances.length).toBe(1))
+      first.unmount()
+      render(
+        <TerminalPane tabId={tabId} isActive={true} focused={true} socket={socket as unknown as Socket} />,
+      )
+      await waitFor(() => expect(mockTerminalInstances.length).toBe(1))
+      const term = mockTerminalInstances[0]
+
+      const empty = new Event('paste', { bubbles: true, cancelable: true }) as ClipboardEvent
+      Object.defineProperty(empty, 'clipboardData', { value: undefined })
+      term.textarea?.dispatchEvent(empty)
+
+      term.modes.bracketedPasteMode = true
+      const bracketed = new Event('paste', { bubbles: true, cancelable: true }) as ClipboardEvent
+      Object.defineProperty(bracketed, 'clipboardData', { value: { getData: () => 'cached' } })
+      socket.emit.mockClear()
+      term.textarea?.dispatchEvent(bracketed)
+      expect(socket.emit).toHaveBeenCalledWith(
+        'ssh:input',
+        expect.objectContaining({ data: '\x1b[200~cached\x1b[201~' }),
+      )
+    })
+
+    it('ignores output for another tab and writes a complete non-clear frame', async () => {
+      const { socket, term } = await renderConnected('output-guard')
+      term.write.mockClear()
+      act(() => socket._trigger('ssh:output', { tab_id: 'other', data: 'ignored' }))
+      expect(term.write).not.toHaveBeenCalled()
+
+      act(() => term.simulateKey({ key: 'l', ctrlKey: true }))
+      term.write.mockClear()
+      act(() => socket._trigger('ssh:output', { tab_id: 'output-guard', data: 'plain' }))
+      expect(term.write).toHaveBeenCalledWith('plain')
+    })
+
+    it('does not focus a pane that is active but not focused', async () => {
+      const tabId = 'unfocused'
+      act(() => seedStores(tabId, 'connected'))
+      render(
+        <TerminalPane
+          tabId={tabId}
+          isActive={true}
+          focused={false}
+          socket={createMockSocket() as unknown as Socket}
+        />,
+      )
+      await waitFor(() => expect(mockTerminalInstances.length).toBeGreaterThan(0))
+      await act(async () => { await new Promise(resolve => requestAnimationFrame(resolve)) })
+      expect(mockTerminalInstances.at(-1)!.focus).not.toHaveBeenCalled()
+    })
+
+    it('does not report a timeout when the connection completed first', async () => {
+      vi.useFakeTimers()
+      act(() => seedStores('timeout-race', 'disconnected'))
+      const socket = createMockSocket()
+      render(
+        <TerminalPane
+          tabId="timeout-race"
+          isActive={true}
+          focused={true}
+          socket={socket as unknown as Socket}
+        />,
+      )
+      await act(async () => { await Promise.resolve() })
+      fireEvent.change(screen.getByTestId('host-input'), { target: { value: 'example.com' } })
+      fireEvent.change(screen.getByTestId('username-input'), { target: { value: 'alice' } })
+      fireEvent.change(screen.getByTestId('password-input'), { target: { value: 'secret' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Connect' }))
+      act(() => socket._trigger('ssh:connected', { tab_id: 'timeout-race' }))
+      act(() => vi.advanceTimersByTime(25_000))
+      expect(screen.queryByText(/Connection timed out/)).not.toBeInTheDocument()
+    })
+
+    it('continues without a textarea when xterm renders none', async () => {
+      setMockTerminalHasTextarea(false)
+      setMockTerminalHasFallbackTextarea(false)
+      const { term } = await renderConnected('no-textarea')
+      expect(term.textarea).toBeNull()
+    })
+
+    it('does not focus after a restored pane unmounts before its frame', async () => {
+      const tabId = 'restore-unmount'
+      act(() => seedStores(tabId, 'disconnected'))
+      const socket = createMockSocket()
+      const view = render(
+        <TerminalPane tabId={tabId} isActive={true} focused={true} socket={socket as unknown as Socket} />,
+      )
+      await waitFor(() => expect(mockTerminalInstances.length).toBeGreaterThan(0))
+      act(() => socket._trigger('session:restored', { tab_id: tabId, status: 'active' }))
+      view.unmount()
+      await act(async () => { await new Promise(resolve => requestAnimationFrame(resolve)) })
+    })
+
+    it('cancels terminal initialization when unmounted before the font probe resolves', async () => {
+      let resolveFont: (() => void) | undefined
+      const fonts = document.fonts.load as unknown as ReturnType<typeof vi.fn>
+      fonts.mockImplementationOnce(() => new Promise<void>(resolve => { resolveFont = resolve }))
+      act(() => seedStores('font-pending', 'connected'))
+      const view = render(
+        <TerminalPane
+          tabId="font-pending"
+          isActive={true}
+          focused={true}
+          socket={createMockSocket() as unknown as Socket}
+        />,
+      )
+      view.unmount()
+      resolveFont?.()
+      await act(async () => { await Promise.resolve() })
+      expect(mockTerminalInstances).toHaveLength(0)
+    })
+
+    it('passes through a pending prefix that never became a clear sequence', async () => {
+      const { socket, term } = await renderConnected('prefix-no-clear')
+      act(() => term.simulateKey({ key: 'l', ctrlKey: true }))
+      term.write.mockClear()
+      act(() => socket._trigger('ssh:output', { tab_id: 'prefix-no-clear', data: '\x1b' }))
+      act(() => socket._trigger('ssh:output', { tab_id: 'prefix-no-clear', data: 'x' }))
+      expect(term.write).toHaveBeenCalledWith('\x1bx')
+    })
+
+    it('focuses active panes when the focused prop is omitted', async () => {
+      const tabId = 'focus-default'
+      act(() => seedStores(tabId, 'connected'))
+      render(
+        <TerminalPane
+          tabId={tabId}
+          isActive={true}
+          socket={createMockSocket() as unknown as Socket}
+        />,
+      )
+      await waitFor(() => expect(mockTerminalInstances.length).toBeGreaterThan(0))
+      await act(async () => { await new Promise(resolve => requestAnimationFrame(resolve)) })
+      expect(mockTerminalInstances.at(-1)!.focus).toHaveBeenCalled()
+    })
+
+    it('skips the timeout error when the tab left the connecting state without clearing it', async () => {
+      vi.useFakeTimers()
+      act(() => seedStores('timeout-skip', 'disconnected'))
+      const socket = createMockSocket()
+      render(
+        <TerminalPane
+          tabId="timeout-skip"
+          isActive={true}
+          focused={true}
+          socket={socket as unknown as Socket}
+        />,
+      )
+      await act(async () => { await Promise.resolve() })
+      fireEvent.change(screen.getByTestId('host-input'), { target: { value: 'example.com' } })
+      fireEvent.change(screen.getByTestId('username-input'), { target: { value: 'alice' } })
+      fireEvent.change(screen.getByTestId('password-input'), { target: { value: 'secret' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Connect' }))
+      act(() => useTerminalStore.setState(state => ({
+        tabs: state.tabs.map(tab => ({ ...tab, status: 'connected' })),
+      })))
+      act(() => vi.advanceTimersByTime(25_000))
+      expect(screen.queryByText(/Connection timed out/)).not.toBeInTheDocument()
+    })
+
   })
 })

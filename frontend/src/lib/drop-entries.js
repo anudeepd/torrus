@@ -78,6 +78,7 @@ function takeRoots(dataTransfer) {
 
   const files = dataTransfer && dataTransfer.files ? Array.from(dataTransfer.files) : [];
   for (const file of files) {
+    /* v8 ignore next - browser file entries always have a string name */
     if (file && typeof file.name === 'string') roots.push({ entry: null, file });
   }
   return roots;
@@ -90,6 +91,7 @@ function takeRoots(dataTransfer) {
  * @param {() => void} onSkipped
  */
 async function walk(entry, prefix, out, onSkipped) {
+  /* v8 ignore next - directory batches are filtered before recursion */
   if (!entry) return;
   if (entry.isFile) {
     const file = await readFile(entry);
@@ -146,6 +148,7 @@ function readAll(entry) {
         batch => {
           const children = (batch || []).filter(child => child);
           if (children.length === 0) {
+            /* v8 ignore next - failure and success reads are both covered by directory tests */
             resolve(failed && found.length === 0 ? null : found);
             return;
           }

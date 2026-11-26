@@ -36,4 +36,37 @@ describe('useServerConfigStore', () => {
     expect(useServerConfigStore.getState().ldapIdleTimeout).toBe(900)
     expect(redirectToLdapLogin).not.toHaveBeenCalled()
   })
+
+  it('ignores failed or malformed config responses', async () => {
+    vi.doMock('@/utils/authRedirect', () => ({ redirectToLdapLogin: vi.fn() }))
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(new Response('nope', { status: 500 })),
+    )
+    let module = await import('./serverConfigStore')
+    await module.useServerConfigStore.getState().load()
+    expect(module.useServerConfigStore.getState().ldapEnabled).toBe(false)
+
+    vi.resetModules()
+    vi.doMock('@/utils/authRedirect', () => ({ redirectToLdapLogin: vi.fn() }))
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        Response.json({
+          ldap_enabled: true,
+          is_admin: false,
+          ldap_idle_timeout: 'bad',
+        }),
+      ),
+    )
+    module = await import('./serverConfigStore')
+    await module.useServerConfigStore.getState().load()
+    expect(module.useServerConfigStore.getState().ldapIdleTimeout).toBe(0)
+
+    vi.resetModules()
+    vi.doMock('@/utils/authRedirect', () => ({ redirectToLdapLogin: vi.fn() }))
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('offline')))
+    module = await import('./serverConfigStore')
+    await module.useServerConfigStore.getState().load()
+  })
 })

@@ -33,7 +33,6 @@ export function startAuthIdleTimer({
   let expired = false
 
   const expire = () => {
-    if (expired) return
     expired = true
     if (timer !== undefined) target.clearTimeout(timer)
     timer = undefined

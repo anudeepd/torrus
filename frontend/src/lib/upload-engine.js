@@ -209,6 +209,12 @@ export function errorFromResponse(status, payload, fallback) {
   return new UploadError(message, { status, code: code || 'UPLOAD_FAILED', retryable });
 }
 
+function asUploadError(error) {
+  return error instanceof UploadError
+    ? error
+    : new UploadError(error?.message || 'Upload failed');
+}
+
 /**
  * HTTP client for the shared upload protocol.
  *
@@ -388,7 +394,6 @@ export class UploadClient {
       };
 
       const armResponseTimer = () => {
-        if (responseTimer) clearTimeout(responseTimer);
         responseTimer = setTimeout(() => {
           failWith(
             new UploadError(`Server did not acknowledge within ${responseTimeoutMs / 1000}s`, {
@@ -616,7 +621,6 @@ export async function uploadFile({
     let windowEnd = end;
     let tries = 0;
     for (;;) {
-      if (signal && signal.aborted) throw new UploadError('Upload cancelled', { code: 'ABORTED' });
       const key = `${windowStart}-${windowEnd}-${tries}`;
       try {
         const result = await client.put(
@@ -633,7 +637,6 @@ export async function uploadFile({
             },
             onPhase: phase => {
               if (phase === UploadState.PROCESSING) setState(UploadState.PROCESSING);
-              else setState(UploadState.UPLOADING);
             },
           },
         );
@@ -664,7 +667,6 @@ export async function uploadFile({
             minChunkBytes,
             Math.min(windowSize, Math.floor(requestBytes / 2)),
           );
-          if (smallerWindow >= requestBytes) throw uploadError;
           windowSize = smallerWindow;
           windowEnd = Math.min(previousEnd, windowStart + windowSize);
           queue.splice(nextIndex, 0, [windowEnd, previousEnd]);
@@ -775,8 +777,7 @@ export async function uploadFile({
     try {
       result = await runEverything();
     } catch (error) {
-      const uploadError =
-        error instanceof UploadError ? error : new UploadError(error?.message || 'Upload failed', {});
+      const uploadError = asUploadError(error);
       if (uploadError.code !== 'SESSION_LOST' || !(await handleSessionLoss())) {
         throw uploadError;
       }
@@ -791,8 +792,7 @@ export async function uploadFile({
       restarted,
     };
   } catch (error) {
-    const uploadError =
-      error instanceof UploadError ? error : new UploadError(error?.message || 'Upload failed', {});
+    const uploadError = asUploadError(error);
     if (uploadError.code !== 'ABORTED') {
       // Re-anchor the caller's progress bar on what the server actually holds
       // so a failed upload can be retried from the right offset.

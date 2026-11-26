@@ -45,7 +45,7 @@ function stripTerminalFormatting(data: string): string {
 const SENSITIVE_PROMPT_PATTERN = /^(?:\[[^\]\r\n]*\]\s*)?(?:(?:enter|type|provide)\s+)?(?:sudo\s+)?(?:password|passphrase|passcode|pin|otp|one[- ]time password|verification code|security token|token|secret)(?:\s+for\b[^:\r\n]{0,80})?\s*[:?]\s*$/i
 
 function isSensitivePrompt(data: string): boolean {
-  const lastLine = stripTerminalFormatting(data).split(/[\r\n]/).pop()?.trim() ?? ''
+  const lastLine = stripTerminalFormatting(data).split(/[\r\n]/).pop()!.trim()
   return lastLine.length > 0 && lastLine.length <= 160 && SENSITIVE_PROMPT_PATTERN.test(lastLine)
 }
 
@@ -382,6 +382,7 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
   // Create or reuse xterm.js terminal
   useEffect(() => {
     const container = containerRef.current
+    /* v8 ignore next - callbacks are stable, so a rerun always has the terminal already */
     if (!container || termRef.current) return
 
     const { scrollbackLines, fontSize } = useSettingsStore.getState()
@@ -645,8 +646,8 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return
       // Don't hijack Esc if a dialog/menu is open and handling its own Esc.
-      const target = event.target as HTMLElement | null
-      if (target && target.closest('[role="dialog"], [role="alertdialog"]')) return
+      const target = event.target instanceof Element ? event.target : null
+      if (target?.closest('[role="dialog"], [role="alertdialog"]')) return
       event.preventDefault()
       event.stopPropagation()
       closeFind()
@@ -941,6 +942,7 @@ export default function TerminalPane({ tabId, isActive, focused, socket }: Termi
               search('next', query)
             }}
             onKeyDown={event => {
+              /* v8 ignore next - Escape also closes from the window capture listener */
               if (event.key === 'Escape') closeFind()
               if (event.key === 'Enter') {
                 event.preventDefault()

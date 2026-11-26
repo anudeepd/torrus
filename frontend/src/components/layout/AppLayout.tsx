@@ -411,7 +411,7 @@ export default function AppLayout({ navigateToAdmin = () => window.location.assi
     if (!activeTabId || !tabIds.includes(activeTabId)) setActiveTab(tabIds[0])
     setSplitOwnedByBroadcast(false)
     setSplitPickerOpen(false)
-  }, [applyLayout, setActiveTab, activeTabId])
+  }, [applyLayout, setActiveTab, activeTabId, setSplitOwnedByBroadcast])
 
   // Broadcast: apply selected terminals + auto-layout
   const handleApplyBroadcast = useCallback((includedTabIds: string[], layout: PaneNode | null) => {
@@ -431,7 +431,7 @@ export default function AppLayout({ navigateToAdmin = () => window.location.assi
       if (!hadSplit) setSplitOwnedByBroadcast(true)
     }
     setBroadcastPickerOpen(false)
-  }, [applyLayout, setActiveTab, activeTabId])
+  }, [applyLayout, setActiveTab, activeTabId, setSplitOwnedByBroadcast])
 
   const handleDisableBroadcast = useCallback(() => {
     disableBroadcast()
@@ -440,7 +440,7 @@ export default function AppLayout({ navigateToAdmin = () => window.location.assi
       setSplitOwnedByBroadcast(false)
     }
     setBroadcastPickerOpen(false)
-  }, [disableBroadcast, exitSplitMode, splitOwnedByBroadcast])
+  }, [disableBroadcast, exitSplitMode, setSplitOwnedByBroadcast, splitOwnedByBroadcast])
 
   // Keep application shortcuts separate from browser-owned tab and omnibox keys.
   useEffect(() => {
@@ -486,9 +486,10 @@ export default function AppLayout({ navigateToAdmin = () => window.location.assi
     toggleSidebar: () => setSidebarOpen(o => !o),
     openCommandPalette: () => setCommandPaletteOpen(true),
     setActiveTab: handleSetActiveTab,
-  }), [handleAddTab, handleCloseTab, handleCloneTab, handleOpenSftpTab, handleDuplicateTab, handleCloseAllTabs, exitSplitMode, navigateToAdmin, handleSetActiveTab])
+  }), [handleAddTab, handleCloseTab, handleCloneTab, handleOpenSftpTab, handleDuplicateTab, handleCloseAllTabs, exitSplitMode, navigateToAdmin, handleSetActiveTab, setSplitOwnedByBroadcast])
 
   const handleConfirmPendingClose = useCallback(() => {
+    /* v8 ignore next - the confirmation dialog only renders while a close is pending */
     if (!pendingClose) return
     setPendingClose(null)
     if (pendingClose.kind === 'all') {

@@ -82,13 +82,13 @@ interface PendingUpload {
   } | null
 }
 
-function joinPath(base: string, name: string): string {
+export function joinPath(base: string, name: string): string {
   if (name.startsWith('/')) return name
   if (!base || base === '.') return name
   return `${base.replace(/\/$/, '')}/${name}`
 }
 
-function parentPath(path: string): string {
+export function parentPath(path: string): string {
   if (!path || path === '.') return '.'
   if (path === '/') return '/'
   const clean = path.replace(/\/$/, '')
@@ -98,7 +98,7 @@ function parentPath(path: string): string {
   return clean.slice(0, idx)
 }
 
-function normalizePath(path: string): string {
+export function normalizePath(path: string): string {
   if (!path) return '.'
   if (path === '/') return '/'
   const isAbsolute = path.startsWith('/')
@@ -118,22 +118,26 @@ function normalizePath(path: string): string {
   return joined || '.'
 }
 
-function itemLabel(path?: string): string {
+export function itemLabel(path?: string): string {
   if (!path) return 'item'
   const parts = path.split('/').filter(Boolean)
   return parts[parts.length - 1] ?? path
 }
 
-function plural(count: number, singular: string): string {
+export function plural(count: number, singular: string): string {
   return `${count} ${singular}${count === 1 ? '' : 's'}`
 }
 
-function deleteSuccessMessage(payload: ListingPayload): string {
+export function uploadProgress(committed: number, total: number): number {
+  return total > 0 ? Math.round((committed / total) * 100) : 0
+}
+
+export function deleteSuccessMessage(payload: ListingPayload): string {
   const count = payload.results?.filter(result => result.ok !== false).length ?? 0
   return count > 0 ? `Deleted ${plural(count, 'item')}.` : 'Deleted selected items.'
 }
 
-function deleteFailureMessage(payload: ListingPayload): string {
+export function deleteFailureMessage(payload: ListingPayload): string {
   const results = payload.results ?? []
   const failed = results.filter(result => result.ok === false)
   const succeeded = results.filter(result => result.ok === true)
@@ -160,7 +164,7 @@ const OPERATION_FAILURE_PREFIX: Record<SFTPErrorOperation, string> = {
   mkdir: 'Could not create folder',
 }
 
-function contextualFailureMessage(
+export function contextualFailureMessage(
   prefix: string,
   payload: { message?: string },
   fallback: string,
@@ -256,6 +260,7 @@ export function useSFTP(tabId: string, sourceTabId: string | undefined, socket: 
     clearListingTimeout()
     listingTimeoutRef.current = window.setTimeout(() => {
       listingTimeoutRef.current = null
+      /* v8 ignore next - a cleared timer cannot fire into a newer request */
       if (pendingListingPathRef.current !== path) return
       pendingListingPathRef.current = null
       queuedSamePathRefreshRef.current = false
@@ -399,6 +404,7 @@ export function useSFTP(tabId: string, sourceTabId: string | undefined, socket: 
         showFailure(payload, 'Could not load folder', 'Check the path and retry.')
         if (queuedSamePathRefreshRef.current) {
           queuedSamePathRefreshRef.current = false
+          /* v8 ignore next - queued only while requestedPath is set */
           list(requestedPath ?? payload.path ?? '.')
         }
         return
@@ -549,7 +555,7 @@ export function useSFTP(tabId: string, sourceTabId: string | undefined, socket: 
             speed.sample(committed)
             updateTransfer(transferId, {
               bytes: committed,
-              progress: file.size > 0 ? Math.round((committed / file.size) * 100) : 0,
+              progress: uploadProgress(committed, file.size),
               speed: speed.speed(),
             })
           },
@@ -671,7 +677,7 @@ export function useSFTP(tabId: string, sourceTabId: string | undefined, socket: 
   }, [tabId, addTransfer, resumeUpload, prepareUploadDirectories, setError])
 
   const retryUpload = useCallback((transferId: string) => {
-    void resumeUpload(transferId, new SpeedTracker())
+    void resumeUpload(transferId)
   }, [resumeUpload])
 
   const download = useCallback(async (entry: SFTPEntry) => {

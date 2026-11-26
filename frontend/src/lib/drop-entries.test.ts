@@ -183,4 +183,109 @@ describe("collectDroppedEntries", () => {
       entries: [{ relativePath: "live.txt" }],
     });
   });
+
+  it("falls back when extension accessors and file readers throw", async () => {
+    const throwing = {
+      items: [
+        {
+          kind: "file",
+          webkitGetAsEntry: () => {
+            throw new Error("extension");
+          },
+          getAsFile: () => null,
+        },
+      ],
+      files: [],
+    } as unknown as DataTransfer;
+    expect(await collectDroppedEntries(throwing)).toEqual({
+      entries: [],
+      skipped: 1,
+    });
+
+    const absentApi = {
+      items: [{ kind: "file", getAsFile: () => new File(["x"], "fallback.txt") }],
+      files: [],
+    } as unknown as DataTransfer;
+    expect((await collectDroppedEntries(absentApi)).entries[0].relativePath).toBe(
+      "fallback.txt",
+    );
+
+    const badFiles = {
+      items: [],
+      files: [null, { name: 1 }],
+    } as unknown as DataTransfer;
+    expect(await collectDroppedEntries(badFiles)).toEqual({
+      entries: [],
+      skipped: 0,
+    });
+  });
+
+  it("handles throwing file readers and directory readers", async () => {
+    const file = {
+      isFile: true,
+      name: "bad.txt",
+      file: () => {
+        throw new Error("denied");
+      },
+    };
+    const directory = {
+      isDirectory: true,
+      name: "bad",
+      createReader: () => {
+        throw new Error("denied");
+      },
+    };
+    const transfer = {
+      items: [file, directory].map(entry => ({
+        kind: "file",
+        webkitGetAsEntry: () => entry,
+      })),
+      files: [],
+    } as unknown as DataTransfer;
+    const result = await collectDroppedEntries(transfer);
+    expect(result.entries).toEqual([]);
+    expect(result.skipped).toBe(1);
+  });
+
+  it("handles null batches, null children, partial failures, and absent file accessors", async () => {
+    const nullBatch = {
+      isDirectory: true,
+      name: "empty",
+      createReader: () => ({
+        readEntries: (resolve: (entries: FakeEntry[]) => void) => resolve(null as unknown as FakeEntry[]),
+      }),
+    };
+    const nullChild = dirEntry("null-child", [[null as unknown as FakeEntry, fileEntry("ok.txt")], []]);
+    const partial = {
+      isDirectory: true,
+      name: "partial",
+      createReader: () => {
+        let call = 0;
+        return {
+          readEntries: (
+            resolve: (entries: FakeEntry[]) => void,
+            reject: (error: unknown) => void,
+          ) => {
+            if (call++ === 0) resolve([fileEntry("kept.txt")]);
+            else reject(new Error("stopped"));
+          },
+        };
+      },
+    };
+
+    const { entries, skipped } = await collectDroppedEntries(
+      dataTransferFrom({ entries: [nullBatch, nullChild, partial] }),
+    );
+    expect(entries.map(entry => entry.relativePath)).toEqual([
+      "null-child/ok.txt",
+      "partial/kept.txt",
+    ]);
+    expect(skipped).toBe(0);
+
+    const noAccessor = {
+      items: [{ kind: "file" }],
+      files: [],
+    } as unknown as DataTransfer;
+    expect(await collectDroppedEntries(noAccessor)).toEqual({ entries: [], skipped: 1 });
+  });
 });

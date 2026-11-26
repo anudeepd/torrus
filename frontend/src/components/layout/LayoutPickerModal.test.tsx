@@ -46,4 +46,73 @@ describe('LayoutPickerModal', () => {
     expect(onClose).toHaveBeenCalledOnce()
     expect(onApply).not.toHaveBeenCalled()
   })
+
+  it('swaps duplicate tab assignments between slots', () => {
+    const onApply = vi.fn()
+    render(<LayoutPickerModal tabs={twoTabs} onClose={() => {}} onApply={onApply} />)
+
+    const [first, second] = screen.getAllByRole('combobox')
+    fireEvent.change(second, { target: { value: 'tab-1' } })
+    expect(first).toHaveValue('tab-2')
+    expect(second).toHaveValue('tab-1')
+    fireEvent.change(first, { target: { value: '' } })
+    expect(screen.getByRole('button', { name: 'Apply layout' })).toBeDisabled()
+  })
+
+  it('builds a vertical layout and labels unconfigured tabs', () => {
+    const onApply = vi.fn()
+    render(
+      <LayoutPickerModal
+        tabs={[
+          { ...twoTabs[0], label: null, host: null, username: null },
+          twoTabs[1],
+          { ...twoTabs[0], id: 'tab-3' },
+          { ...twoTabs[0], id: 'tab-4' },
+        ]}
+        onClose={() => {}}
+        onApply={onApply}
+      />,
+    )
+
+    expect(screen.getAllByRole('option', { name: 'New Connection' }).length).toBeGreaterThan(0)
+    fireEvent.click(screen.getByRole('button', { name: /Top \/ Bottom/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Apply layout' }))
+    expect(onApply.mock.calls[0][0].dir).toBe('v')
+  })
+
+  it('fills new slots from the available tabs when a larger preset is chosen', () => {
+    const onApply = vi.fn()
+    render(<LayoutPickerModal tabs={twoTabs} onClose={() => {}} onApply={onApply} />)
+
+    fireEvent.click(screen.getByRole('button', { name: /3 columns/ }))
+    const slots = screen.getAllByRole('combobox')
+    expect(slots).toHaveLength(3)
+    expect(slots[2]).toHaveValue('')
+    expect(screen.getByRole('button', { name: 'Apply layout' })).toBeDisabled()
+  })
+
+  it('renders every tab label fallback and swaps into a newly added slot', () => {
+    const onApply = vi.fn()
+    render(
+      <LayoutPickerModal
+        tabs={[
+          { ...twoTabs[0], id: 'tab-a', label: null, host: 'host', username: 'root' },
+          { ...twoTabs[1], id: 'tab-b', label: null, host: null, username: null },
+          { ...twoTabs[0], id: 'tab-c', label: 'Third' },
+        ]}
+        onClose={() => {}}
+        onApply={onApply}
+      />,
+    )
+
+    expect(screen.getAllByRole('option', { name: 'root@host' }).length).toBeGreaterThan(0)
+    expect(screen.getAllByRole('option', { name: 'New Connection' }).length).toBeGreaterThan(0)
+
+    fireEvent.click(screen.getByRole('button', { name: /3 columns/ }))
+    const slots = screen.getAllByRole('combobox')
+    expect(slots).toHaveLength(3)
+    fireEvent.change(slots[2], { target: { value: 'tab-a' } })
+    expect(slots[0]).toHaveValue('')
+    expect(slots[2]).toHaveValue('tab-a')
+  })
 })

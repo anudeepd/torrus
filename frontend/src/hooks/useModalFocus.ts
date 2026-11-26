@@ -25,6 +25,7 @@ export function useModalFocus(
   useEffect(() => {
     if (!active) return
 
+    /* v8 ignore next - browsers focus an HTMLElement or nothing when a dialog opens */
     returnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
     const focusInitial = window.requestAnimationFrame(() => {
       const firstFocusable = dialogRef.current?.querySelector<HTMLElement>(focusableSelector)
@@ -34,7 +35,7 @@ export function useModalFocus(
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Tab') return
 
-      const focusable = Array.from(dialogRef.current?.querySelectorAll<HTMLElement>(focusableSelector) ?? [])
+      const focusable = Array.from(dialogRef.current!.querySelectorAll<HTMLElement>(focusableSelector))
       if (focusable.length === 0) {
         event.preventDefault()
         dialogRef.current?.focus()

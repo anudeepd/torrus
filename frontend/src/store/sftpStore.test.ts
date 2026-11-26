@@ -47,4 +47,18 @@ describe('sftpStore', () => {
 
     expect(useSFTPStore.getState().tabs.tab1).toMatchObject({ username: 'root', isRoot: true })
   })
+
+  it('creates default tab state when updating a tab that is not open', () => {
+    const store = useSFTPStore.getState()
+    store.setIsRoot('missing', true)
+    store.setLoading('missing-loading', true)
+    store.clearSelected('missing-selection')
+
+    expect(useSFTPStore.getState().tabs.missing).toMatchObject({
+      isRoot: true,
+      path: '.',
+    })
+    expect(useSFTPStore.getState().tabs['missing-loading']).toMatchObject({ loading: true })
+    expect(useSFTPStore.getState().tabs['missing-selection']).toMatchObject({ selectedPaths: [] })
+  })
 })

@@ -8,11 +8,11 @@
   },
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
+    "build": "tsc -p tsconfig.app.json && vite build",
     "preview": "vite preview",
     "lint": "eslint src",
     "test": "vitest run",
-    "test:coverage": "vitest run --coverage --coverage.provider=v8 --coverage.include='src/**' --coverage.exclude='src/**/*.test.*' --coverage.exclude='src/test/**' --coverage.reporter=lcov --coverage.reportsDirectory=../coverage/frontend",
+    "test:coverage": "vitest run --coverage --coverage.provider=v8 --coverage.include='src/**' --coverage.exclude='src/**/*.test.*' --coverage.exclude='src/test/**' --coverage.thresholds.lines=100 --coverage.thresholds.branches=100 --coverage.reporter=lcov --coverage.reportsDirectory=../coverage/frontend",
     "test:watch": "vitest"
   },
   "dependencies": {

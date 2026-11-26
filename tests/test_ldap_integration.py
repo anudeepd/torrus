@@ -9,6 +9,7 @@ from torrus.server import (
     APP_CSP,
     _ensure_ldapgate_static_paths,
     api_config,
+    build_app_csp,
     fastapi_app,
     favicon,
 )
@@ -20,10 +21,13 @@ def test_app_csp_allows_self_fonts_and_websockets():
     assert "connect-src 'self';" in APP_CSP
     assert "ws:" not in APP_CSP.split("connect-src")[1].split(";")[0]
     assert "style-src 'self';" in APP_CSP
-    assert "style-src-attr 'unsafe-inline'" in APP_CSP
+    assert "unsafe-inline" not in APP_CSP
     assert "frame-ancestors 'none'" in APP_CSP
     assert "form-action 'self'" in APP_CSP
     assert "object-src 'none'" in APP_CSP
+    nonce_csp = build_app_csp("request-nonce")
+    assert "style-src 'self' 'nonce-request-nonce';" in nonce_csp
+    assert "unsafe-inline" not in nonce_csp
 
 
 def test_ensure_ldapgate_static_paths_preserves_existing_paths():

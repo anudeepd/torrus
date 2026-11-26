@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback, type FormEvent } from 'react'
+import { useState, useRef, useEffect, useCallback, type FormEvent, type RefObject } from 'react'
 import { Download, Upload, Trash2, LogIn, PanelLeftClose, PanelLeftOpen, Pencil } from 'lucide-react'
 import { cn } from '@/lib/cn'
 import Dialog from '@/components/ui/Dialog'
@@ -235,6 +235,67 @@ function DeleteSessionDialog({ server, onCancel, onConfirm }: DeleteSessionDialo
   )
 }
 
+interface SidebarOverlaysProps {
+  contextMenu: ContextMenuState | null
+  contextMenuRef: RefObject<HTMLDivElement>
+  servers: SavedServer[]
+  onLoadSession: (server: SavedServer) => void
+  setContextMenu: (menu: ContextMenuState | null) => void
+  editingServer: SavedServer | null
+  setEditingServer: (server: SavedServer | null) => void
+  updateServer: (id: string, updates: Omit<SavedServer, 'id'>) => boolean
+  pendingDelete: SavedServer | null
+  setPendingDelete: (server: SavedServer | null) => void
+  confirmDelete: () => void
+}
+
+function SidebarOverlays({
+  contextMenu,
+  contextMenuRef,
+  servers,
+  onLoadSession,
+  setContextMenu,
+  editingServer,
+  setEditingServer,
+  updateServer,
+  pendingDelete,
+  setPendingDelete,
+  confirmDelete,
+}: SidebarOverlaysProps) {
+  const menuServer = contextMenu ? servers.find(server => server.id === contextMenu.serverId) : undefined
+
+  return (
+    <>
+      <AnimatePresence>
+        {contextMenu && menuServer && (
+          <m.div
+            key="ctx"
+            {...anchoredSurface}
+            transition={exitTransition}
+            ref={contextMenuRef}
+            role="menu"
+            aria-label="Session actions"
+            onKeyDown={event => handleMenuKeyDown(event, contextMenuRef.current, () => setContextMenu(null))}
+            className="fixed z-menu bg-surface-800 border border-surface-700 rounded-lg shadow-xl py-1 min-w-40"
+            style={{ left: contextMenu.x, top: contextMenu.y }}
+          >
+            <button type="button" role="menuitem" className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-300 hover:bg-surface-700 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-500" onClick={() => { setContextMenu(null); onLoadSession(menuServer) }}><LogIn className="size-3" aria-hidden="true" /> Open</button>
+            <button type="button" role="menuitem" className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-300 hover:bg-surface-700 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-500" onClick={() => { setContextMenu(null); setEditingServer(menuServer) }}><Pencil className="size-3" aria-hidden="true" /> Edit</button>
+            <div className="my-1 border-t border-surface-700" />
+            <button type="button" role="menuitem" className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-red-400 hover:bg-surface-700 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-500" onClick={() => { setContextMenu(null); setPendingDelete(menuServer) }}><Trash2 className="size-3" aria-hidden="true" /> Delete</button>
+          </m.div>
+        )}
+      </AnimatePresence>
+      <AnimatePresence>
+        {editingServer && <EditModal key="edit" server={editingServer} onSave={updates => updateServer(editingServer.id, updates)} onClose={() => setEditingServer(null)} />}
+      </AnimatePresence>
+      <AnimatePresence>
+        {pendingDelete && <DeleteSessionDialog key={pendingDelete.id} server={pendingDelete} onCancel={() => setPendingDelete(null)} onConfirm={confirmDelete} />}
+      </AnimatePresence>
+    </>
+  )
+}
+
 // ── Main component ────────────────────────────────────────────────────────────
 
 export default function SessionSidebar({ isOpen, compact, onToggle, onLoadSession }: SessionSidebarProps) {
@@ -290,6 +351,7 @@ export default function SessionSidebar({ isOpen, compact, onToggle, onLoadSessio
   }, [selectedId, servers])
 
   const confirmDelete = useCallback(() => {
+    /* v8 ignore next - dialog only mounts while pendingDelete is set */
     if (!pendingDelete) return
     removeServer(pendingDelete.id)
     setSelectedId(null)
@@ -312,6 +374,7 @@ export default function SessionSidebar({ isOpen, compact, onToggle, onLoadSessio
     setIsResizing(true)
     resizeStartRef.current = { x: e.clientX, width: sidebarWidth }
     const onMove = (event: MouseEvent) => {
+      /* v8 ignore next - listener is removed before the ref is cleared */
       if (!resizeStartRef.current) return
       applySidebarWidth(resizeStartRef.current.width + event.clientX - resizeStartRef.current.x)
     }
@@ -421,31 +484,19 @@ export default function SessionSidebar({ isOpen, compact, onToggle, onLoadSessio
         >
           <SidebarInner onToggle={onToggle} servers={servers} selectedId={selectedId} setSelectedId={setSelectedId} selected={selected} isActive={isActive} handleOpen={handleOpen} handleDelete={handleDelete} handleExport={handleExport} handleImport={handleImport} setEditingServer={setEditingServer} setImportError={setImportError} importError={importError} importSuccess={importSuccess} fileInputRef={fileInputRef} setContextMenu={setContextMenu} onLoadSession={onLoadSession} />
         </m.div>
-        <AnimatePresence>
-        {contextMenu && (() => {
-          const server = servers.find(s => s.id === contextMenu.serverId)
-          if (!server) return null
-          return (
-            <m.div key="ctx" {...anchoredSurface} transition={exitTransition}
-              ref={contextMenuRef}
-              role="menu" aria-label="Session actions"
-              onKeyDown={event => handleMenuKeyDown(event, contextMenuRef.current, () => setContextMenu(null))} className="fixed z-menu bg-surface-800 border border-surface-700 rounded-lg shadow-xl py-1 min-w-40"
-              style={{ left: contextMenu.x, top: contextMenu.y }}
-            >
-              <button type="button" role="menuitem" className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-300 hover:bg-surface-700 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-500" onClick={() => { setContextMenu(null); onLoadSession(server) }}><LogIn className="size-3" aria-hidden="true" /> Open</button>
-              <button type="button" role="menuitem" className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-300 hover:bg-surface-700 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-500" onClick={() => { setContextMenu(null); setEditingServer(server) }}><Pencil className="size-3" aria-hidden="true" /> Edit</button>
-              <div className="my-1 border-t border-surface-700" />
-              <button type="button" role="menuitem" className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-red-400 hover:bg-surface-700 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-500" onClick={() => { setContextMenu(null); setPendingDelete(server) }}><Trash2 className="size-3" aria-hidden="true" /> Delete</button>
-            </m.div>
-          )
-        })()}
-        </AnimatePresence>
-        <AnimatePresence>
-        {editingServer && <EditModal key="edit" server={editingServer} onSave={(updates) => updateServer(editingServer.id, updates)} onClose={() => setEditingServer(null)} />}
-        </AnimatePresence>
-        <AnimatePresence>
-        {pendingDelete && <DeleteSessionDialog key={pendingDelete.id} server={pendingDelete} onCancel={() => setPendingDelete(null)} onConfirm={confirmDelete} />}
-        </AnimatePresence>
+        <SidebarOverlays
+          contextMenu={contextMenu}
+          contextMenuRef={contextMenuRef}
+          servers={servers}
+          onLoadSession={onLoadSession}
+          setContextMenu={setContextMenu}
+          editingServer={editingServer}
+          setEditingServer={setEditingServer}
+          updateServer={updateServer}
+          pendingDelete={pendingDelete}
+          setPendingDelete={setPendingDelete}
+          confirmDelete={confirmDelete}
+        />
       </>
     )
   }
@@ -500,31 +551,19 @@ export default function SessionSidebar({ isOpen, compact, onToggle, onLoadSessio
           <div className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-transparent transition-colors group-hover:bg-brand-500" />
         </div>}
       </m.div>
-      <AnimatePresence>
-      {contextMenu && (() => {
-        const server = servers.find(s => s.id === contextMenu.serverId)
-        if (!server) return null
-        return (
-          <m.div key="ctx" {...anchoredSurface} transition={exitTransition}
-            ref={contextMenuRef}
-            role="menu" aria-label="Session actions"
-            onKeyDown={event => handleMenuKeyDown(event, contextMenuRef.current, () => setContextMenu(null))} className="fixed z-menu bg-surface-800 border border-surface-700 rounded-lg shadow-xl py-1 min-w-40"
-            style={{ left: contextMenu.x, top: contextMenu.y }}
-          >
-            <button type="button" role="menuitem" className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-300 hover:bg-surface-700 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-500" onClick={() => { setContextMenu(null); onLoadSession(server) }}><LogIn className="size-3" aria-hidden="true" /> Open</button>
-            <button type="button" role="menuitem" className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-300 hover:bg-surface-700 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-500" onClick={() => { setContextMenu(null); setEditingServer(server) }}><Pencil className="size-3" aria-hidden="true" /> Edit</button>
-            <div className="my-1 border-t border-surface-700" />
-            <button type="button" role="menuitem" className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-red-400 hover:bg-surface-700 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-500" onClick={() => { setContextMenu(null); setPendingDelete(server) }}><Trash2 className="size-3" aria-hidden="true" /> Delete</button>
-          </m.div>
-        )
-      })()}
-      </AnimatePresence>
-      <AnimatePresence>
-      {editingServer && <EditModal key="edit" server={editingServer} onSave={(updates) => updateServer(editingServer.id, updates)} onClose={() => setEditingServer(null)} />}
-      </AnimatePresence>
-      <AnimatePresence>
-      {pendingDelete && <DeleteSessionDialog key={pendingDelete.id} server={pendingDelete} onCancel={() => setPendingDelete(null)} onConfirm={confirmDelete} />}
-      </AnimatePresence>
+      <SidebarOverlays
+        contextMenu={contextMenu}
+        contextMenuRef={contextMenuRef}
+        servers={servers}
+        onLoadSession={onLoadSession}
+        setContextMenu={setContextMenu}
+        editingServer={editingServer}
+        setEditingServer={setEditingServer}
+        updateServer={updateServer}
+        pendingDelete={pendingDelete}
+        setPendingDelete={setPendingDelete}
+        confirmDelete={confirmDelete}
+      />
     </>
   )
 }

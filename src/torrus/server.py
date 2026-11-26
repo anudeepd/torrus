@@ -24,7 +24,7 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -79,23 +79,29 @@ _ALLOW_PRIVATE_HOSTS = _env_flag("TORRUS_ALLOW_PRIVATE_HOSTS", False) or _env_fl
 )
 _MAX_SESSIONS_PER_SID = 20
 _MAX_SFTP_BATCH_PATHS = 500
-APP_CSP = (
-    "default-src 'self'; "
-    # 'self' covers the same-origin WebSocket upgrade; the scheme-wide ws:/wss:
-    # source this replaces allowed any host on those schemes.
-    "connect-src 'self'; "
-    "script-src 'self'; "
-    "style-src 'self'; "
-    "style-src-attr 'unsafe-inline'; "
-    "img-src 'self' data:; "
-    "font-src 'self' data:; "
-    "manifest-src 'self'; "
-    # These two do not fall back to default-src, so they must be explicit.
-    "frame-ancestors 'none'; "
-    "form-action 'self'; "
-    "base-uri 'self'; "
-    "object-src 'none'"
-)
+def build_app_csp(style_nonce: str | None = None) -> str:
+    style_src = "style-src 'self'"
+    if style_nonce:
+        style_src += f" 'nonce-{style_nonce}'"
+    return (
+        "default-src 'self'; "
+        # 'self' covers the same-origin WebSocket upgrade; the scheme-wide ws:/wss:
+        # source this replaces allowed any host on those schemes.
+        "connect-src 'self'; "
+        "script-src 'self'; "
+        f"{style_src}; "
+        "img-src 'self' data:; "
+        "font-src 'self' data:; "
+        "manifest-src 'self'; "
+        # These two do not fall back to default-src, so they must be explicit.
+        "frame-ancestors 'none'; "
+        "form-action 'self'; "
+        "base-uri 'self'; "
+        "object-src 'none'"
+    )
+
+
+APP_CSP = build_app_csp()
 APP_SHELL_CACHE_CONTROL = "no-cache, must-revalidate"
 HASHED_ASSET_CACHE_CONTROL = "public, max-age=31536000, immutable"
 
@@ -270,9 +276,13 @@ async def _validation_exception_envelope(
 
 @fastapi_app.middleware("http")
 async def add_app_security_headers(request: Request, call_next):
+    request.state.csp_style_nonce = secrets.token_urlsafe(16)
     response = await call_next(request)
     if not request.url.path.startswith("/_auth/"):
-        response.headers.setdefault("Content-Security-Policy", APP_CSP)
+        response.headers.setdefault(
+            "Content-Security-Policy",
+            build_app_csp(request.state.csp_style_nonce),
+        )
         # ldapgate sets these on the paths it proxies; without it nothing did.
         response.headers.setdefault("X-Frame-Options", "DENY")
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
@@ -997,18 +1007,26 @@ async def admin_csrf(request: Request):
     return response
 
 
+def _app_shell_response(request: Request) -> Response:
+    if not _static:
+        return _frontend_unbuilt_response()
+    index = _static / "index.html"
+    if not index.exists():
+        return _frontend_unbuilt_response()
+    nonce = getattr(request.state, "csp_style_nonce", "")
+    html = index.read_text(encoding="utf-8").replace("__CSP_STYLE_NONCE__", nonce)
+    return HTMLResponse(
+        html, headers={"Cache-Control": APP_SHELL_CACHE_CONTROL}
+    )
+
+
 @fastapi_app.get("/admin", include_in_schema=False)
 async def admin_shell(request: Request):
     """Serve admin shell only after LDAP/admin authorization."""
     _actor, error = await _admin_guard(request)
     if error:
         return error
-    if not _static:
-        return _frontend_unbuilt_response()
-    index = _static / "index.html"
-    if not index.exists():
-        return _frontend_unbuilt_response()
-    return FileResponse(str(index), headers={"Cache-Control": APP_SHELL_CACHE_CONTROL})
+    return _app_shell_response(request)
 
 
 @fastapi_app.get("/api/admin/actions/{action_id}", include_in_schema=False)
@@ -1726,16 +1744,10 @@ async def sftp_stream_bulk_download(request: Request):
 
 
 @fastapi_app.get("/{full_path:path}", include_in_schema=False)
-async def spa_fallback(full_path: str):
+async def spa_fallback(full_path: str, request: Request):
     if full_path.lower().startswith("socket.io"):
         return _error_envelope(404, "not_found", "Not found.")
-    if _static:
-        index = _static / "index.html"
-        if index.exists():
-            return FileResponse(
-                str(index), headers={"Cache-Control": APP_SHELL_CACHE_CONTROL}
-            )
-    return _frontend_unbuilt_response()
+    return _app_shell_response(request)
 
 
 # ---------------------------------------------------------------------------
