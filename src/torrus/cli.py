@@ -53,6 +53,10 @@ def serve(
     host, port, no_browser, reload, ldap_config, ssl_keyfile, ssl_certfile, log_file
 ):
     """Start the torrus SSH web terminal."""
+    if bool(ssl_keyfile) != bool(ssl_certfile):
+        raise click.UsageError(
+            "--ssl-keyfile and --ssl-certfile must be provided together."
+        )
     if ldap_config:
         os.environ["TORRUS_LDAP_CONFIG"] = ldap_config
         click.echo(f"LDAP authentication enabled ({ldap_config})")
@@ -60,7 +64,7 @@ def serve(
     configure_logging(log_file)
     if log_file:
         os.environ["TORRUS_LOG_FILE"] = str(log_file)
-    use_ssl = ssl_keyfile and ssl_certfile
+    use_ssl = bool(ssl_keyfile and ssl_certfile)
     if not no_browser:
         browse_host = "127.0.0.1" if host == "0.0.0.0" else host
         scheme = "https" if use_ssl else "http"
