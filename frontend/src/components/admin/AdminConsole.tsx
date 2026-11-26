@@ -323,6 +323,7 @@ export default function AdminConsole({ onClose }: { onClose?: () => void }) {
             <div
               className="mb-4 flex flex-wrap gap-1 sm:hidden"
               role="tablist"
+              tabIndex={-1}
               aria-label="Admin views"
               onKeyDown={event => {
                 if (event.key !== 'ArrowRight' && event.key !== 'ArrowLeft') return

@@ -323,6 +323,7 @@ export default function TabBar({ actions, inSplitMode, compactSidebar = false, s
           ref={tabListRef}
           className="torrus-tab-strip flex h-full items-center flex-nowrap overflow-x-scroll overflow-y-hidden"
           role="tablist"
+          tabIndex={-1}
           aria-label="Open tabs"
           onKeyDown={(event) => {
             // The rename field lives inside this tablist; its own arrow keys

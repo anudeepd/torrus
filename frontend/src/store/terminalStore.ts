@@ -3,9 +3,10 @@ import { persist } from 'zustand/middleware'
 import type { Tab, TabStatus } from '@/types'
 import { useLayoutStore, getLayoutTabIds } from '@/store/layoutStore'
 import { useBroadcastStore } from '@/store/broadcastStore'
+import { uuid } from '@/utils/uuid'
 
 let _tabCounter = 0
-const _pageNonce = Date.now().toString(36) + Math.random().toString(36).slice(2, 6)
+const _pageNonce = uuid()
 
 function newTabId(): string {
   _tabCounter++
@@ -36,8 +37,6 @@ interface TerminalState {
   setTabSftpPath: (id: string, path: string) => void
   getActiveTab: () => Tab | null
 }
-
-import { uuid } from '@/utils/uuid'
 
 function getOrCreateSessionId(): string {
   const KEY = 'torrus_session_id'
