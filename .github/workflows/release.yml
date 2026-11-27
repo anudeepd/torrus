@@ -229,7 +229,9 @@ jobs:
             echo "::error::The release version did not change any manifests."
             exit 1
           fi
-          git commit -m "chore(release): torrus $RELEASE_VERSION"
+          git commit \
+            -m "chore(release): torrus $RELEASE_VERSION" \
+            -m "Co-authored-by: DeepSeek V4.1 Flash <deepseek-v4.1-flash@deepseek.ai>"
           git push origin HEAD:refs/heads/main
           echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
